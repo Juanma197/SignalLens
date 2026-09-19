@@ -4,24 +4,33 @@ Last updated: 2026-09-19
 
 ## Current milestone
 
-Milestone 1 — foundation: complete.
+Milestone 2 — research data foundation: implementation complete, Windows data-download verification pending.
 
 ## Verified
 
-- FastAPI health endpoint
-- Versioned demo-ranking endpoint
-- Backend automated tests: 2 passed on Windows with Python 3.13.5
-- Frontend ESLint and production build
-- Frontend-to-backend configuration
-- One-command Windows startup script
-- Local dashboard and API startup on Windows with Node.js 24.11.1
-- Clean private GitHub repository and milestone checkpoint
+- Clean private GitHub repository and Milestone 1 checkpoint
+- Curated 30-stock universe and 21-trading-day forward horizon
+- DuckDB schema for securities, daily adjusted prices, and ingestion provenance
+- Idempotent price upserts and data-quality validation
+- Data-status API and dashboard summary
+- Backend automated tests: 6 passed in the development workspace
+- Frontend ESLint and production build passed
+
+## Pending before Milestone 2 completion
+
+- Pull the feature branch on Juan's Windows computer
+- Install the new Python dependencies
+- Run a live yfinance ingestion from 2015
+- Confirm all 30 tickers have fresh coverage and zero duplicates
+- Re-run the complete Windows test script
+- Merge the feature branch into main
 
 ## Current limitations
 
-- Rankings are clearly marked deterministic demo data.
-- There is no market-data ingestion, database, authentication, portfolio execution, or deployment yet.
+- Rankings remain deterministic demonstration data; real prices are not yet used for ranking.
+- The curated universe is intentionally small and has survivorship bias; it is suitable for pipeline validation, not historical claims about the whole market.
+- yfinance is a convenient research source, not an exchange-grade licensed feed.
 
-## Next milestone
+## Next action
 
-Milestone 2 — research data foundation: define the stock universe and time horizon, introduce DuckDB, ingest adjusted price history reproducibly, and add data-quality tests.
+Run the Windows verification commands documented in README.md on the feature branch.
