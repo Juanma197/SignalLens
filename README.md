@@ -2,13 +2,9 @@
 
 SignalLens is a research dashboard for periodically ranking public companies and tracking each ranking against what happened afterward. It is decision support, not financial advice.
 
-## Milestone 1
+## Current milestone
 
-- Next.js and TypeScript dashboard
-- FastAPI service with health and demo-ranking endpoints
-- Automated backend tests and frontend production build
-- One-command Windows development startup
-- Written status and roadmap
+Milestone 2 adds a curated 30-stock research universe, a 21-trading-day horizon, reproducible DuckDB storage, adjusted daily price ingestion, provenance, validation, and a data-status API.
 
 ## Requirements
 
@@ -16,14 +12,6 @@ SignalLens is a research dashboard for periodically ranking public companies and
 - Python 3.12+
 - Node.js 20+
 - Git
-
-## Install at the requested location
-
-Extract or clone this repository to:
-
-```text
-C:\Users\Juan Estrada\Projects\SignalLens
-```
 
 ## Start the application
 
@@ -33,15 +21,24 @@ Open PowerShell in the project folder and run:
 .\start.ps1
 ```
 
-On the first run, the script creates a Python virtual environment, installs backend and frontend dependencies, copies `.env.example` to `.env` when needed, and opens two process windows.
-
 - Dashboard: http://localhost:3000
 - Backend health: http://127.0.0.1:8000/api/v1/health
+- Data status: http://127.0.0.1:8000/api/v1/data/status
 - API documentation: http://127.0.0.1:8000/docs
 
-Stop the two development-server windows with `Ctrl+C`.
+## Download reproducible price history
 
-## Manual verification
+From the project root, after running the launcher once:
+
+```powershell
+Push-Location backend
+& ..\.venv\Scripts\python.exe -m app.ingest --start 2015-01-01
+Pop-Location
+```
+
+The command stores daily unadjusted OHLC, adjusted close, volume, source, ingestion time, and ingestion-run provenance in `backend/data/signallens.duckdb`. The database is local research data and is excluded from Git.
+
+## Verify the project
 
 ```powershell
 .\scripts\test.ps1
@@ -51,16 +48,15 @@ Stop the two development-server windows with `Ctrl+C`.
 
 ```text
 SignalLens/
-├── backend/             FastAPI application and tests
-├── frontend/            Next.js application
-├── scripts/             Windows development and test scripts
-├── .env.example         Safe configuration template
-├── README.md            Setup and usage
+├── backend/app/         API, universe, ingestion and DuckDB repository
+├── backend/tests/       API and data-quality tests
+├── backend/data/        Local database (ignored by Git)
+├── frontend/            Next.js dashboard
+├── scripts/             Windows startup and verification
 ├── ROADMAP.md           Planned milestones
 └── STATUS.md            Current verified state
 ```
 
 ## Important
 
-The three companies currently shown are deterministic demo records. They are not recommendations and are not produced by a trained SignalLens model.
-
+The ranking cards remain deterministic demo records until a later, walk-forward-tested model milestone. Real price availability does not make them investment recommendations.
