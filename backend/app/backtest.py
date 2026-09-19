@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -179,3 +180,116 @@ def _empty_summary() -> dict[str, Any]:
         "first_prediction_date": None,
         "last_prediction_date": None,
     }
+
+
+def momentum_backtest(
+    dataset: pd.DataFrame,
+    momentum_feature: str = "momentum_126d",
+    top_k: int = 3,
+    transaction_cost_bps_per_side: float = 10.0,
+    evaluation_dates: Iterable[pd.Timestamp] | None = None,
+) -> BacktestResult:
+    """Evaluate a transparent cross-sectional momentum ranking benchmark."""
+    if momentum_feature not in FEATURE_COLUMNS:
+        raise ValueError(f"Unknown momentum feature: {momentum_feature}")
+    if not momentum_feature.startswith("momentum_"):
+        raise ValueError("momentum_feature must be a momentum feature")
+    if top_k < 1:
+        raise ValueError("top_k must be positive")
+    if transaction_cost_bps_per_side < 0:
+        raise ValueError("transaction costs cannot be negative")
+
+    required = {
+        "ticker",
+        "as_of_date",
+        "entry_date",
+        "exit_date",
+        "forward_return",
+        momentum_feature,
+    }
+    missing = required - set(dataset.columns)
+    if missing:
+        raise ValueError(f"Missing benchmark columns: {', '.join(sorted(missing))}")
+    if dataset.empty:
+        return BacktestResult(pd.DataFrame(), _empty_summary())
+
+    frame = dataset.copy()
+    for column in ("as_of_date", "entry_date", "exit_date"):
+        frame[column] = pd.to_datetime(frame[column])
+
+    if evaluation_dates is not None:
+        allowed_dates = pd.to_datetime(list(evaluation_dates))
+        frame = frame.loc[frame["as_of_date"].isin(allowed_dates)].copy()
+    if frame.empty:
+        return BacktestResult(pd.DataFrame(), _empty_summary())
+
+    frame["score"] = frame[momentum_feature]
+    frame["rank"] = (
+        frame.groupby("as_of_date")["score"]
+        .rank(method="first", ascending=False)
+        .astype(int)
+    )
+    cost = 2.0 * transaction_cost_bps_per_side / 10_000.0
+    frame["net_forward_return"] = frame["forward_return"] - cost
+
+    selected = frame.loc[frame["rank"] <= top_k]
+    selected_by_month = selected.groupby("as_of_date")["net_forward_return"].mean()
+    universe_by_month = frame.groupby("as_of_date")["forward_return"].mean()
+    comparison = pd.concat(
+        [
+            selected_by_month.rename("selected"),
+            universe_by_month.rename("universe"),
+        ],
+        axis=1,
+    ).dropna()
+    comparison["excess"] = comparison["selected"] - comparison["universe"]
+
+    wealth = (1.0 + selected_by_month).cumprod()
+    drawdown = wealth / wealth.cummax() - 1.0
+    selection_counts = selected["ticker"].value_counts()
+    selection_slots = max(int(len(selected)), 1)
+
+    summary = {
+        "strategy": momentum_feature,
+        "prediction_rows": int(len(frame)),
+        "prediction_months": int(frame["as_of_date"].nunique()),
+        "first_prediction_date": frame["as_of_date"].min(),
+        "last_prediction_date": frame["as_of_date"].max(),
+        "top_k": int(top_k),
+        "top_k_mean_net_return": float(selected_by_month.mean()),
+        "top_k_median_net_return": float(selected_by_month.median()),
+        "universe_mean_return": float(universe_by_month.mean()),
+        "top_k_mean_excess_return": float(comparison["excess"].mean()),
+        "top_k_median_excess_return": float(comparison["excess"].median()),
+        "top_k_monthly_win_rate": float(
+            (comparison["excess"] > 0).mean()
+        ),
+        "positive_return_rate": float((selected_by_month > 0).mean()),
+        "maximum_drawdown": float(drawdown.min()),
+        "worst_month": float(selected_by_month.min()),
+        "best_month": float(selected_by_month.max()),
+        "most_selected_ticker": str(selection_counts.index[0]),
+        "most_selected_ticker_share": float(
+            selection_counts.iloc[0] / selection_slots
+        ),
+        "transaction_cost_bps_per_side": float(
+            transaction_cost_bps_per_side
+        ),
+    }
+
+    output_columns = [
+        "ticker",
+        "as_of_date",
+        "entry_date",
+        "exit_date",
+        "score",
+        "rank",
+        "forward_return",
+        "net_forward_return",
+    ]
+    return BacktestResult(
+        frame.loc[:, output_columns]
+        .sort_values(["as_of_date", "rank"])
+        .reset_index(drop=True),
+        summary,
+    )
