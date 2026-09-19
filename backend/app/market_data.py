@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Iterable, Protocol
+from typing import Iterable, Iterator, Protocol
 from uuid import uuid4
 
 import duckdb
@@ -57,31 +58,38 @@ class YFinanceProvider:
 
 class MarketDataRepository:
     def __init__(self, path: Path | str):
-        self.path = str(path)
+        self.path = Path(path)
 
-    def connect(self) -> duckdb.DuckDBPyConnection:
-        connection = duckdb.connect(self.path)
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS security_universe (
-                ticker VARCHAR PRIMARY KEY, company VARCHAR NOT NULL,
-                sector VARCHAR NOT NULL, active BOOLEAN NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS price_bars (
-                ticker VARCHAR NOT NULL, trading_date DATE NOT NULL,
-                open DOUBLE NOT NULL, high DOUBLE NOT NULL, low DOUBLE NOT NULL,
-                close DOUBLE NOT NULL, adjusted_close DOUBLE NOT NULL,
-                volume BIGINT NOT NULL, source VARCHAR NOT NULL,
-                ingested_at TIMESTAMP NOT NULL,
-                PRIMARY KEY (ticker, trading_date)
-            );
-            CREATE TABLE IF NOT EXISTS ingestion_runs (
-                run_id VARCHAR PRIMARY KEY, source VARCHAR NOT NULL,
-                started_at TIMESTAMP NOT NULL, completed_at TIMESTAMP,
-                status VARCHAR NOT NULL, requested_tickers INTEGER NOT NULL,
-                rows_written INTEGER NOT NULL, error VARCHAR
-            );
-        """)
-        return connection
+    @contextmanager
+    def connect(self) -> Iterator[duckdb.DuckDBPyConnection]:
+        if str(self.path) != ":memory:":
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+
+        connection = duckdb.connect(str(self.path))
+        try:
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS security_universe (
+                    ticker VARCHAR PRIMARY KEY, company VARCHAR NOT NULL,
+                    sector VARCHAR NOT NULL, active BOOLEAN NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS price_bars (
+                    ticker VARCHAR NOT NULL, trading_date DATE NOT NULL,
+                    open DOUBLE NOT NULL, high DOUBLE NOT NULL, low DOUBLE NOT NULL,
+                    close DOUBLE NOT NULL, adjusted_close DOUBLE NOT NULL,
+                    volume BIGINT NOT NULL, source VARCHAR NOT NULL,
+                    ingested_at TIMESTAMP NOT NULL,
+                    PRIMARY KEY (ticker, trading_date)
+                );
+                CREATE TABLE IF NOT EXISTS ingestion_runs (
+                    run_id VARCHAR PRIMARY KEY, source VARCHAR NOT NULL,
+                    started_at TIMESTAMP NOT NULL, completed_at TIMESTAMP,
+                    status VARCHAR NOT NULL, requested_tickers INTEGER NOT NULL,
+                    rows_written INTEGER NOT NULL, error VARCHAR
+                );
+            """)
+            yield connection
+        finally:
+            connection.close()
 
     def seed_universe(self, securities: Iterable[Security]) -> None:
         with self.connect() as connection:
@@ -91,36 +99,81 @@ class MarketDataRepository:
                     [item.ticker, item.company, item.sector],
                 )
 
-    def ingest(self, provider: PriceProvider, securities: tuple[Security, ...], start: date, end: date) -> str:
+    def ingest(
+        self,
+        provider: PriceProvider,
+        securities: tuple[Security, ...],
+        start: date,
+        end: date,
+    ) -> str:
         tickers = tuple(item.ticker for item in securities)
         run_id = str(uuid4())
         started = datetime.now(timezone.utc).replace(tzinfo=None)
+
         self.seed_universe(securities)
         with self.connect() as connection:
             connection.execute(
                 "INSERT INTO ingestion_runs VALUES (?, ?, ?, NULL, 'running', ?, 0, NULL)",
                 [run_id, provider.name, started, len(tickers)],
             )
+
         try:
             bars = provider.download(tickers, start, end)
             validate_bars(bars, set(tickers))
             ingested_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+            rows = [
+                [
+                    bar.ticker,
+                    bar.trading_date,
+                    bar.open,
+                    bar.high,
+                    bar.low,
+                    bar.close,
+                    bar.adjusted_close,
+                    bar.volume,
+                    provider.name,
+                    ingested_at,
+                ]
+                for bar in bars
+            ]
+
             with self.connect() as connection:
-                for bar in bars:
-                    connection.execute("""
-                        INSERT OR REPLACE INTO price_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, [bar.ticker, bar.trading_date, bar.open, bar.high, bar.low,
-                           bar.close, bar.adjusted_close, bar.volume, provider.name, ingested_at])
-                connection.execute("""
-                    UPDATE ingestion_runs SET completed_at=?, status='completed', rows_written=?
+                connection.executemany(
+                    """
+                    INSERT OR REPLACE INTO price_bars
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+                connection.execute(
+                    """
+                    UPDATE ingestion_runs
+                    SET completed_at=?, status='completed', rows_written=?
                     WHERE run_id=?
-                """, [ingested_at, len(bars), run_id])
+                    """,
+                    [ingested_at, len(bars), run_id],
+                )
             return run_id
-        except Exception as exc:
-            with self.connect() as connection:
-                connection.execute("""
-                    UPDATE ingestion_runs SET completed_at=?, status='failed', error=? WHERE run_id=?
-                """, [datetime.now(timezone.utc).replace(tzinfo=None), str(exc), run_id])
+
+        except (Exception, KeyboardInterrupt) as exc:
+            error = str(exc) or type(exc).__name__
+            try:
+                with self.connect() as connection:
+                    connection.execute(
+                        """
+                        UPDATE ingestion_runs
+                        SET completed_at=?, status='failed', error=?
+                        WHERE run_id=?
+                        """,
+                        [
+                            datetime.now(timezone.utc).replace(tzinfo=None),
+                            error,
+                            run_id,
+                        ],
+                    )
+            except Exception:
+                pass
             raise
 
     def status(self) -> dict:
