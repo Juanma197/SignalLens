@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.backtest import walk_forward_backtest
+from app.backtest import momentum_backtest, walk_forward_backtest
 from app.research import FEATURE_COLUMNS
 
 
@@ -91,3 +91,37 @@ def test_backtest_arguments_and_columns_are_validated() -> None:
         walk_forward_backtest(dataset, transaction_cost_bps_per_side=-1)
     with pytest.raises(ValueError, match="Missing backtest columns"):
         walk_forward_backtest(dataset.drop(columns=["exit_date"]))
+
+
+def test_momentum_benchmark_uses_requested_evaluation_dates() -> None:
+    dataset = make_dataset()
+    evaluation_dates = sorted(dataset["as_of_date"].unique())[-12:]
+
+    result = momentum_backtest(
+        dataset,
+        momentum_feature="momentum_126d",
+        top_k=3,
+        evaluation_dates=evaluation_dates,
+    )
+
+    assert result.summary["strategy"] == "momentum_126d"
+    assert result.summary["prediction_months"] == 12
+    assert set(result.predictions["as_of_date"].unique()) == set(evaluation_dates)
+    assert result.summary["maximum_drawdown"] <= 0
+    assert 0 < result.summary["most_selected_ticker_share"] <= 1
+
+    for _, month in result.predictions.groupby("as_of_date"):
+        assert sorted(month["rank"].tolist()) == list(range(1, len(month) + 1))
+
+
+def test_momentum_benchmark_validates_configuration() -> None:
+    dataset = make_dataset()
+
+    with pytest.raises(ValueError, match="Unknown momentum"):
+        momentum_backtest(dataset, momentum_feature="not_a_feature")
+    with pytest.raises(ValueError, match="momentum feature"):
+        momentum_backtest(dataset, momentum_feature="volatility_21d")
+    with pytest.raises(ValueError, match="top_k"):
+        momentum_backtest(dataset, top_k=0)
+    with pytest.raises(ValueError, match="transaction"):
+        momentum_backtest(dataset, transaction_cost_bps_per_side=-1)
