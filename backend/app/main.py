@@ -1,11 +1,19 @@
 from datetime import date
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .market_data import MarketDataRepository
-from .schemas import DataStatusResponse, HealthResponse, RankingItem, RankingResponse
+from .prediction_store import PredictionVintageStore
+from .schemas import (
+    DataStatusResponse,
+    HealthResponse,
+    PublishedRankingItem,
+    PublishedRankingResponse,
+    RankingItem,
+    RankingResponse,
+)
 from .universe import FORWARD_HORIZON_TRADING_DAYS, UNIVERSE
 
 settings = get_settings()
@@ -25,6 +33,48 @@ def data_status() -> DataStatusResponse:
     repository.seed_universe(UNIVERSE)
     return DataStatusResponse(
         **repository.status(), forward_horizon_trading_days=FORWARD_HORIZON_TRADING_DAYS
+    )
+
+
+@app.get("/api/v1/rankings/latest", response_model=PublishedRankingResponse)
+def latest_rankings() -> PublishedRankingResponse:
+    repository = MarketDataRepository(settings.database_path)
+    stored = PredictionVintageStore(repository).get_latest("momentum_126d")
+    if stored is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No published ranking vintage is available",
+        )
+
+    companies = {security.ticker: security.company for security in UNIVERSE}
+    rankings = [
+        PublishedRankingItem(
+            rank=item["rank"],
+            ticker=item["ticker"],
+            company=companies.get(item["ticker"], item["ticker"]),
+            momentum_126d=item["score"],
+            evidence=(
+                f"Adjusted-price momentum over 126 trading days: "
+                f"{item['score']:.1%}."
+            ),
+            risk=(
+                "Momentum can reverse sharply; this signal excludes fundamentals, "
+                "news, valuation, liquidity, and personal suitability."
+            ),
+        )
+        for item in stored["predictions"]
+    ]
+    return PublishedRankingResponse(
+        vintage_id=stored["vintage_id"],
+        as_of=stored["as_of_date"],
+        created_at=stored["created_at"],
+        strategy=stored["strategy_name"],
+        strategy_version=stored["strategy_version"],
+        disclaimer=(
+            "Research output only. This historical-price signal is not investment "
+            "advice and does not guarantee future growth."
+        ),
+        rankings=rankings,
     )
 
 
