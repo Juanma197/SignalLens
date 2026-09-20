@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
 
+from .fred_macro import FRED_SERIES
+from .macro import MacroRepository
 from .market_data import MarketDataRepository
 from .prediction_store import PredictionVintageStore
 
@@ -62,15 +65,40 @@ def build_latest_momentum_ranking(
 def publish_latest_momentum_ranking(
     repository: MarketDataRepository,
     top_k: int = 3,
+    published_at: datetime | None = None,
 ) -> str:
     """Build and append one live ranking vintage."""
     as_of_date, ranking = build_latest_momentum_ranking(repository, top_k)
+    captured_at = published_at or datetime.now(timezone.utc)
+    macro_observations = MacroRepository(repository).point_in_time(captured_at)
+    observed_series = {
+        item["series_id"] for item in macro_observations
+    }
+    missing_series = [
+        series_id
+        for series_id in FRED_SERIES
+        if series_id not in observed_series
+    ]
+    macro_context = {
+        "captured_at": captured_at.isoformat(),
+        "status": (
+            "missing"
+            if not macro_observations
+            else "complete"
+            if not missing_series
+            else "partial"
+        ),
+        "expected_series": list(FRED_SERIES),
+        "missing_series": missing_series,
+        "observations": macro_observations,
+    }
     metadata: dict[str, Any] = {
         "lookback_trading_days": LOOKBACK_TRADING_DAYS,
         "top_k": top_k,
         "score_definition": "adjusted_close / adjusted_close_126_trading_days_ago - 1",
         "information_boundary": "prices through as_of_date only",
         "is_backtest": False,
+        "macro_context": macro_context,
     }
     return PredictionVintageStore(repository).publish(
         STRATEGY_NAME,
