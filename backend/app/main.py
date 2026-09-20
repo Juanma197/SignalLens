@@ -13,6 +13,8 @@ from .schemas import (
     PredictionOutcomeResponse,
     PublishedRankingItem,
     PublishedRankingResponse,
+    RankingHistoryItem,
+    RankingHistoryResponse,
     RankingItem,
     RankingResponse,
 )
@@ -99,6 +101,38 @@ def latest_ranking_outcomes() -> PredictionOutcomeResponse:
             FORWARD_HORIZON_TRADING_DAYS,
         )
     )
+
+
+@app.get("/api/v1/rankings/history", response_model=RankingHistoryResponse)
+def ranking_history() -> RankingHistoryResponse:
+    repository = MarketDataRepository(settings.database_path)
+    store = PredictionVintageStore(repository)
+    vintages = []
+    for vintage_id in store.list_vintage_ids("momentum_126d"):
+        stored = store.get(vintage_id)
+        outcome = evaluate_prediction_vintage(
+            repository,
+            vintage_id,
+            FORWARD_HORIZON_TRADING_DAYS,
+        )
+        vintages.append(
+            RankingHistoryItem(
+                vintage_id=vintage_id,
+                as_of_date=stored["as_of_date"],
+                created_at=stored["created_at"],
+                strategy=stored["strategy_name"],
+                strategy_version=stored["strategy_version"],
+                tickers=[
+                    item["ticker"]
+                    for item in stored["predictions"]
+                ],
+                status=outcome["status"],
+                completed_predictions=outcome["completed_predictions"],
+                total_predictions=outcome["total_predictions"],
+                mean_realized_return=outcome["mean_realized_return"],
+            )
+        )
+    return RankingHistoryResponse(vintages=vintages)
 
 
 @app.get("/api/v1/rankings/demo", response_model=RankingResponse)
