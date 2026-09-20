@@ -35,6 +35,16 @@ class FakeProvider:
         }
 
 
+class PartialProvider(FakeProvider):
+    name = "partial-filings"
+
+    def download(self, tickers, retrieved_at, **options):
+        downloaded = super().download(tickers, retrieved_at, **options)
+        self.errors = {"AAPL": "rate limited"}
+        downloaded["AAPL"] = []
+        return downloaded
+
+
 class FailingProvider:
     name = "failed-filings"
 
@@ -103,3 +113,33 @@ def test_ingestion_records_provider_failure_and_reraises(
     )
     assert availability["status"] == "failed"
     assert availability["error"] == "upstream unavailable"
+
+
+def test_ingestion_preserves_success_when_one_ticker_fails(
+    tmp_path: Path,
+) -> None:
+    evidence = repository(tmp_path)
+
+    result = ingest_evidence(
+        evidence,
+        PartialProvider(),
+        ["AMD", "AAPL"],
+        retrieved_at=RETRIEVED_AT,
+    )
+
+    assert result["stored"] == 1
+    assert result["failed"] == 1
+    assert len(
+        evidence.point_in_time(
+            "AMD",
+            RETRIEVED_AT + timedelta(days=1),
+        )
+    ) == 1
+    failed = evidence.availability(
+        "AAPL",
+        "filing",
+        datetime.now(timezone.utc),
+        timedelta(days=30),
+    )
+    assert failed["status"] == "failed"
+    assert failed["error"] == "rate limited"
