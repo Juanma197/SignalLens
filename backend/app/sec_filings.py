@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
+from time import sleep
 from typing import Iterable
 
 import httpx
@@ -11,7 +12,7 @@ from .evidence import EvidenceItem
 SEC_TICKER_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 SEC_ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data"
-SUPPORTED_FORMS = ("10-K", "10-Q", "8-K")
+SUPPORTED_FORMS = ("10-K", "10-Q", "8-K", "20-F", "6-K")
 
 
 def _parse_sec_datetime(value: str | None, fallback_date: str) -> datetime:
@@ -34,12 +35,17 @@ class SECFilingsProvider:
         self,
         user_agent: str,
         client: httpx.Client | None = None,
+        request_interval_seconds: float = 0.12,
     ):
         user_agent = user_agent.strip()
         if not user_agent or "@" not in user_agent:
             raise ValueError(
                 "SEC user agent must identify the application and include a contact email"
             )
+        if request_interval_seconds < 0:
+            raise ValueError("Request interval cannot be negative")
+        self.request_interval_seconds = request_interval_seconds
+        self.errors: dict[str, str] = {}
         self.client = client or httpx.Client(
             headers={
                 "User-Agent": user_agent,
@@ -102,16 +108,23 @@ class SECFilingsProvider:
             dict.fromkeys(ticker.strip().upper() for ticker in tickers)
         )
         ciks = self.resolve_ciks(normalized_tickers)
-        return {
-            ticker: self._download_ticker(
-                ticker,
-                ciks[ticker],
-                retrieved_at,
-                forms,
-                limit_per_ticker,
-            )
-            for ticker in normalized_tickers
-        }
+        self.errors = {}
+        downloaded: dict[str, list[EvidenceItem]] = {}
+        for index, ticker in enumerate(normalized_tickers):
+            if index > 0 and self.request_interval_seconds:
+                sleep(self.request_interval_seconds)
+            try:
+                downloaded[ticker] = self._download_ticker(
+                    ticker,
+                    ciks[ticker],
+                    retrieved_at,
+                    forms,
+                    limit_per_ticker,
+                )
+            except (httpx.HTTPError, KeyError, ValueError) as exc:
+                self.errors[ticker] = str(exc) or type(exc).__name__
+                downloaded[ticker] = []
+        return downloaded
 
     def _download_ticker(
         self,
