@@ -19,7 +19,7 @@ class PredictionVintageStore:
 
     def __init__(self, repository: MarketDataRepository):
         self.repository = repository
-        database_key = str(repository.database_path.resolve())
+        database_key = str(repository.path.resolve())
         with self._schema_lock:
             if database_key not in self._initialized_databases:
                 self._ensure_schema()
