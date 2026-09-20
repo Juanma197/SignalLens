@@ -113,3 +113,38 @@ def test_fred_provider_retries_a_read_timeout() -> None:
     assert attempts == 2
     assert result.errors == {}
     assert result.observations[0].value == 4.05
+
+
+def test_fred_provider_uses_authenticated_observations_api() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).startswith(
+            "https://api.stlouisfed.org/fred/series/observations"
+        )
+        assert request.url.params["api_key"] == "test-key"
+        assert request.url.params["series_id"] == "UNRATE"
+        assert request.url.params["observation_start"] == "2025-01-01"
+        assert request.url.params["file_type"] == "json"
+        return httpx.Response(
+            200,
+            json={
+                "observations": [
+                    {"date": "2026-07-01", "value": "4.3"},
+                    {"date": "2026-08-01", "value": "."},
+                    {"date": "2026-09-01", "value": "4.2"},
+                ]
+            },
+        )
+
+    provider = FREDMacroProvider(
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        api_key="test-key",
+        request_interval_seconds=0,
+    )
+    result = provider.download(
+        ["UNRATE"],
+        start=date(2025, 1, 1),
+    )
+
+    assert result.errors == {}
+    assert [item.value for item in result.observations] == [4.3, 4.2]
+    assert result.observations[-1].observation_date == date(2026, 9, 1)
