@@ -36,6 +36,28 @@ class PublishedRankingItem(BaseModel):
     risk: str
 
 
+class PublishedMacroObservation(BaseModel):
+    observation_id: str
+    series_id: Literal["FEDFUNDS", "CPIAUCSL", "UNRATE", "DGS10"]
+    metric: str
+    value: float
+    unit: str
+    frequency: Literal["daily", "monthly"]
+    observation_date: date
+    available_at: datetime
+    retrieved_at: datetime
+    source_name: str
+    source_url: str
+
+
+class PublishedMacroContext(BaseModel):
+    captured_at: datetime
+    status: Literal["complete", "partial", "missing"]
+    expected_series: list[str]
+    missing_series: list[str]
+    observations: list[PublishedMacroObservation]
+
+
 class PublishedRankingResponse(BaseModel):
     vintage_id: str
     as_of: date
@@ -44,6 +66,7 @@ class PublishedRankingResponse(BaseModel):
     strategy_version: str
     is_demo: Literal[False] = False
     disclaimer: str
+    macro_context: PublishedMacroContext | None = None
     rankings: list[PublishedRankingItem]
 
 
