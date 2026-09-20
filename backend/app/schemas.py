@@ -120,3 +120,27 @@ class DataStatusResponse(BaseModel):
     duplicate_rows: int
     forward_horizon_trading_days: int
     last_run: IngestionRunResponse | None
+
+
+class EvidenceItemResponse(BaseModel):
+    evidence_id: str
+    ticker: str
+    evidence_type: Literal["fundamental", "filing", "news", "macro"]
+    source_name: str
+    source_url: str
+    title: str
+    summary: str
+    published_at: datetime
+    source_updated_at: datetime | None
+    retrieved_at: datetime
+    content_hash: str
+
+
+class TickerEvidenceResponse(BaseModel):
+    ticker: str
+    as_of: datetime
+    evidence_type: Literal["fundamental", "filing", "news", "macro"]
+    status: Literal["fresh", "stale", "missing", "failed"]
+    max_age_days: int = Field(ge=1)
+    error: str | None
+    items: list[EvidenceItemResponse]
