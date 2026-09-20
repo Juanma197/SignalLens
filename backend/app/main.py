@@ -93,6 +93,7 @@ def latest_rankings() -> PublishedRankingResponse:
             "advice and does not guarantee future growth."
         ),
         macro_context=stored["metadata"].get("macro_context"),
+        fundamental_context=stored["metadata"].get("fundamental_context"),
         rankings=rankings,
     )
 
