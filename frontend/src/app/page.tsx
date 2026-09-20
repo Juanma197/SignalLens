@@ -93,6 +93,34 @@ type EvidenceResponse = {
   items: EvidenceItem[];
 };
 
+type FundamentalFact = {
+  fact_id: string;
+  ticker: string;
+  metric:
+    | "revenue"
+    | "net_income"
+    | "eps_diluted"
+    | "assets"
+    | "liabilities"
+    | "cash";
+  unit: string;
+  value: number;
+  period_end: string;
+  fiscal_period: string | null;
+  form: string;
+  source_url: string;
+};
+
+type FundamentalsResponse = {
+  ticker: string;
+  company: string;
+  as_of: string;
+  status: "complete" | "partial" | "missing";
+  expected_metrics: string[];
+  missing_metrics: string[];
+  facts: FundamentalFact[];
+};
+
 type DataStatus = {
   universe_size: number;
   covered_tickers: number;
@@ -142,6 +170,32 @@ function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function formatFundamental(fact: FundamentalFact): string {
+  if (fact.unit.toLowerCase().includes("shares")) {
+    return `${fact.value.toFixed(2)}`;
+  }
+  const absolute = Math.abs(fact.value);
+  const sign = fact.value < 0 ? "-" : "";
+  if (absolute >= 1_000_000_000) {
+    return `${sign}${(absolute / 1_000_000_000).toFixed(2)}B`;
+  }
+  if (absolute >= 1_000_000) {
+    return `${sign}${(absolute / 1_000_000).toFixed(1)}M`;
+  }
+  return `${sign}${absolute.toLocaleString()}`;
+}
+
+function metricLabel(metric: FundamentalFact["metric"]): string {
+  return {
+    revenue: "Revenue",
+    net_income: "Net income",
+    eps_diluted: "Diluted EPS",
+    assets: "Assets",
+    liabilities: "Liabilities",
+    cash: "Cash",
+  }[metric];
+}
+
 export default async function Home() {
   const [data, status, outcomes, history, watchlist] = await Promise.all([
     fetchJson("/api/v1/rankings/latest", unavailable),
@@ -151,25 +205,46 @@ export default async function Home() {
     fetchJson<WatchlistResponse>("/api/v1/watchlist", { items: [] }),
   ]);
 
-  const evidenceResults = await Promise.all(
-    data.rankings.map(async (item) => {
-      const fallback: EvidenceResponse = {
-        ticker: item.ticker,
-        as_of: new Date().toISOString(),
-        evidence_type: "filing",
-        status: "missing",
-        max_age_days: 90,
-        error: null,
-        items: [],
-      };
-      const evidence = await fetchJson<EvidenceResponse>(
-        `/api/v1/evidence/${encodeURIComponent(item.ticker)}?evidence_type=filing&max_age_days=90`,
-        fallback,
-      );
-      return [item.ticker, evidence] as const;
-    }),
-  );
+  const [evidenceResults, fundamentalsResults] = await Promise.all([
+    Promise.all(
+      data.rankings.map(async (item) => {
+        const fallback: EvidenceResponse = {
+          ticker: item.ticker,
+          as_of: new Date().toISOString(),
+          evidence_type: "filing",
+          status: "missing",
+          max_age_days: 90,
+          error: null,
+          items: [],
+        };
+        const evidence = await fetchJson<EvidenceResponse>(
+          `/api/v1/evidence/${encodeURIComponent(item.ticker)}?evidence_type=filing&max_age_days=90`,
+          fallback,
+        );
+        return [item.ticker, evidence] as const;
+      }),
+    ),
+    Promise.all(
+      data.rankings.map(async (item) => {
+        const fallback: FundamentalsResponse = {
+          ticker: item.ticker,
+          company: item.company,
+          as_of: new Date().toISOString(),
+          status: "missing",
+          expected_metrics: [],
+          missing_metrics: [],
+          facts: [],
+        };
+        const fundamentals = await fetchJson<FundamentalsResponse>(
+          `/api/v1/fundamentals/${encodeURIComponent(item.ticker)}`,
+          fallback,
+        );
+        return [item.ticker, fundamentals] as const;
+      }),
+    ),
+  ]);
   const evidenceByTicker = new Map(evidenceResults);
+  const fundamentalsByTicker = new Map(fundamentalsResults);
 
   return (
     <main>
@@ -256,6 +331,51 @@ export default async function Home() {
                       {evidenceByTicker.get(item.ticker)?.status ?? "unavailable"}
                     </span>
                     <small>No filing evidence has been ingested for this ticker.</small>
+                  </div>
+                )}
+                {fundamentalsByTicker.get(item.ticker)?.facts.length ? (
+                  <div className="fundamentals">
+                    <div className="fundamentals-heading">
+                      <span>Latest fundamentals</span>
+                      <span className={`coverage ${fundamentalsByTicker.get(item.ticker)?.status}`}>
+                        {fundamentalsByTicker.get(item.ticker)?.status}
+                      </span>
+                    </div>
+                    <div className="fundamental-grid">
+                      {fundamentalsByTicker
+                        .get(item.ticker)
+                        ?.facts.filter((fact) =>
+                          ["revenue", "net_income", "eps_diluted"].includes(
+                            fact.metric,
+                          ),
+                        )
+                        .map((fact) => (
+                          <a
+                            href={fact.source_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            key={fact.fact_id}
+                          >
+                            <span>{metricLabel(fact.metric)}</span>
+                            <b>{formatFundamental(fact)}</b>
+                            <small>
+                              {fact.fiscal_period ?? fact.form} · {fact.period_end}
+                            </small>
+                          </a>
+                        ))}
+                    </div>
+                    {fundamentalsByTicker.get(item.ticker)?.missing_metrics.length ? (
+                      <small className="missing-metrics">
+                        Missing:{" "}
+                        {fundamentalsByTicker
+                          .get(item.ticker)
+                          ?.missing_metrics.join(", ")}
+                      </small>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="fundamentals unavailable">
+                    Structured fundamentals unavailable.
                   </div>
                 )}
                 <p className="risk"><b>Key risk</b>{item.risk}</p>
