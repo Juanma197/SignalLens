@@ -17,13 +17,17 @@ from .schemas import (
     RankingHistoryResponse,
     RankingItem,
     RankingResponse,
+    WatchlistItem,
+    WatchlistNoteRequest,
+    WatchlistResponse,
 )
 from .universe import FORWARD_HORIZON_TRADING_DAYS, UNIVERSE
+from .watchlist import WatchlistRepository
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True,
-                   allow_methods=["GET"], allow_headers=["*"])
+                   allow_methods=["GET", "PUT", "DELETE"], allow_headers=["*"])
 
 
 @app.get("/api/v1/health", response_model=HealthResponse)
@@ -133,6 +137,48 @@ def ranking_history() -> RankingHistoryResponse:
             )
         )
     return RankingHistoryResponse(vintages=vintages)
+
+
+@app.get("/api/v1/watchlist", response_model=WatchlistResponse)
+def watchlist() -> WatchlistResponse:
+    repository = WatchlistRepository(
+        MarketDataRepository(settings.database_path)
+    )
+    companies = {security.ticker: security.company for security in UNIVERSE}
+    return WatchlistResponse(
+        items=[
+            WatchlistItem(
+                **item,
+                company=companies.get(item["ticker"], item["ticker"]),
+            )
+            for item in repository.list()
+        ]
+    )
+
+
+@app.put("/api/v1/watchlist/{ticker}", response_model=WatchlistItem)
+def save_watchlist_note(
+    ticker: str,
+    request: WatchlistNoteRequest,
+) -> WatchlistItem:
+    normalized = ticker.strip().upper()
+    companies = {security.ticker: security.company for security in UNIVERSE}
+    if normalized not in companies:
+        raise HTTPException(status_code=400, detail="Ticker is not in the universe")
+    item = WatchlistRepository(
+        MarketDataRepository(settings.database_path)
+    ).upsert(normalized, request.note)
+    return WatchlistItem(**item, company=companies[normalized])
+
+
+@app.delete("/api/v1/watchlist/{ticker}")
+def delete_watchlist_note(ticker: str) -> dict[str, bool]:
+    removed = WatchlistRepository(
+        MarketDataRepository(settings.database_path)
+    ).remove(ticker)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Watchlist ticker not found")
+    return {"deleted": True}
 
 
 @app.get("/api/v1/rankings/demo", response_model=RankingResponse)
