@@ -69,6 +69,30 @@ type WatchlistResponse = {
   items: WatchlistItem[];
 };
 
+type EvidenceItem = {
+  evidence_id: string;
+  ticker: string;
+  evidence_type: "fundamental" | "filing" | "news" | "macro";
+  source_name: string;
+  source_url: string;
+  title: string;
+  summary: string;
+  published_at: string;
+  source_updated_at: string | null;
+  retrieved_at: string;
+  content_hash: string;
+};
+
+type EvidenceResponse = {
+  ticker: string;
+  as_of: string;
+  evidence_type: "fundamental" | "filing" | "news" | "macro";
+  status: "fresh" | "stale" | "missing" | "failed";
+  max_age_days: number;
+  error: string | null;
+  items: EvidenceItem[];
+};
+
 type DataStatus = {
   universe_size: number;
   covered_tickers: number;
@@ -126,6 +150,26 @@ export default async function Home() {
     fetchJson("/api/v1/rankings/history", unavailableHistory),
     fetchJson<WatchlistResponse>("/api/v1/watchlist", { items: [] }),
   ]);
+
+  const evidenceResults = await Promise.all(
+    data.rankings.map(async (item) => {
+      const fallback: EvidenceResponse = {
+        ticker: item.ticker,
+        as_of: new Date().toISOString(),
+        evidence_type: "filing",
+        status: "missing",
+        max_age_days: 90,
+        error: null,
+        items: [],
+      };
+      const evidence = await fetchJson<EvidenceResponse>(
+        `/api/v1/evidence/${encodeURIComponent(item.ticker)}?evidence_type=filing&max_age_days=90`,
+        fallback,
+      );
+      return [item.ticker, evidence] as const;
+    }),
+  );
+  const evidenceByTicker = new Map(evidenceResults);
 
   return (
     <main>
@@ -186,6 +230,34 @@ export default async function Home() {
                 <h3>{item.ticker}</h3>
                 <p className="company">{item.company}</p>
                 <p>{item.evidence}</p>
+                {evidenceByTicker.get(item.ticker)?.items[0] ? (
+                  <div className="filing-evidence">
+                    <span className={`evidence-status ${evidenceByTicker.get(item.ticker)?.status}`}>
+                      SEC filing · {evidenceByTicker.get(item.ticker)?.status}
+                    </span>
+                    <a
+                      href={evidenceByTicker.get(item.ticker)?.items[0].source_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {evidenceByTicker.get(item.ticker)?.items[0].title}
+                    </a>
+                    <small>
+                      Published{" "}
+                      {evidenceByTicker
+                        .get(item.ticker)
+                        ?.items[0].published_at.slice(0, 10)}
+                    </small>
+                  </div>
+                ) : (
+                  <div className="filing-evidence unavailable">
+                    <span className="evidence-status missing">
+                      SEC filing ·{" "}
+                      {evidenceByTicker.get(item.ticker)?.status ?? "unavailable"}
+                    </span>
+                    <small>No filing evidence has been ingested for this ticker.</small>
+                  </div>
+                )}
                 <p className="risk"><b>Key risk</b>{item.risk}</p>
               </article>
             ))}
