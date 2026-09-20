@@ -34,10 +34,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    settings = get_settings()
+    if not settings.fred_api_key:
+        parser.error(
+            "Set SIGNALLENS_FRED_API_KEY before accessing the FRED API."
+        )
+
     repository = MacroRepository(
-        MarketDataRepository(get_settings().database_path)
+        MarketDataRepository(settings.database_path)
     )
-    with FREDMacroProvider() as provider:
+    with FREDMacroProvider(api_key=settings.fred_api_key) as provider:
         result = ingest_macro(
             repository,
             provider,
