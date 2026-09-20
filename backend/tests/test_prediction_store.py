@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
@@ -115,3 +116,19 @@ def test_prediction_vintage_rejects_invalid_rankings(tmp_path: Path) -> None:
             pd.DataFrame(columns=["ticker", "rank", "score"]),
             "score",
         )
+
+
+def test_concurrent_store_creation_initializes_schema_once(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "concurrent.duckdb"
+
+    def create_and_count(_index: int) -> int:
+        return PredictionVintageStore(
+            MarketDataRepository(database_path)
+        ).count()
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        counts = list(executor.map(create_and_count, range(8)))
+
+    assert counts == [0] * 8
