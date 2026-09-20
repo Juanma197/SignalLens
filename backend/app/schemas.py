@@ -73,6 +73,24 @@ class PublishedFundamentalContext(BaseModel):
     tickers: list[PublishedFundamentalTickerContext]
 
 
+class PublishedEvidenceTypeContext(BaseModel):
+    status: Literal["fresh", "stale", "missing", "failed"]
+    max_age_days: int = Field(ge=1)
+    error: str | None
+    items: list[EvidenceItemResponse]
+
+
+class PublishedTickerEvidenceContext(BaseModel):
+    ticker: str
+    filing: PublishedEvidenceTypeContext
+    news: PublishedEvidenceTypeContext
+
+
+class PublishedEvidenceContext(BaseModel):
+    captured_at: datetime
+    tickers: list[PublishedTickerEvidenceContext]
+
+
 class PublishedRankingResponse(BaseModel):
     vintage_id: str
     as_of: date
@@ -83,6 +101,7 @@ class PublishedRankingResponse(BaseModel):
     disclaimer: str
     macro_context: PublishedMacroContext | None = None
     fundamental_context: PublishedFundamentalContext | None = None
+    evidence_context: PublishedEvidenceContext | None = None
     rankings: list[PublishedRankingItem]
 
 
