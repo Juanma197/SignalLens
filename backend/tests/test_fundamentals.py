@@ -21,6 +21,7 @@ def make_fact(
         2026, 8, 6, tzinfo=timezone.utc
     ),
     period_end: date = date(2026, 6, 27),
+    retrieved_at: datetime = RETRIEVED_AT,
 ) -> FundamentalFact:
     return FundamentalFact(
         fact_id=fact_id,
@@ -38,7 +39,7 @@ def make_fact(
         accession="0000002488-26-000123",
         filed_at=datetime(2026, 8, 5, tzinfo=timezone.utc),
         available_at=available_at,
-        retrieved_at=RETRIEVED_AT,
+        retrieved_at=retrieved_at,
         source_url="https://www.sec.gov/Archives/example",
     )
 
@@ -58,6 +59,7 @@ def test_fundamental_store_is_idempotent_and_point_in_time(
         value=6_800_000_000,
         available_at=datetime(2026, 5, 7, tzinfo=timezone.utc),
         period_end=date(2026, 3, 28),
+        retrieved_at=datetime(2026, 5, 8, tzinfo=timezone.utc),
     )
     latest = make_fact("latest")
 
@@ -67,7 +69,7 @@ def test_fundamental_store_is_idempotent_and_point_in_time(
 
     before_latest = store.point_in_time(
         "AMD",
-        datetime(2026, 8, 5, tzinfo=timezone.utc),
+        datetime(2026, 6, 1, tzinfo=timezone.utc),
     )
     after_latest = store.point_in_time(
         "AMD",
