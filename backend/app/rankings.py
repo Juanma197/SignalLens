@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
 
+from .evidence import EvidenceRepository
 from .fred_macro import FRED_SERIES
 from .fundamentals import FundamentalRepository
 from .macro import MacroRepository
@@ -121,6 +122,33 @@ def publish_latest_momentum_ranking(
         "captured_at": captured_at.isoformat(),
         "tickers": fundamental_snapshots,
     }
+    evidence = EvidenceRepository(repository)
+    evidence_snapshots = []
+    evidence_windows = {"filing": 90, "news": 30}
+    for ticker in ranking["ticker"].tolist():
+        ticker_snapshot: dict[str, Any] = {"ticker": ticker}
+        for evidence_type, max_age_days in evidence_windows.items():
+            availability = evidence.availability(
+                ticker,
+                evidence_type,
+                captured_at,
+                timedelta(days=max_age_days),
+            )
+            ticker_snapshot[evidence_type] = {
+                "status": availability["status"],
+                "max_age_days": max_age_days,
+                "error": availability["error"],
+                "items": evidence.point_in_time(
+                    ticker,
+                    captured_at,
+                    evidence_type,
+                )[:3],
+            }
+        evidence_snapshots.append(ticker_snapshot)
+    evidence_context = {
+        "captured_at": captured_at.isoformat(),
+        "tickers": evidence_snapshots,
+    }
     metadata: dict[str, Any] = {
         "lookback_trading_days": LOOKBACK_TRADING_DAYS,
         "top_k": top_k,
@@ -129,6 +157,7 @@ def publish_latest_momentum_ranking(
         "is_backtest": False,
         "macro_context": macro_context,
         "fundamental_context": fundamental_context,
+        "evidence_context": evidence_context,
     }
     return PredictionVintageStore(repository).publish(
         STRATEGY_NAME,
