@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from app.fred_macro import FRED_SERIES, MacroObservation
+from app.macro import MacroRepository
 from app.market_data import MarketDataRepository
 from app.prediction_store import PredictionVintageStore
 from app.rankings import (
@@ -107,3 +109,61 @@ def test_latest_ranking_api_returns_published_vintage(
         "CCC",
     ]
     assert "not investment advice" in body["disclaimer"].lower()
+
+
+def test_published_ranking_freezes_available_macro_context(
+    tmp_path: Path,
+) -> None:
+    repository = repository_with_prices(tmp_path / "macro-vintage.duckdb")
+    macro = MacroRepository(repository)
+    retrieved_at = datetime(2026, 9, 20, 16, 0, tzinfo=timezone.utc)
+    series = FRED_SERIES["FEDFUNDS"]
+    macro.save(
+        MacroObservation(
+            observation_id="fred:FEDFUNDS:2026-08-01",
+            series_id="FEDFUNDS",
+            metric=series.metric,
+            value=3.63,
+            unit=series.unit,
+            frequency=series.frequency,
+            observation_date=date(2026, 8, 1),
+            available_at=retrieved_at,
+            retrieved_at=retrieved_at,
+            source_name="FRED",
+            source_url="https://fred.stlouisfed.org/series/FEDFUNDS",
+        )
+    )
+    published_at = datetime(2026, 9, 21, 9, 0, tzinfo=timezone.utc)
+
+    vintage_id = publish_latest_momentum_ranking(
+        repository,
+        published_at=published_at,
+    )
+    stored_before = PredictionVintageStore(repository).get(vintage_id)
+    context_before = stored_before["metadata"]["macro_context"]
+
+    assert context_before["captured_at"] == published_at.isoformat()
+    assert context_before["status"] == "partial"
+    assert context_before["missing_series"] == ["CPIAUCSL", "UNRATE", "DGS10"]
+    assert context_before["observations"][0]["series_id"] == "FEDFUNDS"
+    assert context_before["observations"][0]["value"] == 3.63
+
+    later_retrieval = datetime(2026, 10, 20, 16, 0, tzinfo=timezone.utc)
+    macro.save(
+        MacroObservation(
+            observation_id="fred:FEDFUNDS:2026-09-01",
+            series_id="FEDFUNDS",
+            metric=series.metric,
+            value=3.50,
+            unit=series.unit,
+            frequency=series.frequency,
+            observation_date=date(2026, 9, 1),
+            available_at=later_retrieval,
+            retrieved_at=later_retrieval,
+            source_name="FRED",
+            source_url="https://fred.stlouisfed.org/series/FEDFUNDS",
+        )
+    )
+
+    stored_after = PredictionVintageStore(repository).get(vintage_id)
+    assert stored_after["metadata"]["macro_context"] == context_before
