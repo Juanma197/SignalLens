@@ -17,6 +17,7 @@ type RankingResponse = {
   disclaimer: string;
   macro_context: PublishedMacroContext | null;
   fundamental_context: PublishedFundamentalContext | null;
+  evidence_context: PublishedEvidenceContext | null;
   rankings: Ranking[];
 };
 
@@ -83,16 +84,6 @@ type EvidenceItem = {
   source_updated_at: string | null;
   retrieved_at: string;
   content_hash: string;
-};
-
-type EvidenceResponse = {
-  ticker: string;
-  as_of: string;
-  evidence_type: "fundamental" | "filing" | "news" | "macro";
-  status: "fresh" | "stale" | "missing" | "failed";
-  max_age_days: number;
-  error: string | null;
-  items: EvidenceItem[];
 };
 
 type FundamentalFact = {
@@ -171,6 +162,24 @@ type PublishedFundamentalContext = {
   tickers: PublishedFundamentalTickerContext[];
 };
 
+type PublishedEvidenceTypeContext = {
+  status: "fresh" | "stale" | "missing" | "failed";
+  max_age_days: number;
+  error: string | null;
+  items: EvidenceItem[];
+};
+
+type PublishedTickerEvidenceContext = {
+  ticker: string;
+  filing: PublishedEvidenceTypeContext;
+  news: PublishedEvidenceTypeContext;
+};
+
+type PublishedEvidenceContext = {
+  captured_at: string;
+  tickers: PublishedTickerEvidenceContext[];
+};
+
 const unavailable: RankingResponse = {
   vintage_id: null,
   as_of: null,
@@ -182,6 +191,7 @@ const unavailable: RankingResponse = {
     "No published ranking is available. Start the API and publish a vintage to display research results.",
   macro_context: null,
   fundamental_context: null,
+  evidence_context: null,
   rankings: [],
 };
 
@@ -286,46 +296,16 @@ export default async function Home() {
       fetchJson<MacroSnapshot>("/api/v1/macro/latest", unavailableMacro),
     ]);
 
-  const [evidenceResults, newsResults] = await Promise.all([
-    Promise.all(
-      data.rankings.map(async (item) => {
-        const fallback: EvidenceResponse = {
-          ticker: item.ticker,
-          as_of: new Date().toISOString(),
-          evidence_type: "filing",
-          status: "missing",
-          max_age_days: 90,
-          error: null,
-          items: [],
-        };
-        const evidence = await fetchJson<EvidenceResponse>(
-          `/api/v1/evidence/${encodeURIComponent(item.ticker)}?evidence_type=filing&max_age_days=90`,
-          fallback,
-        );
-        return [item.ticker, evidence] as const;
-      }),
+  const evidenceByTicker = new Map(
+    (data.evidence_context?.tickers ?? []).map(
+      (item) => [item.ticker, item.filing] as const,
     ),
-    Promise.all(
-      data.rankings.map(async (item) => {
-        const fallback: EvidenceResponse = {
-          ticker: item.ticker,
-          as_of: new Date().toISOString(),
-          evidence_type: "news",
-          status: "missing",
-          max_age_days: 30,
-          error: null,
-          items: [],
-        };
-        const news = await fetchJson<EvidenceResponse>(
-          `/api/v1/evidence/${encodeURIComponent(item.ticker)}?evidence_type=news&max_age_days=30`,
-          fallback,
-        );
-        return [item.ticker, news] as const;
-      }),
+  );
+  const newsByTicker = new Map(
+    (data.evidence_context?.tickers ?? []).map(
+      (item) => [item.ticker, item.news] as const,
     ),
-  ]);
-  const evidenceByTicker = new Map(evidenceResults);
-  const newsByTicker = new Map(newsResults);
+  );
   const fundamentalsByTicker = new Map(
     (data.fundamental_context?.tickers ?? []).map(
       (item) => [item.ticker, item] as const,
@@ -502,13 +482,13 @@ export default async function Home() {
                       SEC filing ·{" "}
                       {evidenceByTicker.get(item.ticker)?.status ?? "unavailable"}
                     </span>
-                    <small>No filing evidence has been ingested for this ticker.</small>
+                    <small>No filing was captured with this vintage.</small>
                   </div>
                 )}
                 {newsByTicker.get(item.ticker)?.items.length ? (
                   <div className="news-evidence">
                     <div className="news-heading">
-                      <span>Recent company news</span>
+                      <span>News frozen with vintage</span>
                       <span className={`evidence-status ${newsByTicker.get(item.ticker)?.status}`}>
                         {newsByTicker.get(item.ticker)?.status}
                       </span>
@@ -540,7 +520,7 @@ export default async function Home() {
                         {newsByTicker.get(item.ticker)?.status ?? "unavailable"}
                       </span>
                     </div>
-                    <small>No recent news metadata has been ingested.</small>
+                    <small>No news was captured with this vintage.</small>
                   </div>
                 )}
                 {fundamentalsByTicker.get(item.ticker)?.facts.length ? (
