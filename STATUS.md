@@ -4,7 +4,7 @@ Last updated: 2026-09-20
 
 ## Current milestone
 
-Milestone 4 — ranking experience: started.
+Milestone 4 — ranking experience: live ranking slice verified.
 
 ## Delivered
 
@@ -72,9 +72,18 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 - Retrieval and counting helpers.
 - Tests proving an existing prediction vintage cannot be overwritten.
 
+### Published ranking experience
+
+- Leakage-safe latest-market snapshot ranked by the verified 126-trading-day momentum benchmark.
+- Explicit publication into immutable storage; reading the dashboard never creates or rewrites a vintage.
+- Latest published-vintage API with strategy/version provenance, evidence, risks, and disclaimer.
+- First real vintage published for 2026-09-18 with AMD, UNH, and AAPL ranked first through third.
+- Dashboard connected to the real ranking endpoint with percentage formatting and an honest unavailable state.
+- Synthetic NOVA, GRID, and FLOW fallback rankings removed.
+
 ## Verification
 
-- 19 backend tests pass on Windows with Python 3.13.
+- 22 backend tests pass on Windows with Python 3.13.
 - Frontend ESLint passes.
 - The optimized Next.js production build completes successfully.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
@@ -87,8 +96,8 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 - The momentum variants were compared on the same sample; the reported bootstrap interval does not correct for multiple testing or serial dependence.
 - Transaction costs are simplified and exclude spread variation, slippage, liquidity limits, taxes, and market impact.
 - No untouched holdout period or live forward test has yet confirmed the 126-day momentum result.
-- Immutable storage exists, but a production publishing workflow and distinction between historical backtests and live prediction vintages are not yet exposed through the API.
-- The dashboard still contains demonstration ranking content.
+- Ranking publication is currently an explicit manual command rather than a scheduled, authenticated workflow.
+- The first live vintage has not yet completed its 21-trading-day outcome window, so no realized result is available.
 
 ## Milestone 4 scope
 
@@ -100,4 +109,4 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 
 ## Next action
 
-Define and test the backend contract for publishing and retrieving the latest ranking vintage before connecting it to the dashboard.
+Add predicted-versus-actual outcome tracking for completed vintages without modifying the stored prediction records.
