@@ -6,9 +6,11 @@ from typing import Any
 import pandas as pd
 
 from .fred_macro import FRED_SERIES
+from .fundamentals import FundamentalRepository
 from .macro import MacroRepository
 from .market_data import MarketDataRepository
 from .prediction_store import PredictionVintageStore
+from .sec_fundamentals import METRIC_CONCEPTS
 
 
 STRATEGY_NAME = "momentum_126d"
@@ -92,6 +94,33 @@ def publish_latest_momentum_ranking(
         "missing_series": missing_series,
         "observations": macro_observations,
     }
+    fundamentals = FundamentalRepository(repository)
+    fundamental_snapshots = []
+    for ticker in ranking["ticker"].tolist():
+        facts = fundamentals.point_in_time(ticker, captured_at)
+        observed_metrics = {fact["metric"] for fact in facts}
+        missing_metrics = [
+            metric for metric in METRIC_CONCEPTS if metric not in observed_metrics
+        ]
+        fundamental_snapshots.append(
+            {
+                "ticker": ticker,
+                "status": (
+                    "missing"
+                    if not facts
+                    else "complete"
+                    if not missing_metrics
+                    else "partial"
+                ),
+                "expected_metrics": list(METRIC_CONCEPTS),
+                "missing_metrics": missing_metrics,
+                "facts": facts,
+            }
+        )
+    fundamental_context = {
+        "captured_at": captured_at.isoformat(),
+        "tickers": fundamental_snapshots,
+    }
     metadata: dict[str, Any] = {
         "lookback_trading_days": LOOKBACK_TRADING_DAYS,
         "top_k": top_k,
@@ -99,6 +128,7 @@ def publish_latest_momentum_ranking(
         "information_boundary": "prices through as_of_date only",
         "is_backtest": False,
         "macro_context": macro_context,
+        "fundamental_context": fundamental_context,
     }
     return PredictionVintageStore(repository).publish(
         STRATEGY_NAME,
