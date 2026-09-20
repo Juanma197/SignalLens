@@ -15,6 +15,7 @@ type RankingResponse = {
   strategy_version: string;
   is_demo: boolean;
   disclaimer: string;
+  macro_context: PublishedMacroContext | null;
   rankings: Ranking[];
 };
 
@@ -154,6 +155,18 @@ type MacroSnapshot = {
   observations: MacroObservation[];
 };
 
+type PublishedMacroObservation = Omit<MacroObservation, "freshness"> & {
+  available_at: string;
+};
+
+type PublishedMacroContext = {
+  captured_at: string;
+  status: "complete" | "partial" | "missing";
+  expected_series: string[];
+  missing_series: string[];
+  observations: PublishedMacroObservation[];
+};
+
 const unavailable: RankingResponse = {
   vintage_id: null,
   as_of: null,
@@ -163,6 +176,7 @@ const unavailable: RankingResponse = {
   is_demo: true,
   disclaimer:
     "No published ranking is available. Start the API and publish a vintage to display research results.",
+  macro_context: null,
   rankings: [],
 };
 
@@ -250,7 +264,7 @@ function macroContext(seriesId: MacroObservation["series_id"]): string {
   }[seriesId];
 }
 
-function formatMacro(item: MacroObservation): string {
+function formatMacro(item: Pick<MacroObservation, "unit" | "value">): string {
   return item.unit === "percent"
     ? `${item.value.toFixed(2)}%`
     : item.value.toFixed(3);
@@ -410,6 +424,36 @@ export default async function Home() {
           {data.is_demo ? "Unavailable" : "Immutable published vintage"} ·{" "}
           {data.disclaimer}
         </div>
+
+        {data.macro_context ? (
+          <div className="vintage-macro">
+            <div className="vintage-macro-heading">
+              <div>
+                <b>Macro context frozen with this vintage</b>
+                <span>
+                  Captured {data.macro_context.captured_at.slice(0, 10)}
+                </span>
+              </div>
+              <span className={`macro-coverage ${data.macro_context.status}`}>
+                {data.macro_context.status}
+              </span>
+            </div>
+            <div className="vintage-macro-values">
+              {data.macro_context.observations.map((item) => (
+                <a
+                  href={item.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  key={item.observation_id}
+                >
+                  <span>{macroLabel(item.series_id)}</span>
+                  <b>{formatMacro(item)}</b>
+                  <small>{item.observation_date}</small>
+                </a>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {data.rankings.length > 0 ? (
           <div className="grid">
