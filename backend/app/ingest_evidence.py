@@ -54,7 +54,8 @@ def main() -> None:
         f"{result['tickers']} tickers, "
         f"{result['fetched']} fetched, "
         f"{result['stored']} stored, "
-        f"{result['duplicates']} already present."
+        f"{result['duplicates']} already present, "
+        f"{result['failed']} failed."
     )
 
 
