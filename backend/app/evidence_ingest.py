@@ -60,11 +60,26 @@ def ingest_evidence(
     fetched = 0
     stored = 0
     duplicates = 0
+    failed = 0
+    provider_errors: dict[str, str] = getattr(provider, "errors", {})
     completed_at = datetime.now(timezone.utc)
     if completed_at < requested_at:
         completed_at = requested_at
 
     for ticker in normalized_tickers:
+        if ticker in provider_errors:
+            failed += 1
+            repository.record_fetch(
+                ticker=ticker,
+                evidence_type="filing",
+                source_name=provider.name,
+                requested_at=requested_at,
+                completed_at=completed_at,
+                status="failed",
+                error=provider_errors[ticker],
+            )
+            continue
+
         items = downloaded.get(ticker, [])
         fetched += len(items)
         for item in items:
@@ -93,5 +108,6 @@ def ingest_evidence(
         "fetched": fetched,
         "stored": stored,
         "duplicates": duplicates,
+        "failed": failed,
         "retrieved_at": requested_at,
     }
