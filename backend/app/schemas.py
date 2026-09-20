@@ -27,6 +27,26 @@ class RankingResponse(BaseModel):
     rankings: list[RankingItem]
 
 
+class PublishedRankingItem(BaseModel):
+    rank: int = Field(ge=1)
+    ticker: str
+    company: str
+    momentum_126d: float
+    evidence: str
+    risk: str
+
+
+class PublishedRankingResponse(BaseModel):
+    vintage_id: str
+    as_of: date
+    created_at: datetime
+    strategy: str
+    strategy_version: str
+    is_demo: Literal[False] = False
+    disclaimer: str
+    rankings: list[PublishedRankingItem]
+
+
 class IngestionRunResponse(BaseModel):
     run_id: str
     source: str
