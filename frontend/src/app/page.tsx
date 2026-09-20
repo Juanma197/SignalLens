@@ -40,6 +40,23 @@ type OutcomeResponse = {
   outcomes: PredictionOutcome[];
 };
 
+type RankingHistoryItem = {
+  vintage_id: string;
+  as_of_date: string;
+  created_at: string;
+  strategy: string;
+  strategy_version: string;
+  tickers: string[];
+  status: "pending" | "completed";
+  completed_predictions: number;
+  total_predictions: number;
+  mean_realized_return: number | null;
+};
+
+type RankingHistoryResponse = {
+  vintages: RankingHistoryItem[];
+};
+
 type DataStatus = {
   universe_size: number;
   covered_tickers: number;
@@ -61,6 +78,8 @@ const unavailable: RankingResponse = {
     "No published ranking is available. Start the API and publish a vintage to display research results.",
   rankings: [],
 };
+
+const unavailableHistory: RankingHistoryResponse = { vintages: [] };
 
 const unavailableOutcomes: OutcomeResponse = {
   vintage_id: null,
@@ -88,10 +107,11 @@ function formatPercent(value: number): string {
 }
 
 export default async function Home() {
-  const [data, status, outcomes] = await Promise.all([
+  const [data, status, outcomes, history] = await Promise.all([
     fetchJson("/api/v1/rankings/latest", unavailable),
     fetchJson<DataStatus | null>("/api/v1/data/status", null),
     fetchJson("/api/v1/rankings/latest/outcomes", unavailableOutcomes),
+    fetchJson("/api/v1/rankings/history", unavailableHistory),
   ]);
 
   return (
@@ -210,6 +230,49 @@ export default async function Home() {
           The evaluation enters at the first close after publication and measures
           the following {outcomes.horizon_trading_days} trading-day return. Stored
           predictions are never rewritten.
+        </footer>
+      </section>
+
+      <section className="panel history-panel">
+        <header>
+          <div>
+            <p className="eyebrow">VINTAGE ARCHIVE</p>
+            <h2>Published ranking history</h2>
+          </div>
+          <div className="date">{history.vintages.length} vintages</div>
+        </header>
+
+        {history.vintages.length > 0 ? (
+          <div className="history-list">
+            {history.vintages.map((vintage) => (
+              <div className="history-row" key={vintage.vintage_id}>
+                <div>
+                  <b>{vintage.as_of_date}</b>
+                  <span>{vintage.tickers.join(" · ")}</span>
+                </div>
+                <div>
+                  <span className={`outcome-status ${vintage.status}`}>
+                    {vintage.status}
+                  </span>
+                </div>
+                <div>
+                  <b>
+                    {vintage.mean_realized_return === null
+                      ? "—"
+                      : formatPercent(vintage.mean_realized_return)}
+                  </b>
+                  <span>mean realized return</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">No published vintage history is available.</div>
+        )}
+
+        <footer>
+          Every row references an immutable published vintage. Historical
+          rankings remain visible after newer months are added.
         </footer>
       </section>
     </main>
