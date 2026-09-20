@@ -181,3 +181,27 @@ class TickerFundamentalsResponse(BaseModel):
     expected_metrics: list[str]
     missing_metrics: list[str]
     facts: list[FundamentalFactResponse]
+
+
+class MacroObservationResponse(BaseModel):
+    observation_id: str
+    series_id: Literal["FEDFUNDS", "CPIAUCSL", "UNRATE", "DGS10"]
+    metric: str
+    value: float
+    unit: str
+    frequency: Literal["daily", "monthly"]
+    observation_date: date
+    available_at: datetime
+    retrieved_at: datetime
+    source_name: str
+    source_url: str
+    freshness: Literal["fresh", "stale"]
+
+
+class MacroSnapshotResponse(BaseModel):
+    as_of: datetime
+    status: Literal["complete", "partial", "missing"]
+    expected_series: list[str]
+    missing_series: list[str]
+    stale_series: list[str]
+    observations: list[MacroObservationResponse]
