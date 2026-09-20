@@ -4,7 +4,7 @@ Last updated: 2026-09-20
 
 ## Current milestone
 
-Milestone 3 — honest research baseline: implementation complete; final verification and merge remain.
+Milestone 3 — honest research baseline: complete and ready to merge.
 
 ## Delivered
 
@@ -75,8 +75,10 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 ## Verification
 
 - 19 backend tests pass on Windows with Python 3.13.
-- The only warning is a third-party Starlette/AnyIO deprecation warning.
-- The working tree was clean after the latest pull and backend test run.
+- Frontend ESLint passes.
+- The optimized Next.js production build completes successfully.
+- The only backend warning is a third-party Starlette/AnyIO deprecation warning.
+- The working tree is clean after restoring the generated `frontend/next-env.d.ts` change.
 
 ## Known limitations
 
@@ -90,8 +92,6 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 
 ## Next action
 
-1. Run the frontend lint and production build on the completed branch.
-2. Restore any generated change to `frontend/next-env.d.ts` and confirm a clean working tree.
-3. Update the milestone documentation if verification passes.
-4. Merge `feature/milestone-3-research-baseline` into `main`.
-5. Start Milestone 4 with a clear separation between research evidence, stored prediction vintages, and user-facing rankings.
+1. Merge `feature/milestone-3-research-baseline` into `main`.
+2. Start Milestone 4 on a new branch.
+3. Keep research evidence, stored prediction vintages, and user-facing rankings clearly separated.
