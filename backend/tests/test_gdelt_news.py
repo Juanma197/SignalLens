@@ -84,6 +84,7 @@ def test_gdelt_provider_isolates_one_ticker_failure() -> None:
     provider = GDELTNewsProvider(
         {"AMD": "Advanced Micro Devices", "AAPL": "Apple"},
         client,
+        request_interval_seconds=0,
     )
 
     downloaded = provider.download(["AMD", "AAPL"], RETRIEVED_AT)
@@ -106,3 +107,30 @@ def test_gdelt_provider_requires_company_mapping() -> None:
 
     with pytest.raises(ValueError, match="UNKNOWN"):
         provider.download(["UNKNOWN"], RETRIEVED_AT)
+
+
+def test_gdelt_provider_retries_rate_limit_using_retry_after() -> None:
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0"},
+                text="rate limited",
+            )
+        return httpx.Response(200, json={"articles": []})
+
+    provider = GDELTNewsProvider(
+        {"AMD": "Advanced Micro Devices"},
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=1,
+        retry_delay_seconds=0,
+        request_interval_seconds=0,
+    )
+
+    assert provider.download(["AMD"], RETRIEVED_AT)["AMD"] == []
+    assert attempts == 2
+    assert provider.errors == {}
