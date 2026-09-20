@@ -164,6 +164,13 @@ class EvidenceRepository:
             "retrieved_at": item.retrieved_at,
         }
 
+    def contains(self, evidence_id: str) -> bool:
+        with self.market_data.connect() as connection:
+            return connection.execute(
+                "SELECT 1 FROM evidence_items WHERE evidence_id = ?",
+                [evidence_id],
+            ).fetchone() is not None
+
     def record_fetch(
         self,
         ticker: str,
