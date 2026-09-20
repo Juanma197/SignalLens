@@ -86,6 +86,22 @@ class RankingHistoryResponse(BaseModel):
     vintages: list[RankingHistoryItem]
 
 
+class WatchlistNoteRequest(BaseModel):
+    note: str = Field(min_length=1, max_length=2000)
+
+
+class WatchlistItem(BaseModel):
+    ticker: str
+    company: str
+    note: str
+    added_at: datetime
+    updated_at: datetime
+
+
+class WatchlistResponse(BaseModel):
+    items: list[WatchlistItem]
+
+
 class IngestionRunResponse(BaseModel):
     run_id: str
     source: str
