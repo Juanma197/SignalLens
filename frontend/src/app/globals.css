@@ -32,7 +32,7 @@ article p { color:#bac4be; line-height:1.5; }
 .risk { border-top:1px solid var(--line); padding-top:18px; margin-top:25px; font-size:13px; }
 .risk b { display:block; color:#e3b687; margin-bottom:5px; }
 footer { border-top:1px solid var(--line); padding:16px 30px; font-size:12px; overflow-wrap:anywhere; }
-.outcome-panel { margin-top:20px; }
+.outcome-panel,.history-panel { margin-top:20px; }
 .outcome-status { text-transform:uppercase; letter-spacing:.12em; font-size:11px; font-weight:800; border:1px solid var(--line); border-radius:20px; padding:8px 12px; }
 .outcome-status.pending { color:#e3b687; border-color:#60472e; background:#281f16; }
 .outcome-status.completed { color:var(--green); border-color:#315944; background:#14271d; }
@@ -44,4 +44,11 @@ footer { border-top:1px solid var(--line); padding:16px 30px; font-size:12px; ov
 .outcome-row div:last-child { text-align:right; }
 .outcome-row b { color:var(--ink); }
 .outcome-row span { color:var(--muted); font-size:11px; }
-@media (max-width:760px) { .hero{padding-top:55px}.data-status{grid-template-columns:repeat(2,1fr)}.grid,.outcome-list{grid-template-columns:1fr}article,.outcome-row{border-right:0;border-bottom:1px solid var(--line)}.outcome-row:last-child{border-bottom:0}.panel>header{align-items:start;gap:18px;flex-direction:column} }
+.history-list { border-top:1px solid var(--line); }
+.history-row { display:grid; grid-template-columns:1.4fr .6fr 1fr; align-items:center; gap:20px; padding:20px 30px; border-bottom:1px solid var(--line); }
+.history-row:last-child { border-bottom:0; }
+.history-row > div { display:flex; flex-direction:column; gap:6px; }
+.history-row > div:nth-child(2) { align-items:center; }
+.history-row > div:last-child { text-align:right; }
+.history-row span { color:var(--muted); font-size:11px; }
+@media (max-width:760px) { .hero{padding-top:55px}.data-status{grid-template-columns:repeat(2,1fr)}.grid,.outcome-list{grid-template-columns:1fr}article,.outcome-row{border-right:0;border-bottom:1px solid var(--line)}.outcome-row:last-child{border-bottom:0}.history-row{grid-template-columns:1fr;align-items:start}.history-row>div:nth-child(2){align-items:start}.history-row>div:last-child{text-align:left}.panel>header{align-items:start;gap:18px;flex-direction:column} }
