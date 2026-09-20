@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     allowed_origins: str = "http://localhost:3000"
     database_path: Path = Path("data/signallens.duckdb")
+    sec_user_agent: str = ""
 
     model_config = SettingsConfigDict(env_file="../.env", env_prefix="SIGNALLENS_", extra="ignore")
 
