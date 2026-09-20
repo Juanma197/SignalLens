@@ -144,3 +144,40 @@ class TickerEvidenceResponse(BaseModel):
     max_age_days: int = Field(ge=1)
     error: str | None
     items: list[EvidenceItemResponse]
+
+
+class FundamentalFactResponse(BaseModel):
+    fact_id: str
+    ticker: str
+    metric: Literal[
+        "revenue",
+        "net_income",
+        "eps_diluted",
+        "assets",
+        "liabilities",
+        "cash",
+    ]
+    taxonomy: str
+    concept: str
+    unit: str
+    value: float
+    period_start: date | None
+    period_end: date
+    fiscal_year: int | None
+    fiscal_period: str | None
+    form: str
+    accession: str
+    filed_at: datetime
+    available_at: datetime
+    retrieved_at: datetime
+    source_url: str
+
+
+class TickerFundamentalsResponse(BaseModel):
+    ticker: str
+    company: str
+    as_of: datetime
+    status: Literal["complete", "partial", "missing"]
+    expected_metrics: list[str]
+    missing_metrics: list[str]
+    facts: list[FundamentalFactResponse]
