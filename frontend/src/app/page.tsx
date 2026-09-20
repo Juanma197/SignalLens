@@ -57,6 +57,18 @@ type RankingHistoryResponse = {
   vintages: RankingHistoryItem[];
 };
 
+type WatchlistItem = {
+  ticker: string;
+  company: string;
+  note: string;
+  added_at: string;
+  updated_at: string;
+};
+
+type WatchlistResponse = {
+  items: WatchlistItem[];
+};
+
 type DataStatus = {
   universe_size: number;
   covered_tickers: number;
@@ -107,11 +119,12 @@ function formatPercent(value: number): string {
 }
 
 export default async function Home() {
-  const [data, status, outcomes, history] = await Promise.all([
+  const [data, status, outcomes, history, watchlist] = await Promise.all([
     fetchJson("/api/v1/rankings/latest", unavailable),
     fetchJson<DataStatus | null>("/api/v1/data/status", null),
     fetchJson("/api/v1/rankings/latest/outcomes", unavailableOutcomes),
     fetchJson("/api/v1/rankings/history", unavailableHistory),
+    fetchJson<WatchlistResponse>("/api/v1/watchlist", { items: [] }),
   ]);
 
   return (
@@ -230,6 +243,40 @@ export default async function Home() {
           The evaluation enters at the first close after publication and measures
           the following {outcomes.horizon_trading_days} trading-day return. Stored
           predictions are never rewritten.
+        </footer>
+      </section>
+
+      <section className="panel watchlist-panel">
+        <header>
+          <div>
+            <p className="eyebrow">PERSONAL RESEARCH</p>
+            <h2>Watchlist and notes</h2>
+          </div>
+          <div className="date">{watchlist.items.length} watched</div>
+        </header>
+
+        {watchlist.items.length > 0 ? (
+          <div className="watchlist-list">
+            {watchlist.items.map((item) => (
+              <div className="watchlist-row" key={item.ticker}>
+                <div>
+                  <b>{item.ticker}</b>
+                  <span>{item.company}</span>
+                </div>
+                <p>{item.note}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">
+            No personal notes yet. Add a universe ticker through the API
+            documentation to begin a watchlist.
+          </div>
+        )}
+
+        <footer>
+          Watchlist notes are editable personal research and are kept separate
+          from immutable published prediction vintages.
         </footer>
       </section>
 
