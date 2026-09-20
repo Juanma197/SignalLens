@@ -18,6 +18,28 @@ type RankingResponse = {
   rankings: Ranking[];
 };
 
+type PredictionOutcome = {
+  ticker: string;
+  rank: number;
+  status: "pending" | "completed";
+  entry_date: string | null;
+  exit_date: string | null;
+  realized_return: number | null;
+  available_post_signal_closes: number;
+  required_post_signal_closes: number;
+};
+
+type OutcomeResponse = {
+  vintage_id: string | null;
+  as_of_date: string | null;
+  horizon_trading_days: number;
+  status: "unavailable" | "pending" | "completed";
+  completed_predictions: number;
+  total_predictions: number;
+  mean_realized_return: number | null;
+  outcomes: PredictionOutcome[];
+};
+
 type DataStatus = {
   universe_size: number;
   covered_tickers: number;
@@ -40,6 +62,17 @@ const unavailable: RankingResponse = {
   rankings: [],
 };
 
+const unavailableOutcomes: OutcomeResponse = {
+  vintage_id: null,
+  as_of_date: null,
+  horizon_trading_days: 21,
+  status: "unavailable",
+  completed_predictions: 0,
+  total_predictions: 0,
+  mean_realized_return: null,
+  outcomes: [],
+};
+
 async function fetchJson<T>(path: string, fallbackValue: T): Promise<T> {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
   try {
@@ -50,14 +83,15 @@ async function fetchJson<T>(path: string, fallbackValue: T): Promise<T> {
   }
 }
 
-function formatMomentum(value: number): string {
+function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
 export default async function Home() {
-  const [data, status] = await Promise.all([
+  const [data, status, outcomes] = await Promise.all([
     fetchJson("/api/v1/rankings/latest", unavailable),
     fetchJson<DataStatus | null>("/api/v1/data/status", null),
+    fetchJson("/api/v1/rankings/latest/outcomes", unavailableOutcomes),
   ]);
 
   return (
@@ -84,26 +118,11 @@ export default async function Home() {
       </section>
 
       <section className="data-status">
-        <div>
-          <b>{status?.universe_size ?? "—"}</b>
-          <span>stocks in universe</span>
-        </div>
-        <div>
-          <b>{status?.covered_tickers ?? "—"}</b>
-          <span>with price history</span>
-        </div>
-        <div>
-          <b>{status?.row_count.toLocaleString() ?? "—"}</b>
-          <span>daily observations</span>
-        </div>
-        <div>
-          <b>{status?.forward_horizon_trading_days ?? 21}</b>
-          <span>trading-day horizon</span>
-        </div>
-        <div>
-          <b>{status?.duplicate_rows ?? "—"}</b>
-          <span>duplicate rows</span>
-        </div>
+        <div><b>{status?.universe_size ?? "—"}</b><span>stocks in universe</span></div>
+        <div><b>{status?.covered_tickers ?? "—"}</b><span>with price history</span></div>
+        <div><b>{status?.row_count.toLocaleString() ?? "—"}</b><span>daily observations</span></div>
+        <div><b>{status?.forward_horizon_trading_days ?? 21}</b><span>trading-day horizon</span></div>
+        <div><b>{status?.duplicate_rows ?? "—"}</b><span>duplicate rows</span></div>
       </section>
 
       <section className="panel">
@@ -128,16 +147,13 @@ export default async function Home() {
               <article key={item.ticker}>
                 <div className="rank">0{item.rank}</div>
                 <div className="score">
-                  {formatMomentum(item.momentum_126d)}
+                  {formatPercent(item.momentum_126d)}
                   <small> 126D</small>
                 </div>
                 <h3>{item.ticker}</h3>
                 <p className="company">{item.company}</p>
                 <p>{item.evidence}</p>
-                <p className="risk">
-                  <b>Key risk</b>
-                  {item.risk}
-                </p>
+                <p className="risk"><b>Key risk</b>{item.risk}</p>
               </article>
             ))}
           </div>
@@ -152,6 +168,48 @@ export default async function Home() {
           Strategy: {data.strategy} v{data.strategy_version}
           {data.vintage_id ? ` · Vintage: ${data.vintage_id}` : ""}
           {" · "}Rankings are research outputs, not instructions to trade.
+        </footer>
+      </section>
+
+      <section className="panel outcome-panel">
+        <header>
+          <div>
+            <p className="eyebrow">PREDICTED VS ACTUAL</p>
+            <h2>{outcomes.status === "completed" ? "Realized outcome" : "Outcome pending"}</h2>
+          </div>
+          <div className={`outcome-status ${outcomes.status}`}>
+            {outcomes.status}
+          </div>
+        </header>
+
+        {outcomes.outcomes.length > 0 ? (
+          <div className="outcome-list">
+            {outcomes.outcomes.map((item) => (
+              <div className="outcome-row" key={item.ticker}>
+                <div><b>{item.ticker}</b><span>Rank {item.rank}</span></div>
+                <div>
+                  <b>
+                    {item.realized_return === null
+                      ? "Pending"
+                      : formatPercent(item.realized_return)}
+                  </b>
+                  <span>
+                    {item.status === "pending"
+                      ? `${item.available_post_signal_closes} of ${item.required_post_signal_closes} required closes`
+                      : `${item.entry_date} to ${item.exit_date}`}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">Outcome tracking is unavailable.</div>
+        )}
+
+        <footer>
+          The evaluation enters at the first close after publication and measures
+          the following {outcomes.horizon_trading_days} trading-day return. Stored
+          predictions are never rewritten.
         </footer>
       </section>
     </main>
