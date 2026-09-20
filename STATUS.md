@@ -4,7 +4,7 @@ Last updated: 2026-09-20
 
 ## Current milestone
 
-Milestone 4 — ranking experience: live ranking slice verified.
+Milestone 4 — ranking experience: ranking, outcomes, and archive verified.
 
 ## Delivered
 
@@ -80,10 +80,12 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 - First real vintage published for 2026-09-18 with AMD, UNH, and AAPL ranked first through third.
 - Dashboard connected to the real ranking endpoint with percentage formatting and an honest unavailable state.
 - Synthetic NOVA, GRID, and FLOW fallback rankings removed.
+- Predicted-versus-actual tracking with next-close entry, a 21-trading-day return horizon, and pending/completed states.
+- Newest-first immutable vintage archive combining original selections with their realized outcome status.
 
 ## Verification
 
-- 22 backend tests pass on Windows with Python 3.13.
+- 27 backend tests pass on Windows with Python 3.13.
 - Frontend ESLint passes.
 - The optimized Next.js production build completes successfully.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
@@ -109,4 +111,4 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 
 ## Next action
 
-Add predicted-versus-actual outcome tracking for completed vintages without modifying the stored prediction records.
+Add focused watchlist and research-note support, then run the final Milestone 4 verification gate.
