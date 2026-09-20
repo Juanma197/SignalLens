@@ -39,6 +39,24 @@ $BackendCommand = "Set-Location '$BackendPath'; & '$PythonExe' -m uvicorn app.ma
 $FrontendCommand = "Set-Location '$FrontendPath'; npm run dev"
 
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $BackendCommand
+
+$ApiReady = $false
+for ($Attempt = 1; $Attempt -le 30; $Attempt++) {
+    try {
+        $Response = Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/v1/health" -UseBasicParsing -TimeoutSec 2
+        if ($Response.StatusCode -eq 200) {
+            $ApiReady = $true
+            break
+        }
+    }
+    catch {
+        Start-Sleep -Seconds 1
+    }
+}
+if (-not $ApiReady) {
+    throw "The SignalLens API did not become ready within 30 seconds."
+}
+
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $FrontendCommand
 
 Write-Host "SignalLens is starting."
