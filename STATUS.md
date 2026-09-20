@@ -1,37 +1,97 @@
 # SignalLens Status
 
-Last updated: 2026-09-19
+Last updated: 2026-09-20
 
 ## Current milestone
 
-Milestone 3 — honest research baseline: ready for implementation.
+Milestone 3 — honest research baseline: implementation complete; final verification and merge remain.
 
-## Milestone 2 completion
+## Delivered
 
-- Curated 30-stock universe and 21-trading-day forward horizon
-- DuckDB schema for securities, daily adjusted prices, and ingestion provenance
-- Live yfinance ingestion covering 2015-01-02 through 2026-09-18
-- 81,617 stored price rows across all 30 tickers
-- Zero duplicate ticker/date rows
-- Automatic database-directory creation
-- Explicit DuckDB connection cleanup and bulk price insertion
-- Idempotent price upserts and failed-run recording
-- Data-status API and dashboard summary
-- Backend automated tests: 8 passed on Windows
-- Frontend ESLint and production build passed
-- Milestone 2 merged into `main` at commit `7f8c5d5`
+### Data foundation
 
-## Current limitations
+- A fixed 30-stock research universe with sector metadata.
+- Daily OHLCV history from 2015-01-02 through 2026-09-18.
+- DuckDB persistence, ingestion-run metadata, validation, idempotent upserts, and a data-status endpoint.
+- Automatic database-directory creation and reliable connection cleanup.
 
-- Rankings remain deterministic demonstration data; real prices are not yet used for ranking.
-- The curated universe is intentionally small and has survivorship bias; it is suitable for pipeline validation, not historical claims about the whole market.
-- yfinance is a convenient research source, not an exchange-grade licensed feed.
-- No point-in-time feature table, forward-return labels, walk-forward model, transaction-cost evaluation, or immutable prediction vintages exist yet.
+### Point-in-time research dataset
 
-## Milestone 3 objective
+- Monthly observations generated only from information available at each prediction timestamp.
+- Momentum features over 5, 21, 63, and 126 trading days.
+- 21-day volatility, 50-day and 200-day moving-average ratios, and 20-day relative volume.
+- Signals formed after the as-of close, entry at the next trading close, and a 21-trading-day forward holding period.
+- Cross-sectional outperformance labels with explicit exit dates.
+- Leakage-safety and feature-timing tests.
 
-Build an honest baseline research pipeline with point-in-time features, leakage-safe 21-trading-day targets, walk-forward evaluation, simple benchmark comparisons, transaction-cost assumptions, and immutable prediction vintages.
+The current local market-data snapshot produces:
+
+- 3,578 labeled rows across 30 tickers.
+- 130 prediction months from 2015-10-30 through 2026-07-31.
+- No missing feature values.
+- A 49.33% positive-label rate.
+
+### Honest walk-forward evaluation
+
+- Expanding-window logistic-regression baseline.
+- A minimum 36-month training window.
+- Exit-date embargo: a row is trainable only after its forward-return window has completed.
+- Top-3 monthly portfolio evaluation with 10 basis points of transaction cost per side.
+- Formal deterministic momentum benchmarks evaluated over the same dates.
+
+Logistic baseline over 94 out-of-sample months:
+
+- Brier score: 0.253054 versus 0.249945 for the constant-rate baseline.
+- ROC AUC: 0.487626.
+- Top-3 mean net monthly return: 2.937%.
+- Universe mean monthly return: 2.475%.
+- Mean excess return: 0.462%.
+- Monthly excess-return win rate: 48.94%.
+
+The logistic model does not demonstrate useful predictive classification skill and should not be presented as validated alpha.
+
+Best simple benchmark, 126-day momentum over the same 94 months:
+
+- Top-3 mean net monthly return: 4.213%.
+- Median net monthly return: 3.398%.
+- Mean excess return: 1.738%.
+- Median excess return: 0.528%.
+- Monthly excess-return win rate: 56.38%.
+- Positive-return rate: 59.57%.
+- Maximum drawdown: -24.70%.
+- Worst month: -17.48%; best month: 29.88%.
+- Bootstrap 95% interval for mean monthly excess return: 0.24% to 3.22%.
+- NVDA was the most selected ticker, representing 10.99% of selections.
+
+This is encouraging historical evidence for a benchmark, not proof of a deployable strategy.
+
+### Immutable prediction storage
+
+- Append-only prediction-run and prediction-row tables in DuckDB.
+- Stored model/strategy identity, parameters, training cutoff, creation time, ranks, scores, and feature snapshots.
+- Retrieval and counting helpers.
+- Tests proving an existing prediction vintage cannot be overwritten.
+
+## Verification
+
+- 19 backend tests pass on Windows with Python 3.13.
+- The only warning is a third-party Starlette/AnyIO deprecation warning.
+- The working tree was clean after the latest pull and backend test run.
+
+## Known limitations
+
+- The universe is fixed today, so historical results are exposed to survivorship and selection bias.
+- Yahoo Finance data is suitable for research prototyping, not production-grade market-data guarantees.
+- The momentum variants were compared on the same sample; the reported bootstrap interval does not correct for multiple testing or serial dependence.
+- Transaction costs are simplified and exclude spread variation, slippage, liquidity limits, taxes, and market impact.
+- No untouched holdout period or live forward test has yet confirmed the 126-day momentum result.
+- Immutable storage exists, but a production publishing workflow and distinction between historical backtests and live prediction vintages are not yet exposed through the API.
+- The dashboard still contains demonstration ranking content.
 
 ## Next action
 
-Specify and implement the Milestone 3 feature and label contracts with automated leakage tests.
+1. Run the frontend lint and production build on the completed branch.
+2. Restore any generated change to `frontend/next-env.d.ts` and confirm a clean working tree.
+3. Update the milestone documentation if verification passes.
+4. Merge `feature/milestone-3-research-baseline` into `main`.
+5. Start Milestone 4 with a clear separation between research evidence, stored prediction vintages, and user-facing rankings.
