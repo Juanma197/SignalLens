@@ -8,9 +8,11 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.fred_macro import FRED_SERIES, MacroObservation
+from app.fundamentals import FundamentalRepository
 from app.macro import MacroRepository
 from app.market_data import MarketDataRepository
 from app.prediction_store import PredictionVintageStore
+from app.sec_fundamentals import FundamentalFact
 from app.rankings import (
     build_latest_momentum_ranking,
     publish_latest_momentum_ranking,
@@ -212,3 +214,79 @@ def test_latest_ranking_api_exposes_frozen_macro_context(
     assert body["macro_context"]["observations"][0]["series_id"] == "DGS10"
     assert body["macro_context"]["observations"][0]["value"] == 4.94
     assert body["macro_context"]["captured_at"] == "2026-09-21T09:00:00Z"
+
+
+def test_published_ranking_freezes_point_in_time_fundamentals(
+    tmp_path: Path,
+) -> None:
+    repository = repository_with_prices(tmp_path / "fundamental-vintage.duckdb")
+    fundamentals = FundamentalRepository(repository)
+    available_at = datetime(2026, 7, 17, 9, 0, tzinfo=timezone.utc)
+    fundamentals.save(
+        FundamentalFact(
+            fact_id="sec-fact:BBB:revenue:q2",
+            ticker="BBB",
+            metric="revenue",
+            taxonomy="us-gaap",
+            concept="Revenues",
+            unit="USD",
+            value=1_500_000_000,
+            period_start=date(2026, 4, 1),
+            period_end=date(2026, 6, 30),
+            fiscal_year=2026,
+            fiscal_period="Q2",
+            form="10-Q",
+            accession="0000000000-26-000001",
+            filed_at=datetime(2026, 7, 16, tzinfo=timezone.utc),
+            available_at=available_at,
+            retrieved_at=available_at,
+            source_url="https://www.sec.gov/Archives/example",
+        )
+    )
+    published_at = datetime(2026, 7, 18, 9, 0, tzinfo=timezone.utc)
+
+    vintage_id = publish_latest_momentum_ranking(
+        repository,
+        published_at=published_at,
+    )
+    stored_before = PredictionVintageStore(repository).get(vintage_id)
+    context_before = stored_before["metadata"]["fundamental_context"]
+
+    assert context_before["captured_at"] == published_at.isoformat()
+    assert [item["ticker"] for item in context_before["tickers"]] == [
+        "BBB",
+        "AAA",
+        "CCC",
+    ]
+    bbb = context_before["tickers"][0]
+    assert bbb["status"] == "partial"
+    assert bbb["facts"][0]["metric"] == "revenue"
+    assert bbb["facts"][0]["value"] == 1_500_000_000
+    assert "revenue" not in bbb["missing_metrics"]
+    assert context_before["tickers"][1]["status"] == "missing"
+
+    later = datetime(2026, 8, 20, 9, 0, tzinfo=timezone.utc)
+    fundamentals.save(
+        FundamentalFact(
+            fact_id="sec-fact:BBB:revenue:q3",
+            ticker="BBB",
+            metric="revenue",
+            taxonomy="us-gaap",
+            concept="Revenues",
+            unit="USD",
+            value=1_800_000_000,
+            period_start=date(2026, 7, 1),
+            period_end=date(2026, 9, 30),
+            fiscal_year=2026,
+            fiscal_period="Q3",
+            form="10-Q",
+            accession="0000000000-26-000002",
+            filed_at=later,
+            available_at=later,
+            retrieved_at=later,
+            source_url="https://www.sec.gov/Archives/example-later",
+        )
+    )
+
+    stored_after = PredictionVintageStore(repository).get(vintage_id)
+    assert stored_after["metadata"]["fundamental_context"] == context_before
