@@ -7,6 +7,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from app.evidence import EvidenceItem, EvidenceRepository
 from app.fred_macro import FRED_SERIES, MacroObservation
 from app.fundamentals import FundamentalRepository
 from app.macro import MacroRepository
@@ -309,3 +310,80 @@ def test_published_ranking_freezes_point_in_time_fundamentals(
 
     stored_after = PredictionVintageStore(repository).get(vintage_id)
     assert stored_after["metadata"]["fundamental_context"] == context_before
+
+
+def test_published_ranking_freezes_and_exposes_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database_path = tmp_path / "evidence-vintage.duckdb"
+    repository = repository_with_prices(database_path)
+    evidence = EvidenceRepository(repository)
+    retrieved_at = datetime(2026, 7, 17, 9, 0, tzinfo=timezone.utc)
+    evidence.save(
+        EvidenceItem(
+            evidence_id="filing:BBB:q2",
+            ticker="BBB",
+            evidence_type="filing",
+            source_name="SEC EDGAR",
+            source_url="https://www.sec.gov/Archives/example-filing",
+            title="BBB 10-Q filed 2026-07-16",
+            summary="Official quarterly filing.",
+            published_at=datetime(2026, 7, 16, 16, 0, tzinfo=timezone.utc),
+            retrieved_at=retrieved_at,
+        )
+    )
+    evidence.save(
+        EvidenceItem(
+            evidence_id="news:BBB:launch",
+            ticker="BBB",
+            evidence_type="news",
+            source_name="Google News RSS / example.com",
+            source_url="https://example.com/bbb-launch",
+            title="BBB launches a new product",
+            summary="Public RSS metadata.",
+            published_at=datetime(2026, 7, 17, 8, 0, tzinfo=timezone.utc),
+            retrieved_at=retrieved_at,
+        )
+    )
+    published_at = datetime(2026, 7, 18, 9, 0, tzinfo=timezone.utc)
+
+    vintage_id = publish_latest_momentum_ranking(
+        repository,
+        published_at=published_at,
+    )
+    stored = PredictionVintageStore(repository).get(vintage_id)
+    context = stored["metadata"]["evidence_context"]
+
+    assert context["captured_at"] == published_at.isoformat()
+    assert [item["ticker"] for item in context["tickers"]] == [
+        "BBB",
+        "AAA",
+        "CCC",
+    ]
+    bbb = context["tickers"][0]
+    assert bbb["filing"]["status"] == "fresh"
+    assert bbb["filing"]["max_age_days"] == 90
+    assert bbb["filing"]["items"][0]["evidence_id"] == "filing:BBB:q2"
+    assert bbb["news"]["status"] == "fresh"
+    assert bbb["news"]["max_age_days"] == 30
+    assert bbb["news"]["items"][0]["evidence_id"] == "news:BBB:launch"
+    assert context["tickers"][1]["filing"]["status"] == "missing"
+
+    monkeypatch.setenv("SIGNALLENS_DATABASE_PATH", str(database_path))
+    get_settings.cache_clear()
+    import app.main as main
+
+    main.settings = get_settings()
+    response = TestClient(main.app).get("/api/v1/rankings/latest")
+    get_settings.cache_clear()
+
+    assert response.status_code == 200
+    api_context = response.json()["evidence_context"]
+    assert api_context["captured_at"] == "2026-07-18T09:00:00Z"
+    assert api_context["tickers"][0]["filing"]["items"][0]["title"] == (
+        "BBB 10-Q filed 2026-07-16"
+    )
+    assert api_context["tickers"][0]["news"]["items"][0]["title"] == (
+        "BBB launches a new product"
+    )
