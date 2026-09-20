@@ -29,6 +29,15 @@ article:last-child { border:0; }
 .score small { color:var(--muted); font-size:11px; }
 h3 { font-size:35px; margin:48px 0 2px; letter-spacing:-.04em; }
 article p { color:#bac4be; line-height:1.5; }
+.filing-evidence { display:flex; flex-direction:column; gap:7px; margin-top:18px; padding:14px; background:#0b1511; border:1px solid var(--line); border-radius:10px; }
+.filing-evidence a { color:#c9ead6; font-size:13px; line-height:1.4; text-decoration:none; }
+.filing-evidence a:hover { color:var(--green); text-decoration:underline; }
+.filing-evidence small { color:var(--muted); font-size:10px; }
+.filing-evidence.unavailable { background:#101713; }
+.evidence-status { width:max-content; text-transform:uppercase; letter-spacing:.1em; font-size:9px; font-weight:800; }
+.evidence-status.fresh { color:var(--green); }
+.evidence-status.stale,.evidence-status.missing { color:#e3b687; }
+.evidence-status.failed { color:#ef8f8f; }
 .risk { border-top:1px solid var(--line); padding-top:18px; margin-top:25px; font-size:13px; }
 .risk b { display:block; color:#e3b687; margin-bottom:5px; }
 footer { border-top:1px solid var(--line); padding:16px 30px; font-size:12px; overflow-wrap:anywhere; }
