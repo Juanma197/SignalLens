@@ -218,6 +218,7 @@ def test_latest_ranking_api_exposes_frozen_macro_context(
 
 def test_published_ranking_freezes_point_in_time_fundamentals(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     repository = repository_with_prices(tmp_path / "fundamental-vintage.duckdb")
     fundamentals = FundamentalRepository(repository)
@@ -264,6 +265,24 @@ def test_published_ranking_freezes_point_in_time_fundamentals(
     assert bbb["facts"][0]["value"] == 1_500_000_000
     assert "revenue" not in bbb["missing_metrics"]
     assert context_before["tickers"][1]["status"] == "missing"
+
+    monkeypatch.setenv(
+        "SIGNALLENS_DATABASE_PATH",
+        str(tmp_path / "fundamental-vintage.duckdb"),
+    )
+    get_settings.cache_clear()
+    import app.main as main
+
+    main.settings = get_settings()
+    response = TestClient(main.app).get("/api/v1/rankings/latest")
+    get_settings.cache_clear()
+
+    assert response.status_code == 200
+    api_context = response.json()["fundamental_context"]
+    assert api_context["captured_at"] == "2026-07-18T09:00:00Z"
+    assert api_context["tickers"][0]["ticker"] == "BBB"
+    assert api_context["tickers"][0]["facts"][0]["metric"] == "revenue"
+    assert api_context["tickers"][0]["facts"][0]["value"] == 1_500_000_000
 
     later = datetime(2026, 8, 20, 9, 0, tzinfo=timezone.utc)
     fundamentals.save(
