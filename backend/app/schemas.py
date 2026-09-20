@@ -69,6 +69,23 @@ class PredictionOutcomeResponse(BaseModel):
     outcomes: list[PredictionOutcomeItem]
 
 
+class RankingHistoryItem(BaseModel):
+    vintage_id: str
+    as_of_date: date
+    created_at: datetime
+    strategy: str
+    strategy_version: str
+    tickers: list[str]
+    status: Literal["pending", "completed"]
+    completed_predictions: int = Field(ge=0)
+    total_predictions: int = Field(ge=1)
+    mean_realized_return: float | None
+
+
+class RankingHistoryResponse(BaseModel):
+    vintages: list[RankingHistoryItem]
+
+
 class IngestionRunResponse(BaseModel):
     run_id: str
     source: str
