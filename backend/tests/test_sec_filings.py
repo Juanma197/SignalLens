@@ -103,3 +103,61 @@ def test_sec_provider_rejects_unknown_ticker_mapping() -> None:
 def test_sec_provider_requires_identifiable_user_agent() -> None:
     with pytest.raises(ValueError, match="contact email"):
         SECFilingsProvider("SignalLens")
+
+
+def test_sec_provider_supports_foreign_issuer_forms() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("company_tickers.json"):
+            return httpx.Response(
+                200,
+                json={
+                    "0": {
+                        "cik_str": 1594805,
+                        "ticker": "SHOP",
+                        "title": "SHOPIFY INC.",
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "name": "SHOPIFY INC.",
+                "filings": {
+                    "recent": {
+                        "accessionNumber": [
+                            "0001594805-26-000001",
+                            "0001594805-26-000002",
+                        ],
+                        "form": ["20-F", "6-K"],
+                        "filingDate": ["2026-02-11", "2026-08-01"],
+                        "acceptanceDateTime": [
+                            "2026-02-11T12:00:00Z",
+                            "2026-08-01T12:00:00Z",
+                        ],
+                        "primaryDocument": [
+                            "shop-20f.htm",
+                            "shop-6k.htm",
+                        ],
+                    }
+                },
+            },
+        )
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        headers={"User-Agent": "SignalLens research contact@example.com"},
+    )
+    provider = SECFilingsProvider(
+        "SignalLens research contact@example.com",
+        client=client,
+        request_interval_seconds=0,
+    )
+
+    filings = provider.download(
+        ["SHOP"],
+        retrieved_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
+    )["SHOP"]
+
+    assert len(filings) == 2
+    assert "20-F" in filings[0].title
+    assert "6-K" in filings[1].title
