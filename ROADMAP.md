@@ -10,7 +10,7 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - Windows startup and test scripts
 - Documentation and Git baseline
 
-## Milestone 2 — Research data foundation
+## Milestone 2 — Research data foundation (complete)
 
 - Define investable universe and ranking horizon
 - Store reproducible market data in DuckDB
@@ -18,7 +18,7 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - Validate gaps, duplicates, coverage, and freshness
 - Expose data status in the dashboard
 
-## Milestone 3 — Honest baseline model
+## Milestone 3 — Honest baseline model (complete)
 
 - Point-in-time features with no look-ahead leakage
 - Walk-forward evaluation
@@ -52,4 +52,3 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - Never train on information unavailable at prediction time.
 - Keep research results separate from real-money execution.
 - Preserve every published prediction so performance cannot be rewritten later.
-
