@@ -47,6 +47,28 @@ class PublishedRankingResponse(BaseModel):
     rankings: list[PublishedRankingItem]
 
 
+class PredictionOutcomeItem(BaseModel):
+    ticker: str
+    rank: int = Field(ge=1)
+    status: Literal["pending", "completed"]
+    entry_date: date | None
+    exit_date: date | None
+    realized_return: float | None
+    available_post_signal_closes: int = Field(ge=0)
+    required_post_signal_closes: int = Field(ge=2)
+
+
+class PredictionOutcomeResponse(BaseModel):
+    vintage_id: str
+    as_of_date: date
+    horizon_trading_days: int = Field(ge=1)
+    status: Literal["pending", "completed"]
+    completed_predictions: int = Field(ge=0)
+    total_predictions: int = Field(ge=1)
+    mean_realized_return: float | None
+    outcomes: list[PredictionOutcomeItem]
+
+
 class IngestionRunResponse(BaseModel):
     run_id: str
     source: str
