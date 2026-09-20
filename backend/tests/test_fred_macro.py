@@ -88,3 +88,28 @@ def test_fred_provider_isolates_series_failures() -> None:
     assert result.observations[0].value == 3.77
     assert "UNRATE" in result.errors
     assert "503" in result.errors["UNRATE"]
+
+
+def test_fred_provider_retries_a_read_timeout() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadTimeout("slow FRED response", request=request)
+        return httpx.Response(
+            200,
+            text="observation_date,FEDFUNDS\n2026-09-01,4.05\n",
+        )
+
+    provider = FREDMacroProvider(
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        request_interval_seconds=0,
+        retry_delay_seconds=0,
+    )
+    result = provider.download(["FEDFUNDS"])
+
+    assert attempts == 2
+    assert result.errors == {}
+    assert result.observations[0].value == 4.05
