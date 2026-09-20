@@ -131,6 +131,29 @@ type DataStatus = {
   forward_horizon_trading_days: number;
 };
 
+type MacroObservation = {
+  observation_id: string;
+  series_id: "FEDFUNDS" | "CPIAUCSL" | "UNRATE" | "DGS10";
+  metric: string;
+  value: number;
+  unit: string;
+  frequency: "daily" | "monthly";
+  observation_date: string;
+  retrieved_at: string;
+  source_name: string;
+  source_url: string;
+  freshness: "fresh" | "stale";
+};
+
+type MacroSnapshot = {
+  as_of: string;
+  status: "complete" | "partial" | "missing";
+  expected_series: string[];
+  missing_series: string[];
+  stale_series: string[];
+  observations: MacroObservation[];
+};
+
 const unavailable: RankingResponse = {
   vintage_id: null,
   as_of: null,
@@ -144,6 +167,15 @@ const unavailable: RankingResponse = {
 };
 
 const unavailableHistory: RankingHistoryResponse = { vintages: [] };
+
+const unavailableMacro: MacroSnapshot = {
+  as_of: new Date(0).toISOString(),
+  status: "missing",
+  expected_series: ["FEDFUNDS", "CPIAUCSL", "UNRATE", "DGS10"],
+  missing_series: ["FEDFUNDS", "CPIAUCSL", "UNRATE", "DGS10"],
+  stale_series: [],
+  observations: [],
+};
 
 const unavailableOutcomes: OutcomeResponse = {
   vintage_id: null,
@@ -196,14 +228,44 @@ function metricLabel(metric: FundamentalFact["metric"]): string {
   }[metric];
 }
 
+function macroLabel(seriesId: MacroObservation["series_id"]): string {
+  return {
+    FEDFUNDS: "Federal funds rate",
+    CPIAUCSL: "Consumer price index",
+    UNRATE: "Unemployment rate",
+    DGS10: "10-year Treasury yield",
+  }[seriesId];
+}
+
+function macroContext(seriesId: MacroObservation["series_id"]): string {
+  return {
+    FEDFUNDS:
+      "Policy-rate context. Higher rates can increase financing and discount rates.",
+    CPIAUCSL:
+      "Price-level context. The direction of change matters more than the index alone.",
+    UNRATE:
+      "Labour-market context. Interpret changes alongside growth and inflation.",
+    DGS10:
+      "Long-term rate context. Higher yields can pressure valuations and borrowing costs.",
+  }[seriesId];
+}
+
+function formatMacro(item: MacroObservation): string {
+  return item.unit === "percent"
+    ? `${item.value.toFixed(2)}%`
+    : item.value.toFixed(3);
+}
+
 export default async function Home() {
-  const [data, status, outcomes, history, watchlist] = await Promise.all([
-    fetchJson("/api/v1/rankings/latest", unavailable),
-    fetchJson<DataStatus | null>("/api/v1/data/status", null),
-    fetchJson("/api/v1/rankings/latest/outcomes", unavailableOutcomes),
-    fetchJson("/api/v1/rankings/history", unavailableHistory),
-    fetchJson<WatchlistResponse>("/api/v1/watchlist", { items: [] }),
-  ]);
+  const [data, status, outcomes, history, watchlist, macro] =
+    await Promise.all([
+      fetchJson("/api/v1/rankings/latest", unavailable),
+      fetchJson<DataStatus | null>("/api/v1/data/status", null),
+      fetchJson("/api/v1/rankings/latest/outcomes", unavailableOutcomes),
+      fetchJson("/api/v1/rankings/history", unavailableHistory),
+      fetchJson<WatchlistResponse>("/api/v1/watchlist", { items: [] }),
+      fetchJson<MacroSnapshot>("/api/v1/macro/latest", unavailableMacro),
+    ]);
 
   const [evidenceResults, fundamentalsResults] = await Promise.all([
     Promise.all(
@@ -275,6 +337,62 @@ export default async function Home() {
         <div><b>{status?.row_count.toLocaleString() ?? "—"}</b><span>daily observations</span></div>
         <div><b>{status?.forward_horizon_trading_days ?? 21}</b><span>trading-day horizon</span></div>
         <div><b>{status?.duplicate_rows ?? "—"}</b><span>duplicate rows</span></div>
+      </section>
+
+      <section className="panel macro-panel">
+        <header>
+          <div>
+            <p className="eyebrow">MACRO ENVIRONMENT</p>
+            <h2>Current economic context</h2>
+          </div>
+          <div className={`macro-coverage ${macro.status}`}>
+            {macro.status}
+          </div>
+        </header>
+
+        {macro.observations.length > 0 ? (
+          <div className="macro-grid">
+            {macro.observations.map((item) => (
+              <a
+                href={item.source_url}
+                target="_blank"
+                rel="noreferrer"
+                className="macro-card"
+                key={item.observation_id}
+              >
+                <div className="macro-card-heading">
+                  <span>{macroLabel(item.series_id)}</span>
+                  <span className={`freshness ${item.freshness}`}>
+                    {item.freshness}
+                  </span>
+                </div>
+                <b>{formatMacro(item)}</b>
+                <small>
+                  {item.frequency} · observation {item.observation_date}
+                </small>
+                <p>{macroContext(item.series_id)}</p>
+                <span className="macro-source">FRED source ↗</span>
+              </a>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">
+            Macro observations are unavailable. Run the FRED ingestion command
+            and refresh this page.
+          </div>
+        )}
+
+        <footer>
+          Macro indicators provide context, not a buy or sell signal. Values are
+          shown with their observation dates and become usable only after
+          SignalLens retrieves them.
+          {macro.missing_series.length
+            ? ` Missing: ${macro.missing_series.join(", ")}.`
+            : ""}
+          {macro.stale_series.length
+            ? ` Stale: ${macro.stale_series.join(", ")}.`
+            : ""}
+        </footer>
       </section>
 
       <section className="panel">
