@@ -1,15 +1,107 @@
-type Ranking = { rank: number; ticker: string; company: string; score: number; thesis: string; risk: string };
-type RankingResponse = { as_of: string; model: string; is_demo: boolean; disclaimer: string; rankings: Ranking[] };
-type DataStatus = { universe_size: number; covered_tickers: number; row_count: number; first_date: string | null; last_date: string | null; duplicate_rows: number; forward_horizon_trading_days: number };
+type Ranking = {
+  rank: number;
+  ticker: string;
+  company: string;
+  momentum_126d: number;
+  evidence: string;
+  risk: string;
+};
 
-const fallback: RankingResponse = {
-  as_of: "2026-09-19", model: "foundation-demo-v0", is_demo: true,
-  disclaimer: "Backend unavailable. Showing bundled demonstration data only.",
-  rankings: [
-    { rank: 1, ticker: "NOVA", company: "Nova Systems", score: 82, thesis: "Synthetic momentum and quality example.", risk: "Synthetic valuation risk." },
-    { rank: 2, ticker: "GRID", company: "GridWorks", score: 76, thesis: "Synthetic infrastructure-demand example.", risk: "Synthetic project-delay risk." },
-    { rank: 3, ticker: "FLOW", company: "Flow Analytics", score: 71, thesis: "Synthetic recurring-revenue example.", risk: "Synthetic competition risk." },
-  ],
+type RankingResponse = {
+  vintage_id: string | null;
+  as_of: string | null;
+  created_at: string | null;
+  strategy: string;
+  strategy_version: string;
+  is_demo: boolean;
+  disclaimer: string;
+  rankings: Ranking[];
+};
+
+type PredictionOutcome = {
+  ticker: string;
+  rank: number;
+  status: "pending" | "completed";
+  entry_date: string | null;
+  exit_date: string | null;
+  realized_return: number | null;
+  available_post_signal_closes: number;
+  required_post_signal_closes: number;
+};
+
+type OutcomeResponse = {
+  vintage_id: string | null;
+  as_of_date: string | null;
+  horizon_trading_days: number;
+  status: "unavailable" | "pending" | "completed";
+  completed_predictions: number;
+  total_predictions: number;
+  mean_realized_return: number | null;
+  outcomes: PredictionOutcome[];
+};
+
+type RankingHistoryItem = {
+  vintage_id: string;
+  as_of_date: string;
+  created_at: string;
+  strategy: string;
+  strategy_version: string;
+  tickers: string[];
+  status: "pending" | "completed";
+  completed_predictions: number;
+  total_predictions: number;
+  mean_realized_return: number | null;
+};
+
+type RankingHistoryResponse = {
+  vintages: RankingHistoryItem[];
+};
+
+type WatchlistItem = {
+  ticker: string;
+  company: string;
+  note: string;
+  added_at: string;
+  updated_at: string;
+};
+
+type WatchlistResponse = {
+  items: WatchlistItem[];
+};
+
+type DataStatus = {
+  universe_size: number;
+  covered_tickers: number;
+  row_count: number;
+  first_date: string | null;
+  last_date: string | null;
+  duplicate_rows: number;
+  forward_horizon_trading_days: number;
+};
+
+const unavailable: RankingResponse = {
+  vintage_id: null,
+  as_of: null,
+  created_at: null,
+  strategy: "unavailable",
+  strategy_version: "—",
+  is_demo: true,
+  disclaimer:
+    "No published ranking is available. Start the API and publish a vintage to display research results.",
+  rankings: [],
+};
+
+const unavailableHistory: RankingHistoryResponse = { vintages: [] };
+
+const unavailableOutcomes: OutcomeResponse = {
+  vintage_id: null,
+  as_of_date: null,
+  horizon_trading_days: 21,
+  status: "unavailable",
+  completed_predictions: 0,
+  total_predictions: 0,
+  mean_realized_return: null,
+  outcomes: [],
 };
 
 async function fetchJson<T>(path: string, fallbackValue: T): Promise<T> {
@@ -17,22 +109,47 @@ async function fetchJson<T>(path: string, fallbackValue: T): Promise<T> {
   try {
     const response = await fetch(`${apiUrl}${path}`, { cache: "no-store" });
     return response.ok ? await response.json() : fallbackValue;
-  } catch { return fallbackValue; }
+  } catch {
+    return fallbackValue;
+  }
+}
+
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
 }
 
 export default async function Home() {
-  const [data, status] = await Promise.all([
-    fetchJson("/api/v1/rankings/demo", fallback),
+  const [data, status, outcomes, history, watchlist] = await Promise.all([
+    fetchJson("/api/v1/rankings/latest", unavailable),
     fetchJson<DataStatus | null>("/api/v1/data/status", null),
+    fetchJson("/api/v1/rankings/latest/outcomes", unavailableOutcomes),
+    fetchJson("/api/v1/rankings/history", unavailableHistory),
+    fetchJson<WatchlistResponse>("/api/v1/watchlist", { items: [] }),
   ]);
+
   return (
     <main>
-      <nav><span className="mark">SL</span><strong>SignalLens</strong><span className="tag">Research preview</span></nav>
+      <nav>
+        <span className="mark">SL</span>
+        <strong>SignalLens</strong>
+        <span className="tag">
+          {data.is_demo ? "Research unavailable" : "Published research"}
+        </span>
+      </nav>
+
       <section className="hero">
         <p className="eyebrow">MONTHLY EQUITY RESEARCH</p>
-        <h1>Find the signal.<br /><span>Measure what followed.</span></h1>
-        <p className="lede">A disciplined research workspace for ranking opportunities, preserving every prediction, and comparing confidence with reality.</p>
+        <h1>
+          Find the signal.
+          <br />
+          <span>Measure what followed.</span>
+        </h1>
+        <p className="lede">
+          A disciplined research workspace for ranking opportunities, preserving
+          every prediction, and comparing confidence with reality.
+        </p>
       </section>
+
       <section className="data-status">
         <div><b>{status?.universe_size ?? "—"}</b><span>stocks in universe</span></div>
         <div><b>{status?.covered_tickers ?? "—"}</b><span>with price history</span></div>
@@ -40,17 +157,170 @@ export default async function Home() {
         <div><b>{status?.forward_horizon_trading_days ?? 21}</b><span>trading-day horizon</span></div>
         <div><b>{status?.duplicate_rows ?? "—"}</b><span>duplicate rows</span></div>
       </section>
+
       <section className="panel">
-        <header><div><p className="eyebrow">CURRENT LENS</p><h2>Top three candidates</h2></div><div className="date">As of {data.as_of}</div></header>
-        <div className="notice">Demo mode · {data.disclaimer}</div>
-        <div className="grid">{data.rankings.map((item) => (
-          <article key={item.ticker}>
-            <div className="rank">0{item.rank}</div><div className="score">{item.score}<small>/100</small></div>
-            <h3>{item.ticker}</h3><p className="company">{item.company}</p>
-            <p>{item.thesis}</p><p className="risk"><b>Key risk</b> {item.risk}</p>
-          </article>
-        ))}</div>
-        <footer>Model: {data.model} · Rankings are research outputs, not instructions to trade.</footer>
+        <header>
+          <div>
+            <p className="eyebrow">CURRENT LENS</p>
+            <h2>Top three momentum candidates</h2>
+          </div>
+          <div className="date">
+            {data.as_of ? `As of ${data.as_of}` : "No published date"}
+          </div>
+        </header>
+
+        <div className={data.is_demo ? "notice warning" : "notice"}>
+          {data.is_demo ? "Unavailable" : "Immutable published vintage"} ·{" "}
+          {data.disclaimer}
+        </div>
+
+        {data.rankings.length > 0 ? (
+          <div className="grid">
+            {data.rankings.map((item) => (
+              <article key={item.ticker}>
+                <div className="rank">0{item.rank}</div>
+                <div className="score">
+                  {formatPercent(item.momentum_126d)}
+                  <small> 126D</small>
+                </div>
+                <h3>{item.ticker}</h3>
+                <p className="company">{item.company}</p>
+                <p>{item.evidence}</p>
+                <p className="risk"><b>Key risk</b>{item.risk}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">
+            No synthetic rankings are shown. Publish a real ranking vintage and
+            refresh this page.
+          </div>
+        )}
+
+        <footer>
+          Strategy: {data.strategy} v{data.strategy_version}
+          {data.vintage_id ? ` · Vintage: ${data.vintage_id}` : ""}
+          {" · "}Rankings are research outputs, not instructions to trade.
+        </footer>
+      </section>
+
+      <section className="panel outcome-panel">
+        <header>
+          <div>
+            <p className="eyebrow">PREDICTED VS ACTUAL</p>
+            <h2>{outcomes.status === "completed" ? "Realized outcome" : "Outcome pending"}</h2>
+          </div>
+          <div className={`outcome-status ${outcomes.status}`}>
+            {outcomes.status}
+          </div>
+        </header>
+
+        {outcomes.outcomes.length > 0 ? (
+          <div className="outcome-list">
+            {outcomes.outcomes.map((item) => (
+              <div className="outcome-row" key={item.ticker}>
+                <div><b>{item.ticker}</b><span>Rank {item.rank}</span></div>
+                <div>
+                  <b>
+                    {item.realized_return === null
+                      ? "Pending"
+                      : formatPercent(item.realized_return)}
+                  </b>
+                  <span>
+                    {item.status === "pending"
+                      ? `${item.available_post_signal_closes} of ${item.required_post_signal_closes} required closes`
+                      : `${item.entry_date} to ${item.exit_date}`}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">Outcome tracking is unavailable.</div>
+        )}
+
+        <footer>
+          The evaluation enters at the first close after publication and measures
+          the following {outcomes.horizon_trading_days} trading-day return. Stored
+          predictions are never rewritten.
+        </footer>
+      </section>
+
+      <section className="panel watchlist-panel">
+        <header>
+          <div>
+            <p className="eyebrow">PERSONAL RESEARCH</p>
+            <h2>Watchlist and notes</h2>
+          </div>
+          <div className="date">{watchlist.items.length} watched</div>
+        </header>
+
+        {watchlist.items.length > 0 ? (
+          <div className="watchlist-list">
+            {watchlist.items.map((item) => (
+              <div className="watchlist-row" key={item.ticker}>
+                <div>
+                  <b>{item.ticker}</b>
+                  <span>{item.company}</span>
+                </div>
+                <p>{item.note}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">
+            No personal notes yet. Add a universe ticker through the API
+            documentation to begin a watchlist.
+          </div>
+        )}
+
+        <footer>
+          Watchlist notes are editable personal research and are kept separate
+          from immutable published prediction vintages.
+        </footer>
+      </section>
+
+      <section className="panel history-panel">
+        <header>
+          <div>
+            <p className="eyebrow">VINTAGE ARCHIVE</p>
+            <h2>Published ranking history</h2>
+          </div>
+          <div className="date">{history.vintages.length} vintages</div>
+        </header>
+
+        {history.vintages.length > 0 ? (
+          <div className="history-list">
+            {history.vintages.map((vintage) => (
+              <div className="history-row" key={vintage.vintage_id}>
+                <div>
+                  <b>{vintage.as_of_date}</b>
+                  <span>{vintage.tickers.join(" · ")}</span>
+                </div>
+                <div>
+                  <span className={`outcome-status ${vintage.status}`}>
+                    {vintage.status}
+                  </span>
+                </div>
+                <div>
+                  <b>
+                    {vintage.mean_realized_return === null
+                      ? "—"
+                      : formatPercent(vintage.mean_realized_return)}
+                  </b>
+                  <span>mean realized return</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">No published vintage history is available.</div>
+        )}
+
+        <footer>
+          Every row references an immutable published vintage. Historical
+          rankings remain visible after newer months are added.
+        </footer>
       </section>
     </main>
   );

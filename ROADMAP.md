@@ -25,7 +25,7 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - Baseline comparison and transaction-cost assumptions
 - Prediction vintages stored immutably
 
-## Milestone 4 — Ranking experience
+## Milestone 4 — Ranking experience (complete)
 
 - Monthly top-one/top-three view
 - Evidence, risks, uncertainty, and model explanation

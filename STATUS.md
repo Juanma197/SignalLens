@@ -4,7 +4,7 @@ Last updated: 2026-09-20
 
 ## Current milestone
 
-Milestone 3 — honest research baseline: complete and ready to merge.
+Milestone 4 — ranking experience: complete and ready to merge.
 
 ## Delivered
 
@@ -72,13 +72,27 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 - Retrieval and counting helpers.
 - Tests proving an existing prediction vintage cannot be overwritten.
 
+### Published ranking experience
+
+- Leakage-safe latest-market snapshot ranked by the verified 126-trading-day momentum benchmark.
+- Explicit publication into immutable storage; reading the dashboard never creates or rewrites a vintage.
+- Latest published-vintage API with strategy/version provenance, evidence, risks, and disclaimer.
+- First real vintage published for 2026-09-18 with AMD, UNH, and AAPL ranked first through third.
+- Dashboard connected to the real ranking endpoint with percentage formatting and an honest unavailable state.
+- Synthetic NOVA, GRID, and FLOW fallback rankings removed.
+- Predicted-versus-actual tracking with next-close entry, a 21-trading-day return horizon, and pending/completed states.
+- Newest-first immutable vintage archive combining original selections with their realized outcome status.
+- Persistent personal watchlist with editable per-ticker research notes, universe validation, and dashboard display.
+- Personal notes remain mutable and clearly separated from immutable prediction records.
+
 ## Verification
 
-- 19 backend tests pass on Windows with Python 3.13.
+- 30 backend tests pass on Windows with Python 3.13.
 - Frontend ESLint passes.
 - The optimized Next.js production build completes successfully.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
-- The working tree is clean after restoring the generated `frontend/next-env.d.ts` change.
+- The latest ranking, outcome, history, and watchlist endpoints were verified against the real local database.
+- The working tree was clean after restoring the generated `frontend/next-env.d.ts` change.
 
 ## Known limitations
 
@@ -87,11 +101,12 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 - The momentum variants were compared on the same sample; the reported bootstrap interval does not correct for multiple testing or serial dependence.
 - Transaction costs are simplified and exclude spread variation, slippage, liquidity limits, taxes, and market impact.
 - No untouched holdout period or live forward test has yet confirmed the 126-day momentum result.
-- Immutable storage exists, but a production publishing workflow and distinction between historical backtests and live prediction vintages are not yet exposed through the API.
-- The dashboard still contains demonstration ranking content.
+- Ranking publication is currently an explicit manual command rather than a scheduled, authenticated workflow.
+- The first live vintage has not yet completed its 21-trading-day outcome window, so no realized result is available.
+- Watchlist mutations are intended for local/private use and are not authenticated yet.
 
 ## Next action
 
-1. Merge `feature/milestone-3-research-baseline` into `main`.
-2. Start Milestone 4 on a new branch.
-3. Keep research evidence, stored prediction vintages, and user-facing rankings clearly separated.
+1. Merge `feature/milestone-4-ranking-experience` into `main`.
+2. Start Milestone 5 on a new branch.
+3. Add broader evidence with source timestamps, provenance, and stale-data handling.

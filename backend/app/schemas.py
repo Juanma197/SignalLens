@@ -27,6 +27,81 @@ class RankingResponse(BaseModel):
     rankings: list[RankingItem]
 
 
+class PublishedRankingItem(BaseModel):
+    rank: int = Field(ge=1)
+    ticker: str
+    company: str
+    momentum_126d: float
+    evidence: str
+    risk: str
+
+
+class PublishedRankingResponse(BaseModel):
+    vintage_id: str
+    as_of: date
+    created_at: datetime
+    strategy: str
+    strategy_version: str
+    is_demo: Literal[False] = False
+    disclaimer: str
+    rankings: list[PublishedRankingItem]
+
+
+class PredictionOutcomeItem(BaseModel):
+    ticker: str
+    rank: int = Field(ge=1)
+    status: Literal["pending", "completed"]
+    entry_date: date | None
+    exit_date: date | None
+    realized_return: float | None
+    available_post_signal_closes: int = Field(ge=0)
+    required_post_signal_closes: int = Field(ge=2)
+
+
+class PredictionOutcomeResponse(BaseModel):
+    vintage_id: str
+    as_of_date: date
+    horizon_trading_days: int = Field(ge=1)
+    status: Literal["pending", "completed"]
+    completed_predictions: int = Field(ge=0)
+    total_predictions: int = Field(ge=1)
+    mean_realized_return: float | None
+    outcomes: list[PredictionOutcomeItem]
+
+
+class RankingHistoryItem(BaseModel):
+    vintage_id: str
+    as_of_date: date
+    created_at: datetime
+    strategy: str
+    strategy_version: str
+    tickers: list[str]
+    status: Literal["pending", "completed"]
+    completed_predictions: int = Field(ge=0)
+    total_predictions: int = Field(ge=1)
+    mean_realized_return: float | None
+
+
+class RankingHistoryResponse(BaseModel):
+    vintages: list[RankingHistoryItem]
+
+
+class WatchlistNoteRequest(BaseModel):
+    note: str = Field(min_length=1, max_length=2000)
+
+
+class WatchlistItem(BaseModel):
+    ticker: str
+    company: str
+    note: str
+    added_at: datetime
+    updated_at: datetime
+
+
+class WatchlistResponse(BaseModel):
+    items: list[WatchlistItem]
+
+
 class IngestionRunResponse(BaseModel):
     run_id: str
     source: str
