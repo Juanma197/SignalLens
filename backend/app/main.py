@@ -94,6 +94,7 @@ def latest_rankings() -> PublishedRankingResponse:
         ),
         macro_context=stored["metadata"].get("macro_context"),
         fundamental_context=stored["metadata"].get("fundamental_context"),
+        evidence_context=stored["metadata"].get("evidence_context"),
         rankings=rankings,
     )
 
