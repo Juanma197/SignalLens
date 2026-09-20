@@ -92,6 +92,7 @@ def latest_rankings() -> PublishedRankingResponse:
             "Research output only. This historical-price signal is not investment "
             "advice and does not guarantee future growth."
         ),
+        macro_context=stored["metadata"].get("macro_context"),
         rankings=rankings,
     )
 
