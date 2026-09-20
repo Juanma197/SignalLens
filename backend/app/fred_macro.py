@@ -63,16 +63,23 @@ class FREDMacroProvider:
         self,
         client: httpx.Client | None = None,
         request_interval_seconds: float = 0.12,
+        max_attempts: int = 3,
+        retry_delay_seconds: float = 1.0,
         sleep: Callable[[float], None] = time.sleep,
     ):
-        if request_interval_seconds < 0:
-            raise ValueError("Request interval cannot be negative")
+        if request_interval_seconds < 0 or retry_delay_seconds < 0:
+            raise ValueError("Request and retry intervals cannot be negative")
+        if max_attempts <= 0:
+            raise ValueError("max_attempts must be positive")
         self._owns_client = client is None
         self.client = client or httpx.Client(
-            timeout=30,
+            timeout=httpx.Timeout(120.0, connect=20.0),
+            follow_redirects=True,
             headers={"User-Agent": "SignalLens research macro-data client"},
         )
         self.request_interval_seconds = request_interval_seconds
+        self.max_attempts = max_attempts
+        self.retry_delay_seconds = retry_delay_seconds
         self.sleep = sleep
 
     def close(self) -> None:
@@ -110,11 +117,7 @@ class FREDMacroProvider:
             if index:
                 self.sleep(self.request_interval_seconds)
             try:
-                response = self.client.get(
-                    self.csv_url,
-                    params={"id": series_id, "cosd": start.isoformat()},
-                )
-                response.raise_for_status()
+                response = self._request_csv(series_id, start)
                 parsed = parse_fred_csv(
                     response.text,
                     FRED_SERIES[series_id],
@@ -127,6 +130,29 @@ class FREDMacroProvider:
                 errors[series_id] = str(exc) or type(exc).__name__
 
         return MacroDownloadResult(tuple(observations), errors)
+
+    def _request_csv(self, series_id: str, start: date) -> httpx.Response:
+        last_error: httpx.HTTPError | None = None
+        for attempt in range(self.max_attempts):
+            try:
+                response = self.client.get(
+                    self.csv_url,
+                    params={"id": series_id, "cosd": start.isoformat()},
+                )
+                response.raise_for_status()
+                return response
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                last_error = exc
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if exc.response.status_code < 500 and exc.response.status_code != 429:
+                    raise
+
+            if attempt + 1 < self.max_attempts:
+                self.sleep(self.retry_delay_seconds * (attempt + 1))
+
+        assert last_error is not None
+        raise last_error
 
 
 def parse_fred_csv(
