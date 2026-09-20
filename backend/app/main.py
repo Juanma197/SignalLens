@@ -5,10 +5,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .market_data import MarketDataRepository
+from .outcomes import evaluate_prediction_vintage
 from .prediction_store import PredictionVintageStore
 from .schemas import (
     DataStatusResponse,
     HealthResponse,
+    PredictionOutcomeResponse,
     PublishedRankingItem,
     PublishedRankingResponse,
     RankingItem,
@@ -75,6 +77,27 @@ def latest_rankings() -> PublishedRankingResponse:
             "advice and does not guarantee future growth."
         ),
         rankings=rankings,
+    )
+
+
+@app.get(
+    "/api/v1/rankings/latest/outcomes",
+    response_model=PredictionOutcomeResponse,
+)
+def latest_ranking_outcomes() -> PredictionOutcomeResponse:
+    repository = MarketDataRepository(settings.database_path)
+    stored = PredictionVintageStore(repository).get_latest("momentum_126d")
+    if stored is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No published ranking vintage is available",
+        )
+    return PredictionOutcomeResponse(
+        **evaluate_prediction_vintage(
+            repository,
+            stored["vintage_id"],
+            FORWARD_HORIZON_TRADING_DAYS,
+        )
     )
 
 
