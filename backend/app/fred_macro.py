@@ -58,10 +58,12 @@ class MacroDownloadResult:
 class FREDMacroProvider:
     name = "FRED"
     csv_url = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+    api_url = "https://api.stlouisfed.org/fred/series/observations"
 
     def __init__(
         self,
         client: httpx.Client | None = None,
+        api_key: str | None = None,
         request_interval_seconds: float = 0.12,
         max_attempts: int = 3,
         retry_delay_seconds: float = 1.0,
@@ -77,6 +79,7 @@ class FREDMacroProvider:
             follow_redirects=True,
             headers={"User-Agent": "SignalLens research macro-data client"},
         )
+        self.api_key = api_key.strip() if api_key else None
         self.request_interval_seconds = request_interval_seconds
         self.max_attempts = max_attempts
         self.retry_delay_seconds = retry_delay_seconds
@@ -117,35 +120,60 @@ class FREDMacroProvider:
             if index:
                 self.sleep(self.request_interval_seconds)
             try:
-                response = self._request_csv(series_id, start)
-                parsed = parse_fred_csv(
-                    response.text,
-                    FRED_SERIES[series_id],
-                    retrieved,
-                )
+                response = self._request(series_id, start)
+                if self.api_key:
+                    parsed = parse_fred_api(
+                        response.json(),
+                        FRED_SERIES[series_id],
+                        retrieved,
+                    )
+                else:
+                    parsed = parse_fred_csv(
+                        response.text,
+                        FRED_SERIES[series_id],
+                        retrieved,
+                    )
                 if limit_per_series is not None:
                     parsed = parsed[-limit_per_series:]
                 observations.extend(parsed)
-            except (httpx.HTTPError, ValueError, csv.Error) as exc:
+            except (
+                httpx.HTTPError,
+                ValueError,
+                csv.Error,
+                TypeError,
+            ) as exc:
                 errors[series_id] = str(exc) or type(exc).__name__
 
         return MacroDownloadResult(tuple(observations), errors)
 
-    def _request_csv(self, series_id: str, start: date) -> httpx.Response:
+    def _request(self, series_id: str, start: date) -> httpx.Response:
+        if self.api_key:
+            url = self.api_url
+            params = {
+                "api_key": self.api_key,
+                "series_id": series_id,
+                "observation_start": start.isoformat(),
+                "file_type": "json",
+                "sort_order": "asc",
+            }
+        else:
+            url = self.csv_url
+            params = {"id": series_id, "cosd": start.isoformat()}
+
         last_error: httpx.HTTPError | None = None
         for attempt in range(self.max_attempts):
             try:
-                response = self.client.get(
-                    self.csv_url,
-                    params={"id": series_id, "cosd": start.isoformat()},
-                )
+                response = self.client.get(url, params=params)
                 response.raise_for_status()
                 return response
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = exc
             except httpx.HTTPStatusError as exc:
                 last_error = exc
-                if exc.response.status_code < 500 and exc.response.status_code != 429:
+                if (
+                    exc.response.status_code < 500
+                    and exc.response.status_code != 429
+                ):
                     raise
 
             if attempt + 1 < self.max_attempts:
@@ -153,6 +181,35 @@ class FREDMacroProvider:
 
         assert last_error is not None
         raise last_error
+
+
+def parse_fred_api(
+    payload: object,
+    series: MacroSeries,
+    retrieved_at: datetime,
+) -> list[MacroObservation]:
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get("observations"), list
+    ):
+        raise ValueError(f"Unexpected FRED API response for {series.series_id}")
+
+    rows = payload["observations"]
+    parsed: list[MacroObservation] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError(
+                f"Unexpected FRED observation for {series.series_id}"
+            )
+        observation = _parse_observation(
+            row.get("date"),
+            row.get("value"),
+            series,
+            retrieved_at,
+        )
+        if observation is not None:
+            parsed.append(observation)
+    parsed.sort(key=lambda item: item.observation_date)
+    return parsed
 
 
 def parse_fred_csv(
@@ -175,33 +232,48 @@ def parse_fred_csv(
     if date_column is None or series.series_id not in reader.fieldnames:
         raise ValueError(f"Unexpected FRED CSV columns for {series.series_id}")
 
-    retrieved = _as_utc_naive(retrieved_at)
-    observations: list[MacroObservation] = []
+    parsed: list[MacroObservation] = []
     for row in reader:
-        raw_value = (row.get(series.series_id) or "").strip()
-        if raw_value in {"", "."}:
-            continue
-        observation_date = date.fromisoformat((row[date_column] or "").strip())
-        observations.append(
-            MacroObservation(
-                observation_id=f"fred:{series.series_id}:{observation_date.isoformat()}",
-                series_id=series.series_id,
-                metric=series.metric,
-                value=float(raw_value),
-                unit=series.unit,
-                frequency=series.frequency,
-                observation_date=observation_date,
-                # FRED history may be revised. Without vintage data, a value is
-                # safe for point-in-time use only after SignalLens retrieved it.
-                available_at=retrieved,
-                retrieved_at=retrieved,
-                source_name="FRED",
-                source_url=f"https://fred.stlouisfed.org/series/{series.series_id}",
-            )
+        observation = _parse_observation(
+            row.get(date_column),
+            row.get(series.series_id),
+            series,
+            retrieved_at,
         )
+        if observation is not None:
+            parsed.append(observation)
+    parsed.sort(key=lambda item: item.observation_date)
+    return parsed
 
-    observations.sort(key=lambda item: item.observation_date)
-    return observations
+
+def _parse_observation(
+    raw_date: object,
+    raw_value: object,
+    series: MacroSeries,
+    retrieved_at: datetime,
+) -> MacroObservation | None:
+    value_text = str(raw_value or "").strip()
+    if value_text in {"", "."}:
+        return None
+    observation_date = date.fromisoformat(str(raw_date or "").strip())
+    retrieved = _as_utc_naive(retrieved_at)
+    return MacroObservation(
+        observation_id=(
+            f"fred:{series.series_id}:{observation_date.isoformat()}"
+        ),
+        series_id=series.series_id,
+        metric=series.metric,
+        value=float(value_text),
+        unit=series.unit,
+        frequency=series.frequency,
+        observation_date=observation_date,
+        # Latest FRED history may include revisions. Without ALFRED vintage
+        # data, an observation is safe only after SignalLens retrieves it.
+        available_at=retrieved,
+        retrieved_at=retrieved,
+        source_name="FRED",
+        source_url=f"https://fred.stlouisfed.org/series/{series.series_id}",
+    )
 
 
 def _as_utc_naive(value: datetime) -> datetime:
