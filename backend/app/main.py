@@ -5,7 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .evidence import EvidenceRepository, EvidenceType
+from .fred_macro import FRED_SERIES
 from .fundamentals import FundamentalRepository
+from .macro import MacroRepository
 from .market_data import MarketDataRepository
 from .outcomes import evaluate_prediction_vintage
 from .prediction_store import PredictionVintageStore
@@ -14,6 +16,8 @@ from .schemas import (
     EvidenceItemResponse,
     FundamentalFactResponse,
     HealthResponse,
+    MacroObservationResponse,
+    MacroSnapshotResponse,
     PredictionOutcomeResponse,
     PublishedRankingItem,
     PublishedRankingResponse,
@@ -143,6 +147,53 @@ def ranking_history() -> RankingHistoryResponse:
             )
         )
     return RankingHistoryResponse(vintages=vintages)
+
+
+@app.get("/api/v1/macro/latest", response_model=MacroSnapshotResponse)
+def latest_macro(
+    as_of: datetime | None = None,
+) -> MacroSnapshotResponse:
+    requested_as_of = as_of or datetime.now(timezone.utc)
+    observations = MacroRepository(
+        MarketDataRepository(settings.database_path)
+    ).point_in_time(requested_as_of)
+
+    expected = list(FRED_SERIES)
+    observed = {item["series_id"] for item in observations}
+    missing = [series_id for series_id in expected if series_id not in observed]
+    stale_after_days = {"daily": 7, "monthly": 62}
+    stale: list[str] = []
+    response_items = []
+
+    as_of_date = requested_as_of.date()
+    for item in observations:
+        age_days = (as_of_date - item["observation_date"]).days
+        freshness = (
+            "fresh"
+            if age_days <= stale_after_days[item["frequency"]]
+            else "stale"
+        )
+        if freshness == "stale":
+            stale.append(item["series_id"])
+        response_items.append(
+            MacroObservationResponse(**item, freshness=freshness)
+        )
+
+    status = (
+        "missing"
+        if not observations
+        else "complete"
+        if not missing
+        else "partial"
+    )
+    return MacroSnapshotResponse(
+        as_of=requested_as_of,
+        status=status,
+        expected_series=expected,
+        missing_series=missing,
+        stale_series=stale,
+        observations=response_items,
+    )
 
 
 @app.get(
