@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Iterable, Protocol
 
-from .evidence import EvidenceItem, EvidenceRepository
+from .evidence import EvidenceItem, EvidenceRepository, EvidenceType
 
 
 class EvidenceProvider(Protocol):
     name: str
+    evidence_type: EvidenceType
 
     def download(
         self,
@@ -30,6 +31,10 @@ def ingest_evidence(
     if not normalized_tickers:
         raise ValueError("At least one ticker is required")
 
+    evidence_type = getattr(provider, "evidence_type", "filing")
+    if evidence_type not in {"fundamental", "filing", "news", "macro"}:
+        raise ValueError(f"Unsupported provider evidence type: {evidence_type}")
+
     requested_at = retrieved_at or datetime.now(timezone.utc)
     if requested_at.tzinfo is None:
         requested_at = requested_at.replace(tzinfo=timezone.utc)
@@ -48,7 +53,7 @@ def ingest_evidence(
         for ticker in normalized_tickers:
             repository.record_fetch(
                 ticker=ticker,
-                evidence_type="filing",
+                evidence_type=evidence_type,
                 source_name=provider.name,
                 requested_at=requested_at,
                 completed_at=completed_at,
@@ -71,7 +76,7 @@ def ingest_evidence(
             failed += 1
             repository.record_fetch(
                 ticker=ticker,
-                evidence_type="filing",
+                evidence_type=evidence_type,
                 source_name=provider.name,
                 requested_at=requested_at,
                 completed_at=completed_at,
@@ -94,7 +99,7 @@ def ingest_evidence(
 
         repository.record_fetch(
             ticker=ticker,
-            evidence_type="filing",
+            evidence_type=evidence_type,
             source_name=provider.name,
             requested_at=requested_at,
             completed_at=completed_at,
