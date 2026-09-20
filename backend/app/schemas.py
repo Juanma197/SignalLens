@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date, datetime
 from typing import Literal
 
@@ -58,6 +60,19 @@ class PublishedMacroContext(BaseModel):
     observations: list[PublishedMacroObservation]
 
 
+class PublishedFundamentalTickerContext(BaseModel):
+    ticker: str
+    status: Literal["complete", "partial", "missing"]
+    expected_metrics: list[str]
+    missing_metrics: list[str]
+    facts: list[FundamentalFactResponse]
+
+
+class PublishedFundamentalContext(BaseModel):
+    captured_at: datetime
+    tickers: list[PublishedFundamentalTickerContext]
+
+
 class PublishedRankingResponse(BaseModel):
     vintage_id: str
     as_of: date
@@ -67,6 +82,7 @@ class PublishedRankingResponse(BaseModel):
     is_demo: Literal[False] = False
     disclaimer: str
     macro_context: PublishedMacroContext | None = None
+    fundamental_context: PublishedFundamentalContext | None = None
     rankings: list[PublishedRankingItem]
 
 
