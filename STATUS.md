@@ -4,7 +4,7 @@ Last updated: 2026-09-20
 
 ## Current milestone
 
-Milestone 4 — ranking experience: ranking, outcomes, and archive verified.
+Milestone 4 — ranking experience: complete and ready to merge.
 
 ## Delivered
 
@@ -82,14 +82,17 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 - Synthetic NOVA, GRID, and FLOW fallback rankings removed.
 - Predicted-versus-actual tracking with next-close entry, a 21-trading-day return horizon, and pending/completed states.
 - Newest-first immutable vintage archive combining original selections with their realized outcome status.
+- Persistent personal watchlist with editable per-ticker research notes, universe validation, and dashboard display.
+- Personal notes remain mutable and clearly separated from immutable prediction records.
 
 ## Verification
 
-- 27 backend tests pass on Windows with Python 3.13.
+- 30 backend tests pass on Windows with Python 3.13.
 - Frontend ESLint passes.
 - The optimized Next.js production build completes successfully.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
-- The working tree is clean after restoring the generated `frontend/next-env.d.ts` change.
+- The latest ranking, outcome, history, and watchlist endpoints were verified against the real local database.
+- The working tree was clean after restoring the generated `frontend/next-env.d.ts` change.
 
 ## Known limitations
 
@@ -100,15 +103,10 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 - No untouched holdout period or live forward test has yet confirmed the 126-day momentum result.
 - Ranking publication is currently an explicit manual command rather than a scheduled, authenticated workflow.
 - The first live vintage has not yet completed its 21-trading-day outcome window, so no realized result is available.
-
-## Milestone 4 scope
-
-- Replace demonstration rankings with stored, dated prediction vintages.
-- Present a focused monthly top-one/top-three ranking.
-- Show supporting evidence, uncertainty, risks, and plain-language explanations.
-- Track predicted outcomes against realized returns without rewriting past predictions.
-- Keep historical research results visibly distinct from current user-facing rankings.
+- Watchlist mutations are intended for local/private use and are not authenticated yet.
 
 ## Next action
 
-Add focused watchlist and research-note support, then run the final Milestone 4 verification gate.
+1. Merge `feature/milestone-4-ranking-experience` into `main`.
+2. Start Milestone 5 on a new branch.
+3. Add broader evidence with source timestamps, provenance, and stale-data handling.
