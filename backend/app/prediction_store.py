@@ -156,6 +156,31 @@ class PredictionVintageStore:
             ],
         }
 
+    def get_latest(self, strategy_name: str | None = None) -> dict[str, Any] | None:
+        with self.repository.connect() as connection:
+            if strategy_name is None:
+                row = connection.execute(
+                    """
+                    SELECT vintage_id
+                    FROM prediction_vintages
+                    ORDER BY as_of_date DESC, created_at DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT vintage_id
+                    FROM prediction_vintages
+                    WHERE strategy_name = ?
+                    ORDER BY as_of_date DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    [strategy_name],
+                ).fetchone()
+
+        return None if row is None else self.get(row[0])
+
     def count(self) -> int:
         with self.repository.connect() as connection:
             return int(
