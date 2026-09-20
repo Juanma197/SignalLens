@@ -281,7 +281,7 @@ export default async function Home() {
       fetchJson<MacroSnapshot>("/api/v1/macro/latest", unavailableMacro),
     ]);
 
-  const [evidenceResults, fundamentalsResults] = await Promise.all([
+  const [evidenceResults, newsResults, fundamentalsResults] = await Promise.all([
     Promise.all(
       data.rankings.map(async (item) => {
         const fallback: EvidenceResponse = {
@@ -298,6 +298,24 @@ export default async function Home() {
           fallback,
         );
         return [item.ticker, evidence] as const;
+      }),
+    ),
+    Promise.all(
+      data.rankings.map(async (item) => {
+        const fallback: EvidenceResponse = {
+          ticker: item.ticker,
+          as_of: new Date().toISOString(),
+          evidence_type: "news",
+          status: "missing",
+          max_age_days: 30,
+          error: null,
+          items: [],
+        };
+        const news = await fetchJson<EvidenceResponse>(
+          `/api/v1/evidence/${encodeURIComponent(item.ticker)}?evidence_type=news&max_age_days=30`,
+          fallback,
+        );
+        return [item.ticker, news] as const;
       }),
     ),
     Promise.all(
@@ -320,6 +338,7 @@ export default async function Home() {
     ),
   ]);
   const evidenceByTicker = new Map(evidenceResults);
+  const newsByTicker = new Map(newsResults);
   const fundamentalsByTicker = new Map(fundamentalsResults);
 
   return (
@@ -493,6 +512,44 @@ export default async function Home() {
                       {evidenceByTicker.get(item.ticker)?.status ?? "unavailable"}
                     </span>
                     <small>No filing evidence has been ingested for this ticker.</small>
+                  </div>
+                )}
+                {newsByTicker.get(item.ticker)?.items.length ? (
+                  <div className="news-evidence">
+                    <div className="news-heading">
+                      <span>Recent company news</span>
+                      <span className={`evidence-status ${newsByTicker.get(item.ticker)?.status}`}>
+                        {newsByTicker.get(item.ticker)?.status}
+                      </span>
+                    </div>
+                    {newsByTicker
+                      .get(item.ticker)
+                      ?.items.slice(0, 2)
+                      .map((newsItem) => (
+                        <a
+                          href={newsItem.source_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          key={newsItem.evidence_id}
+                        >
+                          <span>{newsItem.title}</span>
+                          <small>
+                            {newsItem.source_name.replace("Google News RSS / ", "")}
+                            {" · "}
+                            {newsItem.published_at.slice(0, 10)}
+                          </small>
+                        </a>
+                      ))}
+                  </div>
+                ) : (
+                  <div className="news-evidence unavailable">
+                    <div className="news-heading">
+                      <span>Recent company news</span>
+                      <span className="evidence-status missing">
+                        {newsByTicker.get(item.ticker)?.status ?? "unavailable"}
+                      </span>
+                    </div>
+                    <small>No recent news metadata has been ingested.</small>
                   </div>
                 )}
                 {fundamentalsByTicker.get(item.ticker)?.facts.length ? (
