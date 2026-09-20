@@ -16,6 +16,7 @@ type RankingResponse = {
   is_demo: boolean;
   disclaimer: string;
   macro_context: PublishedMacroContext | null;
+  fundamental_context: PublishedFundamentalContext | null;
   rankings: Ranking[];
 };
 
@@ -167,6 +168,19 @@ type PublishedMacroContext = {
   observations: PublishedMacroObservation[];
 };
 
+type PublishedFundamentalTickerContext = {
+  ticker: string;
+  status: "complete" | "partial" | "missing";
+  expected_metrics: string[];
+  missing_metrics: string[];
+  facts: FundamentalFact[];
+};
+
+type PublishedFundamentalContext = {
+  captured_at: string;
+  tickers: PublishedFundamentalTickerContext[];
+};
+
 const unavailable: RankingResponse = {
   vintage_id: null,
   as_of: null,
@@ -177,6 +191,7 @@ const unavailable: RankingResponse = {
   disclaimer:
     "No published ranking is available. Start the API and publish a vintage to display research results.",
   macro_context: null,
+  fundamental_context: null,
   rankings: [],
 };
 
@@ -281,7 +296,7 @@ export default async function Home() {
       fetchJson<MacroSnapshot>("/api/v1/macro/latest", unavailableMacro),
     ]);
 
-  const [evidenceResults, newsResults, fundamentalsResults] = await Promise.all([
+  const [evidenceResults, newsResults] = await Promise.all([
     Promise.all(
       data.rankings.map(async (item) => {
         const fallback: EvidenceResponse = {
@@ -318,28 +333,14 @@ export default async function Home() {
         return [item.ticker, news] as const;
       }),
     ),
-    Promise.all(
-      data.rankings.map(async (item) => {
-        const fallback: FundamentalsResponse = {
-          ticker: item.ticker,
-          company: item.company,
-          as_of: new Date().toISOString(),
-          status: "missing",
-          expected_metrics: [],
-          missing_metrics: [],
-          facts: [],
-        };
-        const fundamentals = await fetchJson<FundamentalsResponse>(
-          `/api/v1/fundamentals/${encodeURIComponent(item.ticker)}`,
-          fallback,
-        );
-        return [item.ticker, fundamentals] as const;
-      }),
-    ),
   ]);
   const evidenceByTicker = new Map(evidenceResults);
   const newsByTicker = new Map(newsResults);
-  const fundamentalsByTicker = new Map(fundamentalsResults);
+  const fundamentalsByTicker = new Map(
+    (data.fundamental_context?.tickers ?? []).map(
+      (item) => [item.ticker, item] as const,
+    ),
+  );
 
   return (
     <main>
@@ -555,7 +556,7 @@ export default async function Home() {
                 {fundamentalsByTicker.get(item.ticker)?.facts.length ? (
                   <div className="fundamentals">
                     <div className="fundamentals-heading">
-                      <span>Latest fundamentals</span>
+                      <span>Fundamentals frozen with vintage</span>
                       <span className={`coverage ${fundamentalsByTicker.get(item.ticker)?.status}`}>
                         {fundamentalsByTicker.get(item.ticker)?.status}
                       </span>
