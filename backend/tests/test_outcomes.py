@@ -118,3 +118,59 @@ def test_latest_outcome_api_reports_pending_vintage(
     assert body["status"] == "pending"
     assert body["horizon_trading_days"] == 21
     assert body["completed_predictions"] == 0
+
+
+def test_vintage_ids_are_listed_newest_first(tmp_path: Path) -> None:
+    repository, dates = repository_with_prices(tmp_path / "history.duckdb")
+    store = PredictionVintageStore(repository)
+    older_id = store.publish(
+        "momentum_126d",
+        "1.0.0",
+        dates[120],
+        predictions(),
+        "score",
+    )
+    newer_id = store.publish(
+        "momentum_126d",
+        "1.0.0",
+        dates[140],
+        predictions(),
+        "score",
+    )
+
+    assert store.list_vintage_ids("momentum_126d") == [newer_id, older_id]
+
+
+def test_ranking_history_api_combines_vintages_with_outcomes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database_path = tmp_path / "history.duckdb"
+    repository, dates = repository_with_prices(database_path)
+    store = PredictionVintageStore(repository)
+    completed_id = store.publish(
+        "momentum_126d",
+        "1.0.0",
+        dates[130],
+        predictions(),
+        "score",
+    )
+    pending_id = publish_latest_momentum_ranking(repository)
+
+    monkeypatch.setenv("SIGNALLENS_DATABASE_PATH", str(database_path))
+    get_settings.cache_clear()
+    import app.main as main
+
+    main.settings = get_settings()
+    response = TestClient(main.app).get("/api/v1/rankings/history")
+    get_settings.cache_clear()
+
+    assert response.status_code == 200
+    vintages = response.json()["vintages"]
+    assert [item["vintage_id"] for item in vintages] == [
+        pending_id,
+        completed_id,
+    ]
+    assert vintages[0]["status"] == "pending"
+    assert vintages[1]["status"] == "completed"
+    assert vintages[0]["tickers"] == ["BBB", "AAA", "CCC"]
