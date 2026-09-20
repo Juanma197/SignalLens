@@ -167,3 +167,48 @@ def test_published_ranking_freezes_available_macro_context(
 
     stored_after = PredictionVintageStore(repository).get(vintage_id)
     assert stored_after["metadata"]["macro_context"] == context_before
+
+
+def test_latest_ranking_api_exposes_frozen_macro_context(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database_path = tmp_path / "ranking-macro-api.duckdb"
+    repository = repository_with_prices(database_path)
+    retrieved_at = datetime(2026, 9, 20, 16, 0, tzinfo=timezone.utc)
+    series = FRED_SERIES["DGS10"]
+    MacroRepository(repository).save(
+        MacroObservation(
+            observation_id="fred:DGS10:2026-09-17",
+            series_id="DGS10",
+            metric=series.metric,
+            value=4.94,
+            unit=series.unit,
+            frequency=series.frequency,
+            observation_date=date(2026, 9, 17),
+            available_at=retrieved_at,
+            retrieved_at=retrieved_at,
+            source_name="FRED",
+            source_url="https://fred.stlouisfed.org/series/DGS10",
+        )
+    )
+    vintage_id = publish_latest_momentum_ranking(
+        repository,
+        published_at=datetime(2026, 9, 21, 9, 0, tzinfo=timezone.utc),
+    )
+
+    monkeypatch.setenv("SIGNALLENS_DATABASE_PATH", str(database_path))
+    get_settings.cache_clear()
+    import app.main as main
+
+    main.settings = get_settings()
+    response = TestClient(main.app).get("/api/v1/rankings/latest")
+    get_settings.cache_clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["vintage_id"] == vintage_id
+    assert body["macro_context"]["status"] == "partial"
+    assert body["macro_context"]["observations"][0]["series_id"] == "DGS10"
+    assert body["macro_context"]["observations"][0]["value"] == 4.94
+    assert body["macro_context"]["captured_at"] == "2026-09-21T09:00:00Z"
