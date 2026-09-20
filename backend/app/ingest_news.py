@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from .config import get_settings
 from .evidence import EvidenceRepository
 from .evidence_ingest import ingest_evidence
-from .gdelt_news import GDELTNewsProvider
+from .google_news import GoogleNewsRSSProvider
 from .market_data import MarketDataRepository
 from .universe import TICKERS, UNIVERSE
 
@@ -28,9 +28,10 @@ def main() -> None:
         help="Maximum recent articles per ticker (default: 5).",
     )
     parser.add_argument(
-        "--timespan",
-        default="3months",
-        help="GDELT lookback, for example 7d, 1month or 3months.",
+        "--lookback-days",
+        type=int,
+        default=30,
+        help="News lookback in days (default: 30).",
     )
     args = parser.parse_args()
 
@@ -38,14 +39,14 @@ def main() -> None:
     repository = EvidenceRepository(
         MarketDataRepository(get_settings().database_path)
     )
-    with GDELTNewsProvider(companies) as provider:
+    with GoogleNewsRSSProvider(companies) as provider:
         result = ingest_evidence(
             repository,
             provider,
             args.tickers or TICKERS,
             retrieved_at=datetime.now(timezone.utc),
             limit_per_ticker=args.limit,
-            timespan=args.timespan,
+            lookback_days=args.lookback_days,
         )
 
     print(
