@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from hashlib import sha256
+from time import sleep
 from typing import Iterable, Mapping
 
 import httpx
@@ -35,11 +36,21 @@ class GDELTNewsProvider:
         self,
         companies: Mapping[str, str],
         client: httpx.Client | None = None,
+        max_retries: int = 3,
+        retry_delay_seconds: float = 5.0,
+        request_interval_seconds: float = 2.0,
     ):
         self.companies = {
             ticker.strip().upper(): company.strip()
             for ticker, company in companies.items()
         }
+        if max_retries < 0:
+            raise ValueError("max_retries cannot be negative")
+        if retry_delay_seconds < 0 or request_interval_seconds < 0:
+            raise ValueError("Request delays cannot be negative")
+        self.max_retries = max_retries
+        self.retry_delay_seconds = retry_delay_seconds
+        self.request_interval_seconds = request_interval_seconds
         self.errors: dict[str, str] = {}
         self.client = client or httpx.Client(
             timeout=30,
@@ -83,7 +94,9 @@ class GDELTNewsProvider:
 
         self.errors = {}
         downloaded: dict[str, list[EvidenceItem]] = {}
-        for ticker in normalized:
+        for index, ticker in enumerate(normalized):
+            if index > 0 and self.request_interval_seconds:
+                sleep(self.request_interval_seconds)
             try:
                 downloaded[ticker] = self._download_ticker(
                     ticker,
@@ -105,8 +118,7 @@ class GDELTNewsProvider:
         limit: int,
         timespan: str,
     ) -> list[EvidenceItem]:
-        response = self.client.get(
-            GDELT_DOC_URL,
+        response = self._get_with_retry(
             params={
                 "query": f'"{company}"',
                 "mode": "ArtList",
@@ -114,9 +126,8 @@ class GDELTNewsProvider:
                 "format": "json",
                 "sort": "DateDesc",
                 "timespan": timespan,
-            },
+            }
         )
-        response.raise_for_status()
         articles = response.json().get("articles", [])
         items: list[EvidenceItem] = []
         seen_urls: set[str] = set()
@@ -154,3 +165,24 @@ class GDELTNewsProvider:
             if len(items) == limit:
                 break
         return items
+
+    def _get_with_retry(self, params: dict[str, object]) -> httpx.Response:
+        for attempt in range(self.max_retries + 1):
+            response = self.client.get(GDELT_DOC_URL, params=params)
+            if response.status_code != 429:
+                response.raise_for_status()
+                return response
+            if attempt == self.max_retries:
+                response.raise_for_status()
+
+            retry_after = response.headers.get("Retry-After")
+            try:
+                delay = float(retry_after) if retry_after else (
+                    self.retry_delay_seconds * (2 ** attempt)
+                )
+            except ValueError:
+                delay = self.retry_delay_seconds * (2 ** attempt)
+            if delay:
+                sleep(delay)
+
+        raise RuntimeError("GDELT retry loop exhausted")
