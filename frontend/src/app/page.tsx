@@ -113,16 +113,6 @@ type FundamentalFact = {
   source_url: string;
 };
 
-type FundamentalsResponse = {
-  ticker: string;
-  company: string;
-  as_of: string;
-  status: "complete" | "partial" | "missing";
-  expected_metrics: string[];
-  missing_metrics: string[];
-  facts: FundamentalFact[];
-};
-
 type DataStatus = {
   universe_size: number;
   covered_tickers: number;
