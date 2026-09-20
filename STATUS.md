@@ -4,7 +4,7 @@ Last updated: 2026-09-20
 
 ## Current milestone
 
-Milestone 3 — honest research baseline: complete and ready to merge.
+Milestone 4 — ranking experience: started.
 
 ## Delivered
 
@@ -90,8 +90,14 @@ This is encouraging historical evidence for a benchmark, not proof of a deployab
 - Immutable storage exists, but a production publishing workflow and distinction between historical backtests and live prediction vintages are not yet exposed through the API.
 - The dashboard still contains demonstration ranking content.
 
+## Milestone 4 scope
+
+- Replace demonstration rankings with stored, dated prediction vintages.
+- Present a focused monthly top-one/top-three ranking.
+- Show supporting evidence, uncertainty, risks, and plain-language explanations.
+- Track predicted outcomes against realized returns without rewriting past predictions.
+- Keep historical research results visibly distinct from current user-facing rankings.
+
 ## Next action
 
-1. Merge `feature/milestone-3-research-baseline` into `main`.
-2. Start Milestone 4 on a new branch.
-3. Keep research evidence, stored prediction vintages, and user-facing rankings clearly separated.
+Define and test the backend contract for publishing and retrieving the latest ranking vintage before connecting it to the dashboard.
