@@ -1,14 +1,16 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
+from .evidence import EvidenceRepository, EvidenceType
 from .market_data import MarketDataRepository
 from .outcomes import evaluate_prediction_vintage
 from .prediction_store import PredictionVintageStore
 from .schemas import (
     DataStatusResponse,
+    EvidenceItemResponse,
     HealthResponse,
     PredictionOutcomeResponse,
     PublishedRankingItem,
@@ -20,6 +22,7 @@ from .schemas import (
     WatchlistItem,
     WatchlistNoteRequest,
     WatchlistResponse,
+    TickerEvidenceResponse,
 )
 from .universe import FORWARD_HORIZON_TRADING_DAYS, UNIVERSE
 from .watchlist import WatchlistRepository
@@ -137,6 +140,47 @@ def ranking_history() -> RankingHistoryResponse:
             )
         )
     return RankingHistoryResponse(vintages=vintages)
+
+
+@app.get(
+    "/api/v1/evidence/{ticker}",
+    response_model=TickerEvidenceResponse,
+)
+def ticker_evidence(
+    ticker: str,
+    evidence_type: EvidenceType = "filing",
+    as_of: datetime | None = None,
+    max_age_days: int = Query(default=90, ge=1, le=3650),
+) -> TickerEvidenceResponse:
+    normalized = ticker.strip().upper()
+    known_tickers = {security.ticker for security in UNIVERSE}
+    if normalized not in known_tickers:
+        raise HTTPException(status_code=400, detail="Ticker is not in the universe")
+
+    requested_as_of = as_of or datetime.now(timezone.utc)
+    repository = EvidenceRepository(
+        MarketDataRepository(settings.database_path)
+    )
+    availability = repository.availability(
+        normalized,
+        evidence_type,
+        requested_as_of,
+        timedelta(days=max_age_days),
+    )
+    items = repository.point_in_time(
+        normalized,
+        requested_as_of,
+        evidence_type,
+    )
+    return TickerEvidenceResponse(
+        ticker=normalized,
+        as_of=requested_as_of,
+        evidence_type=evidence_type,
+        status=availability["status"],
+        max_age_days=max_age_days,
+        error=availability["error"],
+        items=[EvidenceItemResponse(**item) for item in items],
+    )
 
 
 @app.get("/api/v1/watchlist", response_model=WatchlistResponse)
