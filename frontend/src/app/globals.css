@@ -38,6 +38,19 @@ article p { color:#bac4be; line-height:1.5; }
 .evidence-status.fresh { color:var(--green); }
 .evidence-status.stale,.evidence-status.missing { color:#e3b687; }
 .evidence-status.failed { color:#ef8f8f; }
+.fundamentals { margin-top:14px; padding:14px; border:1px solid var(--line); border-radius:10px; background:#0d1713; }
+.fundamentals.unavailable { color:var(--muted); font-size:11px; }
+.fundamentals-heading { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px; color:#c9d4ce; font-size:11px; font-weight:700; }
+.coverage { text-transform:uppercase; letter-spacing:.08em; font-size:8px; }
+.coverage.complete { color:var(--green); }
+.coverage.partial { color:#e3b687; }
+.coverage.missing { color:#ef8f8f; }
+.fundamental-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.fundamental-grid a { display:flex; flex-direction:column; gap:4px; min-width:0; color:inherit; text-decoration:none; }
+.fundamental-grid a:hover b { color:var(--green); }
+.fundamental-grid span,.fundamental-grid small { color:var(--muted); font-size:9px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fundamental-grid b { color:var(--ink); font-size:13px; }
+.missing-metrics { display:block; margin-top:11px; color:#c39d78; font-size:9px; overflow-wrap:anywhere; }
 .risk { border-top:1px solid var(--line); padding-top:18px; margin-top:25px; font-size:13px; }
 .risk b { display:block; color:#e3b687; margin-bottom:5px; }
 footer { border-top:1px solid var(--line); padding:16px 30px; font-size:12px; overflow-wrap:anywhere; }
