@@ -5,12 +5,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .evidence import EvidenceRepository, EvidenceType
+from .fundamentals import FundamentalRepository
 from .market_data import MarketDataRepository
 from .outcomes import evaluate_prediction_vintage
 from .prediction_store import PredictionVintageStore
 from .schemas import (
     DataStatusResponse,
     EvidenceItemResponse,
+    FundamentalFactResponse,
     HealthResponse,
     PredictionOutcomeResponse,
     PublishedRankingItem,
@@ -23,6 +25,7 @@ from .schemas import (
     WatchlistNoteRequest,
     WatchlistResponse,
     TickerEvidenceResponse,
+    TickerFundamentalsResponse,
 )
 from .universe import FORWARD_HORIZON_TRADING_DAYS, UNIVERSE
 from .watchlist import WatchlistRepository
@@ -140,6 +143,54 @@ def ranking_history() -> RankingHistoryResponse:
             )
         )
     return RankingHistoryResponse(vintages=vintages)
+
+
+@app.get(
+    "/api/v1/fundamentals/{ticker}",
+    response_model=TickerFundamentalsResponse,
+)
+def ticker_fundamentals(
+    ticker: str,
+    as_of: datetime | None = None,
+) -> TickerFundamentalsResponse:
+    normalized = ticker.strip().upper()
+    companies = {security.ticker: security.company for security in UNIVERSE}
+    if normalized not in companies:
+        raise HTTPException(status_code=400, detail="Ticker is not in the universe")
+
+    requested_as_of = as_of or datetime.now(timezone.utc)
+    facts = FundamentalRepository(
+        MarketDataRepository(settings.database_path)
+    ).point_in_time(normalized, requested_as_of)
+
+    expected_metrics = [
+        "revenue",
+        "net_income",
+        "eps_diluted",
+        "assets",
+        "liabilities",
+        "cash",
+    ]
+    observed = {fact["metric"] for fact in facts}
+    missing = [
+        metric for metric in expected_metrics if metric not in observed
+    ]
+    status = (
+        "missing"
+        if not facts
+        else "complete"
+        if not missing
+        else "partial"
+    )
+    return TickerFundamentalsResponse(
+        ticker=normalized,
+        company=companies[normalized],
+        as_of=requested_as_of,
+        status=status,
+        expected_metrics=expected_metrics,
+        missing_metrics=missing,
+        facts=[FundamentalFactResponse(**fact) for fact in facts],
+    )
 
 
 @app.get(
