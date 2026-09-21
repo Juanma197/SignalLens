@@ -1,112 +1,87 @@
 # SignalLens Status
 
-Last updated: 2026-09-20
+Last updated: 2026-09-21
 
 ## Current milestone
 
-Milestone 4 — ranking experience: complete and ready to merge.
+Milestone 5 — broader evidence: complete and ready to merge.
 
 ## Delivered
 
-### Data foundation
+### Existing research foundation
 
-- A fixed 30-stock research universe with sector metadata.
-- Daily OHLCV history from 2015-01-02 through 2026-09-18.
-- DuckDB persistence, ingestion-run metadata, validation, idempotent upserts, and a data-status endpoint.
-- Automatic database-directory creation and reliable connection cleanup.
+- Fixed 30-stock universe with reproducible adjusted daily price history in DuckDB.
+- Leakage-safe point-in-time features, 21-trading-day outcomes, and walk-forward evaluation.
+- Immutable prediction vintages, latest ranking API, outcome tracking, archive, and personal watchlist.
+- Live ranking remains the deterministic 126-trading-day momentum benchmark.
+- The benchmark is historically encouraging research evidence, not validated alpha or investment advice.
 
-### Point-in-time research dataset
+### SEC filings and fundamentals
 
-- Monthly observations generated only from information available at each prediction timestamp.
-- Momentum features over 5, 21, 63, and 126 trading days.
-- 21-day volatility, 50-day and 200-day moving-average ratios, and 20-day relative volume.
-- Signals formed after the as-of close, entry at the next trading close, and a 21-trading-day forward holding period.
-- Cross-sectional outperformance labels with explicit exit dates.
-- Leakage-safety and feature-timing tests.
+- SEC EDGAR filing ingestion with descriptive user-agent support, provenance, timestamps, deduplication, and per-ticker failure records.
+- SEC Company Facts ingestion for revenue, net income, diluted EPS, assets, liabilities, and cash.
+- Point-in-time fundamental queries enforce both availability and retrieval boundaries.
+- Complete, partial, and missing coverage states are exposed through the API and dashboard.
+- Full-universe local ingestion completed without failed tickers.
+- Repeated ingestion is idempotent.
 
-The current local market-data snapshot produces:
+### Macro context
 
-- 3,578 labeled rows across 30 tickers.
-- 130 prediction months from 2015-10-30 through 2026-07-31.
-- No missing feature values.
-- A 49.33% positive-label rate.
+- FRED ingestion for the federal funds rate, CPI, unemployment, and 10-year Treasury yield.
+- Retry and timeout handling for intermittent public-source failures.
+- Point-in-time macro API with observation dates, retrieval dates, units, freshness, and missing/stale states.
+- The current local snapshot contains all four expected series.
 
-### Honest walk-forward evaluation
+### Public news evidence
 
-- Expanding-window logistic-regression baseline.
-- A minimum 36-month training window.
-- Exit-date embargo: a row is trainable only after its forward-return window has completed.
-- Top-3 monthly portfolio evaluation with 10 basis points of transaction cost per side.
-- Formal deterministic momentum benchmarks evaluated over the same dates.
+- Google News RSS ingestion supplies lawful public headline metadata and publisher attribution.
+- Optional GDELT support remains available, with rate-limit failures recorded rather than hidden.
+- Full-universe Google News ingestion completed with no failed tickers.
+- News storage is content-addressed and idempotent.
 
-Logistic baseline over 94 out-of-sample months:
+### Immutable research snapshots
 
-- Brier score: 0.253054 versus 0.249945 for the constant-rate baseline.
-- ROC AUC: 0.487626.
-- Top-3 mean net monthly return: 2.937%.
-- Universe mean monthly return: 2.475%.
-- Mean excess return: 0.462%.
-- Monthly excess-return win rate: 48.94%.
+Every newly published ranking vintage freezes:
 
-The logistic model does not demonstrate useful predictive classification skill and should not be presented as validated alpha.
+- The price-based ranking and strategy provenance.
+- Macro observations available at publication.
+- Latest SEC fundamental facts available at publication.
+- Up to three SEC filings and three news items per selected ticker.
+- Source URLs, publication dates, retrieval dates, freshness states, missing coverage, and provider errors.
 
-Best simple benchmark, 126-day momentum over the same 94 months:
+Older vintages are never rewritten. New evidence cannot silently alter the historical explanation shown for an earlier ranking.
 
-- Top-3 mean net monthly return: 4.213%.
-- Median net monthly return: 3.398%.
-- Mean excess return: 1.738%.
-- Median excess return: 0.528%.
-- Monthly excess-return win rate: 56.38%.
-- Positive-return rate: 59.57%.
-- Maximum drawdown: -24.70%.
-- Worst month: -17.48%; best month: 29.88%.
-- Bootstrap 95% interval for mean monthly excess return: 0.24% to 3.22%.
-- NVDA was the most selected ticker, representing 10.99% of selections.
+### Dashboard
 
-This is encouraging historical evidence for a benchmark, not proof of a deployable strategy.
-
-### Immutable prediction storage
-
-- Append-only prediction-run and prediction-row tables in DuckDB.
-- Stored model/strategy identity, parameters, training cutoff, creation time, ranks, scores, and feature snapshots.
-- Retrieval and counting helpers.
-- Tests proving an existing prediction vintage cannot be overwritten.
-
-### Published ranking experience
-
-- Leakage-safe latest-market snapshot ranked by the verified 126-trading-day momentum benchmark.
-- Explicit publication into immutable storage; reading the dashboard never creates or rewrites a vintage.
-- Latest published-vintage API with strategy/version provenance, evidence, risks, and disclaimer.
-- First real vintage published for 2026-09-18 with AMD, UNH, and AAPL ranked first through third.
-- Dashboard connected to the real ranking endpoint with percentage formatting and an honest unavailable state.
-- Synthetic NOVA, GRID, and FLOW fallback rankings removed.
-- Predicted-versus-actual tracking with next-close entry, a 21-trading-day return horizon, and pending/completed states.
-- Newest-first immutable vintage archive combining original selections with their realized outcome status.
-- Persistent personal watchlist with editable per-ticker research notes, universe validation, and dashboard display.
-- Personal notes remain mutable and clearly separated from immutable prediction records.
+- Current macro environment panel with source links and freshness.
+- Top-three momentum cards with frozen macro, fundamentals, filings, and news.
+- Explicit labels distinguish frozen context from the price signal.
+- Predicted-versus-actual tracking, watchlist notes, and immutable vintage history remain available.
+- Honest unavailable, partial, missing, stale, failed, and pending states are displayed.
 
 ## Verification
 
-- 30 backend tests pass on Windows with Python 3.13.
+- 77 backend tests pass on Windows with Python 3.13.
 - Frontend ESLint passes.
 - The optimized Next.js production build completes successfully.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
-- The latest ranking, outcome, history, and watchlist endpoints were verified against the real local database.
+- Latest ranking vintage `3328ecc7-3b88-4d87-a5c5-a6b500e35304` was published with frozen macro, fundamental, filing, and news context.
 - The working tree was clean after restoring the generated `frontend/next-env.d.ts` change.
 
 ## Known limitations
 
-- The universe is fixed today, so historical results are exposed to survivorship and selection bias.
-- Yahoo Finance data is suitable for research prototyping, not production-grade market-data guarantees.
-- The momentum variants were compared on the same sample; the reported bootstrap interval does not correct for multiple testing or serial dependence.
-- Transaction costs are simplified and exclude spread variation, slippage, liquidity limits, taxes, and market impact.
-- No untouched holdout period or live forward test has yet confirmed the 126-day momentum result.
-- Ranking publication is currently an explicit manual command rather than a scheduled, authenticated workflow.
-- The first live vintage has not yet completed its 21-trading-day outcome window, so no realized result is available.
-- Watchlist mutations are intended for local/private use and are not authenticated yet.
+- The universe is fixed, so historical results remain exposed to survivorship and selection bias.
+- Yahoo Finance and public RSS feeds are research-grade sources, not production market-data guarantees.
+- The reported momentum result has no untouched holdout or completed live forward window.
+- Fundamentals, filings, news, and macro data are research context only; they do not yet alter the ranking score.
+- Fundamental comparison across sectors requires normalization before it can be used responsibly in a model.
+- News metadata is not a validated sentiment signal.
+- Publication and ingestion remain manual local commands.
+- The application has no authentication, managed deployment, scheduled jobs, monitoring, or remote backups.
+- Watchlist mutations are intended only for local/private use.
 
 ## Next action
 
-1. Merge `feature/milestone-4-ranking-experience` into `main`.
-2. Start Milestone 5 on a new branch.
-3. Add broader evidence with source timestamps, provenance, and stale-data handling.
+1. Run the full verification script and inspect the refreshed dashboard.
+2. Merge `feature/milestone-5-broader-evidence` into `main`.
+3. Begin Milestone 6 — private deployment, authentication, CI, secrets, scheduling, monitoring, and backups.

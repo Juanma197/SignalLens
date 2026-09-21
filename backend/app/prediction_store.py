@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime, timezone
+from threading import Lock
 from typing import Any
 from uuid import uuid4
 
@@ -13,9 +14,16 @@ from .market_data import MarketDataRepository
 class PredictionVintageStore:
     """Append-only storage for published research prediction vintages."""
 
+    _schema_lock = Lock()
+    _initialized_databases: set[str] = set()
+
     def __init__(self, repository: MarketDataRepository):
         self.repository = repository
-        self._ensure_schema()
+        database_key = str(repository.path.resolve())
+        with self._schema_lock:
+            if database_key not in self._initialized_databases:
+                self._ensure_schema()
+                self._initialized_databases.add(database_key)
 
     def _ensure_schema(self) -> None:
         with self.repository.connect() as connection:

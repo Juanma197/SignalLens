@@ -32,7 +32,7 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - Predicted-versus-actual tracking
 - Watchlist and research notes
 
-## Milestone 5 — Broader evidence
+## Milestone 5 — Broader evidence (complete)
 
 - Fundamentals, filings, news, macro data, and lawful public disclosures
 - Source timestamps and provenance

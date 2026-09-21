@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date, datetime
 from typing import Literal
 
@@ -36,6 +38,59 @@ class PublishedRankingItem(BaseModel):
     risk: str
 
 
+class PublishedMacroObservation(BaseModel):
+    observation_id: str
+    series_id: Literal["FEDFUNDS", "CPIAUCSL", "UNRATE", "DGS10"]
+    metric: str
+    value: float
+    unit: str
+    frequency: Literal["daily", "monthly"]
+    observation_date: date
+    available_at: datetime
+    retrieved_at: datetime
+    source_name: str
+    source_url: str
+
+
+class PublishedMacroContext(BaseModel):
+    captured_at: datetime
+    status: Literal["complete", "partial", "missing"]
+    expected_series: list[str]
+    missing_series: list[str]
+    observations: list[PublishedMacroObservation]
+
+
+class PublishedFundamentalTickerContext(BaseModel):
+    ticker: str
+    status: Literal["complete", "partial", "missing"]
+    expected_metrics: list[str]
+    missing_metrics: list[str]
+    facts: list[FundamentalFactResponse]
+
+
+class PublishedFundamentalContext(BaseModel):
+    captured_at: datetime
+    tickers: list[PublishedFundamentalTickerContext]
+
+
+class PublishedEvidenceTypeContext(BaseModel):
+    status: Literal["fresh", "stale", "missing", "failed"]
+    max_age_days: int = Field(ge=1)
+    error: str | None
+    items: list[EvidenceItemResponse]
+
+
+class PublishedTickerEvidenceContext(BaseModel):
+    ticker: str
+    filing: PublishedEvidenceTypeContext
+    news: PublishedEvidenceTypeContext
+
+
+class PublishedEvidenceContext(BaseModel):
+    captured_at: datetime
+    tickers: list[PublishedTickerEvidenceContext]
+
+
 class PublishedRankingResponse(BaseModel):
     vintage_id: str
     as_of: date
@@ -44,6 +99,9 @@ class PublishedRankingResponse(BaseModel):
     strategy_version: str
     is_demo: Literal[False] = False
     disclaimer: str
+    macro_context: PublishedMacroContext | None = None
+    fundamental_context: PublishedFundamentalContext | None = None
+    evidence_context: PublishedEvidenceContext | None = None
     rankings: list[PublishedRankingItem]
 
 
@@ -120,3 +178,88 @@ class DataStatusResponse(BaseModel):
     duplicate_rows: int
     forward_horizon_trading_days: int
     last_run: IngestionRunResponse | None
+
+
+class EvidenceItemResponse(BaseModel):
+    evidence_id: str
+    ticker: str
+    evidence_type: Literal["fundamental", "filing", "news", "macro"]
+    source_name: str
+    source_url: str
+    title: str
+    summary: str
+    published_at: datetime
+    source_updated_at: datetime | None
+    retrieved_at: datetime
+    content_hash: str
+
+
+class TickerEvidenceResponse(BaseModel):
+    ticker: str
+    as_of: datetime
+    evidence_type: Literal["fundamental", "filing", "news", "macro"]
+    status: Literal["fresh", "stale", "missing", "failed"]
+    max_age_days: int = Field(ge=1)
+    error: str | None
+    items: list[EvidenceItemResponse]
+
+
+class FundamentalFactResponse(BaseModel):
+    fact_id: str
+    ticker: str
+    metric: Literal[
+        "revenue",
+        "net_income",
+        "eps_diluted",
+        "assets",
+        "liabilities",
+        "cash",
+    ]
+    taxonomy: str
+    concept: str
+    unit: str
+    value: float
+    period_start: date | None
+    period_end: date
+    fiscal_year: int | None
+    fiscal_period: str | None
+    form: str
+    accession: str
+    filed_at: datetime
+    available_at: datetime
+    retrieved_at: datetime
+    source_url: str
+
+
+class TickerFundamentalsResponse(BaseModel):
+    ticker: str
+    company: str
+    as_of: datetime
+    status: Literal["complete", "partial", "missing"]
+    expected_metrics: list[str]
+    missing_metrics: list[str]
+    facts: list[FundamentalFactResponse]
+
+
+class MacroObservationResponse(BaseModel):
+    observation_id: str
+    series_id: Literal["FEDFUNDS", "CPIAUCSL", "UNRATE", "DGS10"]
+    metric: str
+    value: float
+    unit: str
+    frequency: Literal["daily", "monthly"]
+    observation_date: date
+    available_at: datetime
+    retrieved_at: datetime
+    source_name: str
+    source_url: str
+    freshness: Literal["fresh", "stale"]
+
+
+class MacroSnapshotResponse(BaseModel):
+    as_of: datetime
+    status: Literal["complete", "partial", "missing"]
+    expected_series: list[str]
+    missing_series: list[str]
+    stale_series: list[str]
+    observations: list[MacroObservationResponse]

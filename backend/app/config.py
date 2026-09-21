@@ -9,12 +9,22 @@ class Settings(BaseSettings):
     environment: str = "development"
     allowed_origins: str = "http://localhost:3000"
     database_path: Path = Path("data/signallens.duckdb")
+    sec_user_agent: str = ""
+    fred_api_key: str = ""
 
-    model_config = SettingsConfigDict(env_file="../.env", env_prefix="SIGNALLENS_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file="../.env",
+        env_prefix="SIGNALLENS_",
+        extra="ignore",
+    )
 
     @property
     def cors_origins(self) -> list[str]:
-        return [item.strip() for item in self.allowed_origins.split(",") if item.strip()]
+        return [
+            item.strip()
+            for item in self.allowed_origins.split(",")
+            if item.strip()
+        ]
 
 
 @lru_cache

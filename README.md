@@ -4,7 +4,7 @@ SignalLens is a research dashboard for periodically ranking public companies and
 
 ## Current milestone
 
-Milestone 2 adds a curated 30-stock research universe, a 21-trading-day horizon, reproducible DuckDB storage, adjusted daily price ingestion, provenance, validation, and a data-status API.
+Milestone 5 is complete. SignalLens now combines immutable 126-day momentum ranking vintages with point-in-time SEC fundamentals and filings, recent public news metadata, FRED macro context, provenance, freshness states, and missing-data handling. Evidence is preserved with each published vintage so historical research cannot silently change.
 
 ## Requirements
 
@@ -38,6 +38,33 @@ Pop-Location
 
 The command stores daily unadjusted OHLC, adjusted close, volume, source, ingestion time, and ingestion-run provenance in `backend/data/signallens.duckdb`. The database is local research data and is excluded from Git.
 
+## Refresh research evidence
+
+Set a descriptive SEC user agent before using SEC endpoints:
+
+```powershell
+$env:SIGNALLENS_SEC_USER_AGENT = "SignalLens research your-email@example.com"
+```
+
+Then ingest the current universe:
+
+```powershell
+Push-Location backend
+& ..\.venv\Scripts\python.exe -m app.ingest_evidence --limit 3
+& ..\.venv\Scripts\python.exe -m app.ingest_fundamentals --periods 8
+& ..\.venv\Scripts\python.exe -m app.ingest_macro
+& ..\.venv\Scripts\python.exe -m app.ingest_news --limit 3 --lookback-days 30
+Pop-Location
+```
+
+Publishing a ranking is an explicit action. It freezes the price ranking and all available context:
+
+```powershell
+Push-Location backend
+& ..\.venv\Scripts\python.exe -c "from app.config import get_settings; from app.market_data import MarketDataRepository; from app.rankings import publish_latest_momentum_ranking; repository=MarketDataRepository(get_settings().database_path); print(publish_latest_momentum_ranking(repository))"
+Pop-Location
+```
+
 ## Verify the project
 
 ```powershell
@@ -59,4 +86,4 @@ SignalLens/
 
 ## Important
 
-The ranking cards remain deterministic demo records until a later, walk-forward-tested model milestone. Real price availability does not make them investment recommendations.
+The live ranking is the historically encouraging 126-trading-day momentum benchmark. Fundamentals, filings, news, and macro data currently provide frozen research context; they do not yet alter the score. SignalLens is decision support, not investment advice.
