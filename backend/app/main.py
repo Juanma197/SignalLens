@@ -1,7 +1,9 @@
 from datetime import date, datetime, timedelta, timezone
+from hmac import compare_digest
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .config import get_settings
 from .evidence import EvidenceRepository, EvidenceType
@@ -38,6 +40,34 @@ settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True,
                    allow_methods=["GET", "PUT", "DELETE"], allow_headers=["*"])
+
+PUBLIC_API_PATHS = {"/api/v1/health"}
+
+
+@app.middleware("http")
+async def authenticate_private_api(request: Request, call_next):
+    token = settings.api_token
+    requires_authentication = (
+        request.url.path.startswith("/api/v1/")
+        and request.url.path not in PUBLIC_API_PATHS
+        and token is not None
+    )
+    if requires_authentication:
+        scheme, _, supplied_token = request.headers.get(
+            "Authorization", ""
+        ).partition(" ")
+        expected_token = token.get_secret_value()
+        if (
+            scheme.lower() != "bearer"
+            or not supplied_token
+            or not compare_digest(supplied_token, expected_token)
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing bearer token"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    return await call_next(request)
 
 
 @app.get("/api/v1/health", response_model=HealthResponse)
