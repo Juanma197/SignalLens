@@ -42,13 +42,18 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_cr
                    allow_methods=["GET", "PUT", "DELETE"], allow_headers=["*"])
 
 PUBLIC_API_PATHS = {"/api/v1/health"}
+PRIVATE_DOCUMENTATION_PATHS = {"/docs", "/openapi.json", "/redoc"}
 
 
 @app.middleware("http")
 async def authenticate_private_api(request: Request, call_next):
     token = settings.api_token
-    requires_authentication = (
+    is_private_path = (
         request.url.path.startswith("/api/v1/")
+        or request.url.path in PRIVATE_DOCUMENTATION_PATHS
+    )
+    requires_authentication = (
+        is_private_path
         and request.url.path not in PUBLIC_API_PATHS
         and token is not None
     )
