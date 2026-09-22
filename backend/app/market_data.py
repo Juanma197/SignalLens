@@ -203,21 +203,27 @@ class MarketDataRepository:
             ]
 
             with self.connect() as connection:
-                connection.executemany(
-                    """
-                    INSERT OR REPLACE INTO price_bars
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    rows,
-                )
-                connection.execute(
-                    """
-                    UPDATE ingestion_runs
-                    SET completed_at=?, status='completed', rows_written=?
-                    WHERE run_id=?
-                    """,
-                    [ingested_at, len(bars), run_id],
-                )
+                connection.execute("BEGIN TRANSACTION")
+                try:
+                    connection.executemany(
+                        """
+                        INSERT OR REPLACE INTO price_bars
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        rows,
+                    )
+                    connection.execute(
+                        """
+                        UPDATE ingestion_runs
+                        SET completed_at=?, status='completed', rows_written=?
+                        WHERE run_id=?
+                        """,
+                        [ingested_at, len(bars), run_id],
+                    )
+                    connection.execute("COMMIT")
+                except Exception:
+                    connection.execute("ROLLBACK")
+                    raise
             return run_id
 
         except (Exception, KeyboardInterrupt) as exc:
