@@ -68,6 +68,7 @@ def test_private_api_requires_matching_bearer_token(
     client = TestClient(main.app)
 
     missing = client.get("/api/v1/data/status")
+    documentation = client.get("/docs")
     incorrect = client.get(
         "/api/v1/data/status",
         headers={"Authorization": "Bearer incorrect"},
@@ -79,5 +80,6 @@ def test_private_api_requires_matching_bearer_token(
 
     assert missing.status_code == 401
     assert missing.headers["www-authenticate"] == "Bearer"
+    assert documentation.status_code == 401
     assert incorrect.status_code == 401
     assert authorized.status_code == 200
