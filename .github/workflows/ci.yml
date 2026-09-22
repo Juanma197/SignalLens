@@ -70,3 +70,20 @@ jobs:
 
       - name: Build production frontend
         run: npm run build
+
+  containers:
+    name: Build ${{ matrix.service }} container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        service:
+          - backend
+          - frontend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Build container
+        run: docker build --tag signallens-${{ matrix.service }}:ci ${{ matrix.service }}
