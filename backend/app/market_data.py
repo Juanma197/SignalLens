@@ -9,6 +9,7 @@ from typing import Iterable, Iterator, Protocol
 from uuid import uuid4
 
 import duckdb
+import pandas as pd
 
 from .universe import Security
 
@@ -202,15 +203,41 @@ class MarketDataRepository:
                 for bar in bars
             ]
 
+            incoming = pd.DataFrame(
+                rows,
+                columns=[
+                    "ticker",
+                    "trading_date",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "adjusted_close",
+                    "volume",
+                    "source",
+                    "ingested_at",
+                ],
+            )
             with self.connect() as connection:
+                connection.register("incoming_price_bars", incoming)
                 connection.execute("BEGIN TRANSACTION")
                 try:
-                    connection.executemany(
+                    connection.execute(
                         """
                         INSERT OR REPLACE INTO price_bars
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        rows,
+                        SELECT
+                            ticker,
+                            CAST(trading_date AS DATE),
+                            open,
+                            high,
+                            low,
+                            close,
+                            adjusted_close,
+                            CAST(volume AS BIGINT),
+                            source,
+                            CAST(ingested_at AS TIMESTAMP)
+                        FROM incoming_price_bars
+                        """
                     )
                     connection.execute(
                         """
@@ -224,6 +251,8 @@ class MarketDataRepository:
                 except Exception:
                     connection.execute("ROLLBACK")
                     raise
+                finally:
+                    connection.unregister("incoming_price_bars")
             return run_id
 
         except (Exception, KeyboardInterrupt) as exc:
