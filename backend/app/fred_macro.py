@@ -65,7 +65,7 @@ class FREDMacroProvider:
         client: httpx.Client | None = None,
         api_key: str | None = None,
         request_interval_seconds: float = 0.12,
-        max_attempts: int = 3,
+        max_attempts: int = 2,
         retry_delay_seconds: float = 1.0,
         sleep: Callable[[float], None] = time.sleep,
     ):
@@ -75,7 +75,7 @@ class FREDMacroProvider:
             raise ValueError("max_attempts must be positive")
         self._owns_client = client is None
         self.client = client or httpx.Client(
-            timeout=httpx.Timeout(120.0, connect=20.0),
+            timeout=httpx.Timeout(15.0, connect=5.0),
             follow_redirects=True,
             headers={"User-Agent": "SignalLens research macro-data client"},
         )
