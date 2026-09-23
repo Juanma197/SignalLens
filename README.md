@@ -65,6 +65,37 @@ Push-Location backend
 Pop-Location
 ```
 
+## Automated monthly research cycle
+
+The monthly runner performs the same workflow in a fixed order: append new price
+history, refresh SEC filings, refresh SEC fundamentals, refresh FRED macro data,
+refresh public news metadata, and finally publish the **existing 126-day momentum**
+ranking. The multifactor model remains research-only and is not used by this job.
+
+Run it manually from Windows Task Scheduler or schedule this command once per
+month (after a US market close):
+
+```powershell
+.\scripts\monthly-research-cycle.ps1
+```
+
+For a Linux scheduler whose working directory is `backend`, use:
+
+```bash
+python -m app.monthly_cycle
+```
+
+The scheduled process must use the same persistent database path and secrets as
+the API (`SIGNALLENS_DATABASE_PATH`, `SIGNALLENS_SEC_USER_AGENT`, and
+`SIGNALLENS_FRED_API_KEY`). Do not schedule a separate service with an ephemeral
+or independent volume. The runner refuses to create a missing database, appends
+only dates newer than the latest stored price, records failures for safe retry,
+and returns the already-published vintage when the same UTC month is invoked
+again. Each month also has a deterministic reserved vintage ID, so a retry after
+publication can only reuse the existing immutable row; a colliding insert fails
+rather than updating it. Back up the persistent database before enabling the
+schedule.
+
 ## Verify the project
 
 ```powershell

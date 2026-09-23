@@ -57,6 +57,8 @@ class PredictionVintageStore:
         predictions: pd.DataFrame,
         score_column: str,
         metadata: dict[str, Any] | None = None,
+        *,
+        vintage_id: str | None = None,
     ) -> str:
         """Append one immutable ranking vintage and return its identifier."""
         if not strategy_name.strip() or not strategy_version.strip():
@@ -78,7 +80,7 @@ class PredictionVintageStore:
         if predictions[score_column].isna().any():
             raise ValueError("Prediction scores cannot be missing")
 
-        vintage_id = str(uuid4())
+        vintage_id = vintage_id or str(uuid4())
         created_at = datetime.now(timezone.utc).replace(tzinfo=None)
         normalized_date = pd.Timestamp(as_of_date).date()
         metadata_json = json.dumps(
