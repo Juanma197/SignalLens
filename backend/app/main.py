@@ -11,10 +11,14 @@ from .fred_macro import FRED_SERIES
 from .fundamentals import FundamentalRepository
 from .macro import MacroRepository
 from .market_data import MarketDataRepository
-from .monthly_cycle import production_stages, run_production_monthly_cycle
+from .monthly_cycle import (
+    ProductionBackupError,
+    ProductionPreflightError,
+    production_stages,
+    run_production_monthly_cycle,
+)
 from .outcomes import evaluate_prediction_vintage
 from .prediction_store import PredictionVintageStore
-from .production_readiness import run_preflight
 from .schemas import (
     DataStatusResponse,
     EvidenceItemResponse,
@@ -85,11 +89,25 @@ def health() -> HealthResponse:
 @app.post("/api/v1/admin/monthly-cycle")
 def trigger_monthly_cycle() -> dict:
     """Run in the API service so the sole DuckDB writer owns the mounted volume."""
-    preflight = run_preflight(settings)
-    if preflight["status"] != "ready":
-        raise HTTPException(status_code=503, detail=preflight)
     repository = MarketDataRepository(settings.database_path)
-    return run_production_monthly_cycle(repository, production_stages(repository))
+    try:
+        return run_production_monthly_cycle(
+            repository, production_stages(repository, settings=settings), settings=settings
+        )
+    except ProductionPreflightError as exc:
+        raise HTTPException(status_code=503, detail=exc.report) from None
+    except ProductionBackupError as exc:
+        # Do not reflect the original exception text: paths and configuration
+        # values can contain operational secrets.
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "command": "monthly_cycle",
+                "status": "blocked",
+                "failed_stage": "backup",
+                "error": {"code": exc.error_code, "message": "Fresh backup failed"},
+            },
+        ) from None
 
 
 @app.get("/api/v1/data/status", response_model=DataStatusResponse)

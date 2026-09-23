@@ -41,8 +41,18 @@ The application creates transactionally consistent backups with DuckDB's support
 under `/data/backups`, opens that database read-only to check the required tables,
 and only then atomically renames it into the rolling set. The default retention is
 three validated backups.
-Every production monthly run creates one before its first cycle-ledger, ingestion,
-or publication write; any backup failure aborts the run before publication.
+For an unfinished month, the authenticated endpoint first runs every non-backup
+preflight check, then creates and validates a fresh backup, and only then evaluates
+backup freshness and starts the first cycle-ledger, ingestion, or publication write.
+Any backup failure therefore aborts the run before **every** monthly-cycle database
+mutation. The pre-existing backup may be older than 48 hours: it cannot block the
+endpoint from making the fresh backup required for this run. The freshly created
+backup must satisfy `SIGNALLENS_BACKUP_MAX_AGE_HOURS=48` before writes begin.
+
+Before that sequence, the endpoint checks the current UTC month's cycle ledger
+read-only. If the month is already completed, it returns `already_completed`
+without creating another backup, attempt-ledger row, or vintage. This avoids an
+unnecessary backup while preserving the completed month's append-only publication.
 
 **Backups on `/data/backups` protect against database corruption and operator error,
 but they do not protect against total loss of the Railway volume.** Copy validated

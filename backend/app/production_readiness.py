@@ -19,7 +19,12 @@ def _check(name: str, ok: bool, detail: str) -> dict[str, Any]:
     return {"name": name, "status": "pass" if ok else "fail", "detail": detail}
 
 
-def run_preflight(settings: Settings, *, now: datetime | None = None) -> dict[str, Any]:
+def run_preflight(
+    settings: Settings,
+    *,
+    now: datetime | None = None,
+    check_backup: bool = True,
+) -> dict[str, Any]:
     """Validate the production writer without changing the database or its directory."""
     checked_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     path = settings.database_path.expanduser().resolve()
@@ -73,20 +78,21 @@ def run_preflight(settings: Settings, *, now: datetime | None = None) -> dict[st
         "providers=yfinance,sec_edgar,fred,google_news_rss",
     ))
 
-    backup = settings.backup_path
-    latest: Path | None = None
-    backup = backup.expanduser().resolve()
-    if backup.is_file():
-        try:
-            verify_backup(backup)
-            latest = backup
-        except (OSError, duckdb.Error, ValueError):
-            latest = None
-    else:
-        latest = next(iter(validated_backups(backup)), None)
-    age_hours = ((checked_at.timestamp() - latest.stat().st_mtime) / 3600) if latest else None
-    fresh = age_hours is not None and 0 <= age_hours <= settings.backup_max_age_hours
-    checks.append(_check("latest_backup", fresh, f"latest_validated={latest}; age_hours={round(age_hours, 1) if age_hours is not None else None}; max_age_hours={settings.backup_max_age_hours}"))
+    if check_backup:
+        backup = settings.backup_path
+        latest: Path | None = None
+        backup = backup.expanduser().resolve()
+        if backup.is_file():
+            try:
+                verify_backup(backup)
+                latest = backup
+            except (OSError, duckdb.Error, ValueError):
+                latest = None
+        else:
+            latest = next(iter(validated_backups(backup)), None)
+        age_hours = ((checked_at.timestamp() - latest.stat().st_mtime) / 3600) if latest else None
+        fresh = age_hours is not None and 0 <= age_hours <= settings.backup_max_age_hours
+        checks.append(_check("latest_backup", fresh, f"latest_validated={latest}; age_hours={round(age_hours, 1) if age_hours is not None else None}; max_age_hours={settings.backup_max_age_hours}"))
 
     return {
         "command": "production_preflight",

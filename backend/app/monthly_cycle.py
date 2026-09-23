@@ -11,7 +11,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import duckdb
 
-from .config import get_settings
+from .config import Settings, get_settings
 from .database_backup import create_backup
 from .evidence import EvidenceRepository
 from .evidence_ingest import ingest_evidence
@@ -44,6 +44,40 @@ class CycleStages:
     macro: Stage
     news: Stage
     publish: Callable[[datetime], str]
+
+
+class ProductionPreflightError(RuntimeError):
+    """A sanitized readiness report blocked all monthly-cycle mutations."""
+
+    def __init__(self, report: dict[str, Any]) -> None:
+        super().__init__("Production preflight failed")
+        self.report = report
+
+
+class ProductionBackupError(RuntimeError):
+    """A fresh backup failed; expose only its exception class to callers."""
+
+    def __init__(self, error_code: str) -> None:
+        super().__init__("Fresh backup failed")
+        self.error_code = error_code
+
+
+def completed_monthly_cycle(path: Path, *, now: datetime | None = None) -> str | None:
+    """Return this UTC month's completed vintage without opening a writer."""
+    captured_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cycle_key = captured_at.strftime("%Y-%m")
+    connection = duckdb.connect(str(path), read_only=True)
+    try:
+        tables = {row[0] for row in connection.execute("SHOW TABLES").fetchall()}
+        if "monthly_research_cycles" not in tables:
+            return None
+        row = connection.execute(
+            "SELECT status, vintage_id FROM monthly_research_cycles WHERE cycle_key=?",
+            [cycle_key],
+        ).fetchone()
+        return row[1] if row and row[0] == "completed" else None
+    finally:
+        connection.close()
 
 
 class MonthlyCycleStore:
@@ -241,16 +275,46 @@ def run_production_monthly_cycle(
     stages: CycleStages,
     *,
     now: datetime | None = None,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Back up the database before the production cycle performs any write."""
-    settings = get_settings()
-    backup = create_backup(
-        repository.path,
-        settings.backup_path,
-        retention_count=settings.backup_retention_count,
-        now=now,
+    """Read-only check, preflight, fresh backup, then perform production writes."""
+    settings = settings or get_settings()
+    captured_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cycle_key = captured_at.strftime("%Y-%m")
+    existing_vintage = (
+        completed_monthly_cycle(repository.path, now=captured_at)
+        if repository.path.is_file()
+        else None
     )
-    result = run_monthly_cycle(repository, stages, now=now)
+    if existing_vintage:
+        return {
+            "run_id": str(uuid4()),
+            "cycle_key": cycle_key,
+            "status": "already_completed",
+            "vintage_id": existing_vintage,
+            "stages": {},
+        }
+
+    # A scheduled run must not be rejected merely because the previous run's
+    # backup is old. All other readiness checks run before taking a new backup.
+    preflight = run_preflight(settings, now=captured_at, check_backup=False)
+    if preflight["status"] != "ready":
+        raise ProductionPreflightError(preflight)
+    try:
+        backup = create_backup(
+            repository.path,
+            settings.backup_path,
+            retention_count=settings.backup_retention_count,
+            now=captured_at,
+        )
+    except Exception as exc:
+        raise ProductionBackupError(type(exc).__name__) from None
+    # Evaluate the configured freshness rule against the backup made for this
+    # exact run before the first cycle-ledger, ingestion, or publication write.
+    preflight = run_preflight(settings, now=datetime.now(timezone.utc))
+    if preflight["status"] != "ready":
+        raise ProductionPreflightError(preflight)
+    result = run_monthly_cycle(repository, stages, now=captured_at)
     result["backup"] = str(backup)
     return result
 
@@ -286,12 +350,10 @@ def dry_run_monthly_cycle(path: Path, *, now: datetime | None = None) -> dict[st
                 ["prices", "filings", "fundamentals", "macro", "news", "publish_momentum_126d"]}
 
 
-def production_stages(repository: MarketDataRepository) -> CycleStages:
-    settings = get_settings()
-    if not settings.sec_user_agent:
-        raise ValueError("SIGNALLENS_SEC_USER_AGENT is required")
-    if not settings.fred_api_key:
-        raise ValueError("SIGNALLENS_FRED_API_KEY is required")
+def production_stages(
+    repository: MarketDataRepository, *, settings: Settings | None = None
+) -> CycleStages:
+    settings = settings or get_settings()
 
     def prices(captured_at: datetime) -> dict[str, Any]:
         with repository.connect() as connection:
@@ -378,7 +440,12 @@ def main() -> None:
         print(json.dumps(report, default=str, sort_keys=True))
         raise SystemExit(0 if report["status"] == "validated" else 1)
     repository = MarketDataRepository(path)
-    print(json.dumps(run_production_monthly_cycle(repository, production_stages(repository)), default=str))
+    effective_settings = settings.model_copy(update={"database_path": path})
+    print(json.dumps(run_production_monthly_cycle(
+        repository,
+        production_stages(repository, settings=effective_settings),
+        settings=effective_settings,
+    ), default=str))
 
 
 if __name__ == "__main__":
