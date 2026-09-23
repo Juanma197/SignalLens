@@ -4,8 +4,9 @@ Last updated: 2026-09-23
 
 ## Current milestone
 
-Milestone 6 — private deployment: automated monthly research cycle built and
-verified; remaining deployment operations are still in progress.
+Milestone 6 — private deployment: release-ready. The API, persistent database,
+application-managed backups, authenticated monthly endpoint, and stateless monthly
+scheduler are deployed and verified.
 
 ## Delivered
 
@@ -71,15 +72,23 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 - Publication is explicitly restricted to the live `momentum_126d` strategy; the
   multifactor model remains research-only.
 - Windows Task Scheduler and Linux scheduler commands are documented.
+- Production runs one API replica with `/data` mounted. The API is the sole DuckDB
+  writer; the scheduler has neither a volume nor database access.
+- The live Railway cron calls the authenticated API over private networking at
+  `0 2 3 * *` UTC and exits after the request.
+- Backups are validated under `/data/backups`, retain the three newest valid copies,
+  and must be no more than 48 hours old before monthly writes begin.
+- The manual scheduler rehearsal reached the API successfully and correctly no-op'd
+  because September 2026 was already complete.
 
 ## Verification
 
-- 98 backend tests pass in the current Linux verification environment.
-- Frontend ESLint and the optimized build remain unchanged from their prior
-  successful verification; this Linux environment could not reinstall the
-  checked-in dependencies because its npm resolver rejected optional peer entries.
+- All 115 backend tests and Python compilation pass in the release verification environment.
+- The frontend lock is synchronized for Node 24 and npm 11, and CI performs a
+  clean `npm ci` before ESLint and the optimized production build.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
-- Latest ranking vintage `3328ecc7-3b88-4d87-a5c5-a6b500e35304` was published with frozen macro, fundamental, filing, and news context.
+- The immutable September 2026 production vintage is
+  `5dcce39d-f98a-55b1-9010-279501142186` and uses `momentum_126d`.
 
 ## Known limitations
 
@@ -89,14 +98,15 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 - Fundamentals, filings, news, and macro data are research context only; they do not yet alter the ranking score.
 - Fundamental comparison across sectors requires normalization before it can be used responsibly in a model.
 - News metadata is not a validated sentiment signal.
-- A scheduler must still be configured in the production platform against the
-  API service's persistent database volume.
-- The application has no authentication, managed deployment, scheduled jobs, monitoring, or remote backups.
+- Same-volume backups do not protect against total Railway volume loss; automated
+  off-platform backup replication remains outstanding.
+- Automated failure notifications are not configured by this repository. Operators
+  must check each cron deployment and escalate failures until alerting is added.
 - Watchlist mutations are intended only for local/private use.
 
 ## Next action
 
-1. Back up the production DuckDB database.
-2. Configure the monthly command against the existing persistent volume and secrets.
-3. Run one supervised production cycle, then verify its vintage in the dashboard.
-4. Add automated off-platform backups and alerting for failed cycle ledger entries.
+1. After each monthly invocation, verify the cron exit, API result, completed ledger
+   entry, single deterministic vintage, dashboard evidence, and fresh valid backup.
+2. Add automated off-platform backup replication and alerting for failed cron
+   deployments or cycle-ledger entries.
