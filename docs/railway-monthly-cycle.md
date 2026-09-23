@@ -16,9 +16,10 @@ never opens DuckDB. The endpoint executes inside the existing backend process, s
 all writes use the backend's already-mounted production volume. Keep the backend at
 one replica because concurrent DuckDB writers are not supported by this deployment.
 
-This repository deliberately does **not** configure or activate that cron service.
-Before doing so, inspect the Railway backend service and confirm that its existing
-volume is mounted at `/data`, then run the preflight below in that exact service.
+Production uses this architecture: the API remains the sole database writer, with
+one replica and its persistent volume mounted at `/data`. A stateless Railway cron
+service calls the authenticated endpoint over Railway private networking. The
+scheduler has no volume, no DuckDB access, and exits after the request.
 
 ## Required backend variables
 
@@ -89,11 +90,10 @@ freshness. Dry-run reports the reserved UTC-month vintage and intended stages. A
 non-zero exit means scheduling is prohibited. If the current UTC month is already
 complete, dry-run must report `no_op`; do not publish another September 2026 vintage.
 
-## Schedule to create later (do not enable yet)
+## Live scheduler
 
-After the mount and both commands above are confirmed, create a stateless Railway
-cron service with no volume. Give it only `SIGNALLENS_API_TOKEN` and the backend
-private hostname. Use this exact command (an image containing `curl` is sufficient):
+The stateless Railway cron service has only the API token and backend private
+hostname required for this request (an image containing `curl` is sufficient):
 
 ```bash
 curl --fail-with-body --silent --show-error --max-time 1800 \
@@ -109,11 +109,41 @@ SIGNALLENS_API_TOKEN=<same backend token>
 SIGNALLENS_BACKEND_PRIVATE_HOST=<backend Railway private DNS hostname>
 ```
 
-Recommended UTC cron expression: **`0 02 3 * *`** (02:00 UTC on the third calendar
+The live UTC cron expression is **`0 2 3 * *`** (02:00 UTC on the third calendar
 day of each month). This avoids month-boundary timing and normally allows prior-month
-US market data to settle. Railway cron schedules are UTC. Do not enable it until a
-supervised run in a month without an existing vintage succeeds and its run summary,
-dashboard vintage, and backup are verified.
+US market data to settle. Railway cron schedules are UTC. A manual scheduler
+rehearsal successfully reached the endpoint and returned the expected no-op for the
+already completed September 2026 cycle. Its immutable production vintage ID is
+`5dcce39d-f98a-55b1-9010-279501142186`.
+
+## Deployment result and monthly operator checks
+
+Railway creates a deployment for each cron invocation. A successful invocation is
+the deployment whose command exits with status 0 after an HTTP 2xx response. A
+failed invocation is shown as a failed/crashed deployment with a non-zero command
+exit; inspect its sanitized logs and the API cycle ledger to identify the failed
+stage. An HTTP 401/403 indicates caller authentication configuration, while an HTTP
+5xx or timeout requires API and cycle-ledger investigation. Do not print or copy
+the token while troubleshooting. Railway does not provide email notification by
+this repository's configuration, so reviewing failed cron deployments (or adding
+an external alert) remains an operator requirement.
+
+After every scheduled monthly run, the operator must:
+
+1. Confirm the cron deployment exited successfully and the API response is either
+   `completed` or the expected idempotent `already_completed` result.
+2. Confirm exactly one completed UTC-month ledger entry and the deterministic
+   vintage ID; never delete or replace an immutable prediction vintage.
+3. Confirm the dashboard/API exposes that vintage using `momentum_126d`, the only
+   production publication strategy, and review its evidence-coverage summary.
+4. Confirm a validated backup exists under `/data/backups`, no more than 48 hours
+   old, and that retention has kept the configured three newest validated backups.
+5. Review the API and cron logs for provider failures, timeouts, or a failed stage.
+   Arrange notification/escalation manually until automated alerts are configured.
+
+Backups in `/data/backups` share the API's Railway volume. They protect against
+database corruption and operator mistakes, **not total Railway volume loss**;
+off-platform replication remains a non-blocking production-hardening task.
 
 ## Failure handling and safe retry
 
