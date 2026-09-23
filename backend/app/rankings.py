@@ -69,6 +69,8 @@ def publish_latest_momentum_ranking(
     repository: MarketDataRepository,
     top_k: int = 3,
     published_at: datetime | None = None,
+    *,
+    vintage_id: str | None = None,
 ) -> str:
     """Build and append one live ranking vintage."""
     as_of_date, ranking = build_latest_momentum_ranking(repository, top_k)
@@ -166,4 +168,5 @@ def publish_latest_momentum_ranking(
         ranking,
         "score",
         metadata,
+        vintage_id=vintage_id,
     )

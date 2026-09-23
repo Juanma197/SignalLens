@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 import pytest
 
@@ -48,6 +49,39 @@ def test_prediction_vintages_are_append_only(tmp_path: Path) -> None:
     assert store.count() == 2
     assert store.get(first_id)["predictions"][0]["score"] == 0.91
     assert store.get(second_id)["predictions"][0]["score"] == 0.99
+
+
+def test_reserved_vintage_id_cannot_overwrite_existing_vintage(
+    tmp_path: Path,
+) -> None:
+    store = PredictionVintageStore(
+        MarketDataRepository(tmp_path / "immutable.duckdb")
+    )
+    reserved_id = "monthly-2026-09"
+    store.publish(
+        "momentum_126d",
+        "1.0.0",
+        date(2026, 9, 18),
+        sample_predictions(),
+        "score",
+        vintage_id=reserved_id,
+    )
+    changed = sample_predictions()
+    changed.loc[0, "score"] = 999.0
+
+    with pytest.raises(duckdb.ConstraintException, match="Duplicate key"):
+        store.publish(
+            "momentum_126d",
+            "1.0.0",
+            date(2026, 9, 19),
+            changed,
+            "score",
+            vintage_id=reserved_id,
+        )
+
+    stored = store.get(reserved_id)
+    assert stored["as_of_date"] == date(2026, 9, 18)
+    assert stored["predictions"][0]["score"] == 0.91
 
 
 def test_prediction_vintage_round_trip_preserves_provenance(
