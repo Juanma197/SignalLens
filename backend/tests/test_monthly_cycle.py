@@ -8,6 +8,7 @@ from app.market_data import MarketDataRepository
 from app.config import get_settings
 from app.monthly_cycle import (
     CycleStages,
+    dry_run_monthly_cycle,
     monthly_vintage_id,
     production_stages,
     run_monthly_cycle,
@@ -58,13 +59,28 @@ def test_monthly_cycle_runs_in_order_and_is_idempotent(tmp_path: Path) -> None:
 
     assert calls == ["prices", "filings", "fundamentals", "macro", "news", "publish"]
     assert first["status"] == "completed"
-    assert second == {
+    assert {key: value for key, value in second.items() if key != "run_id"} == {
         "cycle_key": "2026-09",
         "status": "already_completed",
         "vintage_id": first["vintage_id"],
         "stages": {},
     }
     assert PredictionVintageStore(repository).count() == 1
+
+
+def test_dry_run_does_not_mutate_database(tmp_path: Path) -> None:
+    path = tmp_path / "dry-run.duckdb"
+    repository = MarketDataRepository(path)
+    PredictionVintageStore(repository)
+    before = path.read_bytes()
+
+    result = dry_run_monthly_cycle(
+        path, now=datetime(2026, 10, 5, tzinfo=timezone.utc)
+    )
+
+    assert result["mode"] == "dry_run"
+    assert result["stages"][-1] == "publish_momentum_126d"
+    assert path.read_bytes() == before
 
 
 def test_failed_cycle_is_recorded_and_can_be_retried(tmp_path: Path) -> None:
@@ -94,6 +110,12 @@ def test_failed_cycle_is_recorded_and_can_be_retried(tmp_path: Path) -> None:
             "SELECT status, vintage_id, error FROM monthly_research_cycles"
         ).fetchone()
     assert row == ("completed", result["vintage_id"], None)
+    with repository.connect() as connection:
+        attempts = connection.execute(
+            "SELECT status, failed_stage, error_code FROM monthly_cycle_runs ORDER BY started_at"
+        ).fetchall()
+    assert attempts[0] == ("failed", "fundamentals", "RuntimeError")
+    assert attempts[1][0] == "completed"
 
 
 def test_cycle_rejects_non_momentum_publication(tmp_path: Path) -> None:

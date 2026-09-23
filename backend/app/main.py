@@ -11,8 +11,10 @@ from .fred_macro import FRED_SERIES
 from .fundamentals import FundamentalRepository
 from .macro import MacroRepository
 from .market_data import MarketDataRepository
+from .monthly_cycle import production_stages, run_monthly_cycle
 from .outcomes import evaluate_prediction_vintage
 from .prediction_store import PredictionVintageStore
+from .production_readiness import run_preflight
 from .schemas import (
     DataStatusResponse,
     EvidenceItemResponse,
@@ -78,6 +80,16 @@ async def authenticate_private_api(request: Request, call_next):
 @app.get("/api/v1/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", service=settings.app_name, environment=settings.environment)
+
+
+@app.post("/api/v1/admin/monthly-cycle")
+def trigger_monthly_cycle() -> dict:
+    """Run in the API service so the sole DuckDB writer owns the mounted volume."""
+    preflight = run_preflight(settings)
+    if preflight["status"] != "ready":
+        raise HTTPException(status_code=503, detail=preflight)
+    repository = MarketDataRepository(settings.database_path)
+    return run_monthly_cycle(repository, production_stages(repository))
 
 
 @app.get("/api/v1/data/status", response_model=DataStatusResponse)

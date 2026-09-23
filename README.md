@@ -85,6 +85,11 @@ For a Linux scheduler whose working directory is `backend`, use:
 python -m app.monthly_cycle
 ```
 
+Production readiness and a mutation-free rehearsal are available with
+`python -m app.monthly_cycle --preflight` and `python -m app.monthly_cycle --dry-run`.
+The exact, intentionally-not-enabled Railway architecture, UTC schedule, variables,
+and rollback procedure are in [`docs/railway-monthly-cycle.md`](docs/railway-monthly-cycle.md).
+
 The scheduled process must use the same persistent database path and secrets as
 the API (`SIGNALLENS_DATABASE_PATH`, `SIGNALLENS_SEC_USER_AGENT`, and
 `SIGNALLENS_FRED_API_KEY`). Do not schedule a separate service with an ephemeral
