@@ -4,9 +4,19 @@ Last updated: 2026-09-23
 
 ## Current milestone
 
-Milestone 6 — private deployment: complete. The API, persistent database,
-application-managed backups, authenticated monthly endpoint, and stateless monthly
-scheduler are deployed and verified.
+## Milestone 6 — Private deployment (complete)
+
+- [x] Authentication and secrets management
+- [x] Continuous integration
+- [x] Private GitHub repository
+- [x] Managed frontend, API, and database deployment
+- [x] Application-managed backups with freshness and retention gates
+- [x] Stateless scheduled monthly ranking job through the authenticated API
+
+### Post-release hardening (non-blocking)
+
+- [ ] Replicate validated backups outside the Railway volume
+- [ ] Add automated monthly-cycle failure notifications
 
 ## Delivered
 
@@ -84,8 +94,7 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 ## Verification
 
 - All 115 backend tests and Python compilation pass in the release verification environment.
-- GitHub Actions passes, including a clean frontend `npm ci`, ESLint, and the
-  optimized production build under Node 24 and npm 11.
+- GitHub Actions passes, including a clean frontend `npm ci`, ESLint, and the optimized production build under Node 24 and npm 11.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
 - The immutable September 2026 production vintage is
   `5dcce39d-f98a-55b1-9010-279501142186` and uses `momentum_126d`.

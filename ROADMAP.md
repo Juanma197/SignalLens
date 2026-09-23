@@ -46,6 +46,18 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Managed frontend, API, and database deployment
 - [x] Application-managed backups with freshness and retention gates
 - [x] Stateless scheduled monthly ranking job through the authenticated API
+
+### Post-release hardening (non-blocking)
+
+- [ ] Replicate validated backups outside the Railway volume
+- [ ] Add automated monthly-cycle failure notifications
+
+- [x] Authentication and secrets management
+- [x] Continuous integration
+- [x] Private GitHub repository
+- [x] Managed frontend, API, and database deployment
+- [x] Application-managed backups with freshness and retention gates
+- [x] Stateless scheduled monthly ranking job through the authenticated API
 - [ ] Automated off-platform backup replication and failure notifications
 
 ## Guardrails
