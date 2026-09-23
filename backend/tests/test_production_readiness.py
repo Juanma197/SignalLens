@@ -112,3 +112,21 @@ def test_admin_trigger_refuses_to_create_a_missing_database(
 
     assert response.status_code == 503
     assert not path.exists()
+
+
+def test_admin_monthly_cycle_requires_bearer_authentication(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import app.main as main
+
+    token = "x" * 32
+    path = tmp_path / "volume" / "signal.duckdb"
+    initialized_database(path)
+    monkeypatch.setattr(
+        main, "settings", settings_for(path, path.parent, tmp_path / "backups", api_token=token)
+    )
+
+    response = TestClient(main.app).post("/api/v1/admin/monthly-cycle")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid or missing bearer token"}

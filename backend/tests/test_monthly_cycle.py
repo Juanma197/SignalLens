@@ -12,7 +12,9 @@ from app.monthly_cycle import (
     monthly_vintage_id,
     production_stages,
     run_monthly_cycle,
+    run_production_monthly_cycle,
 )
+from app.config import Settings
 from app.prediction_store import PredictionVintageStore
 
 
@@ -66,6 +68,37 @@ def test_monthly_cycle_runs_in_order_and_is_idempotent(tmp_path: Path) -> None:
         "stages": {},
     }
     assert PredictionVintageStore(repository).count() == 1
+
+
+def test_completed_production_month_is_read_only_no_op_without_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = MarketDataRepository(tmp_path / "cycle.duckdb")
+    now = datetime(2026, 9, 23, 9, tzinfo=timezone.utc)
+    first = run_monthly_cycle(repository, stages(repository, []), now=now)
+    assert monthly_vintage_id("2026-09") == "5dcce39d-f98a-55b1-9010-279501142186"
+    before_count = PredictionVintageStore(repository).count()
+    monkeypatch.setattr(
+        "app.monthly_cycle.create_backup",
+        lambda *_args, **_kwargs: pytest.fail("completed month must not be backed up"),
+    )
+    settings = Settings(
+        database_path=repository.path,
+        persistent_volume_path=tmp_path,
+        backup_path=tmp_path / "backups",
+        sec_user_agent="SignalLens test test@example.com",
+        fred_api_key="test-key",
+        api_token="x" * 32,
+        _env_file=None,
+    )
+
+    result = run_production_monthly_cycle(
+        repository, stages(repository, []), now=now, settings=settings
+    )
+
+    assert result["status"] == "already_completed"
+    assert result["vintage_id"] == first["vintage_id"]
+    assert PredictionVintageStore(repository).count() == before_count == 1
 
 
 def test_dry_run_does_not_mutate_database(tmp_path: Path) -> None:
