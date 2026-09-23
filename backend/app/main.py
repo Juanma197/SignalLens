@@ -1,7 +1,9 @@
 from datetime import date, datetime, timedelta, timezone
+from hmac import compare_digest
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .config import get_settings
 from .evidence import EvidenceRepository, EvidenceType
@@ -9,6 +11,12 @@ from .fred_macro import FRED_SERIES
 from .fundamentals import FundamentalRepository
 from .macro import MacroRepository
 from .market_data import MarketDataRepository
+from .monthly_cycle import (
+    ProductionBackupError,
+    ProductionPreflightError,
+    production_stages,
+    run_production_monthly_cycle,
+)
 from .outcomes import evaluate_prediction_vintage
 from .prediction_store import PredictionVintageStore
 from .schemas import (
@@ -39,10 +47,67 @@ app = FastAPI(title=settings.app_name, version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True,
                    allow_methods=["GET", "PUT", "DELETE"], allow_headers=["*"])
 
+PUBLIC_API_PATHS = {"/api/v1/health"}
+PRIVATE_DOCUMENTATION_PATHS = {"/docs", "/openapi.json", "/redoc"}
+
+
+@app.middleware("http")
+async def authenticate_private_api(request: Request, call_next):
+    token = settings.api_token
+    is_private_path = (
+        request.url.path.startswith("/api/v1/")
+        or request.url.path in PRIVATE_DOCUMENTATION_PATHS
+    )
+    requires_authentication = (
+        is_private_path
+        and request.url.path not in PUBLIC_API_PATHS
+        and token is not None
+    )
+    if requires_authentication:
+        scheme, _, supplied_token = request.headers.get(
+            "Authorization", ""
+        ).partition(" ")
+        expected_token = token.get_secret_value()
+        if (
+            scheme.lower() != "bearer"
+            or not supplied_token
+            or not compare_digest(supplied_token, expected_token)
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing bearer token"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    return await call_next(request)
+
 
 @app.get("/api/v1/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", service=settings.app_name, environment=settings.environment)
+
+
+@app.post("/api/v1/admin/monthly-cycle")
+def trigger_monthly_cycle() -> dict:
+    """Run in the API service so the sole DuckDB writer owns the mounted volume."""
+    repository = MarketDataRepository(settings.database_path)
+    try:
+        return run_production_monthly_cycle(
+            repository, production_stages(repository, settings=settings), settings=settings
+        )
+    except ProductionPreflightError as exc:
+        raise HTTPException(status_code=503, detail=exc.report) from None
+    except ProductionBackupError as exc:
+        # Do not reflect the original exception text: paths and configuration
+        # values can contain operational secrets.
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "command": "monthly_cycle",
+                "status": "blocked",
+                "failed_stage": "backup",
+                "error": {"code": exc.error_code, "message": "Fresh backup failed"},
+            },
+        ) from None
 
 
 @app.get("/api/v1/data/status", response_model=DataStatusResponse)

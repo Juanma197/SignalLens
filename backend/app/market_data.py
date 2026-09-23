@@ -4,10 +4,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
+from time import sleep
 from typing import Iterable, Iterator, Protocol
 from uuid import uuid4
 
 import duckdb
+import pandas as pd
 
 from .universe import Security
 
@@ -33,26 +35,89 @@ class PriceProvider(Protocol):
 class YFinanceProvider:
     name = "yfinance"
 
+    def __init__(
+        self,
+        request_timeout: int = 20,
+        max_attempts: int = 3,
+        retry_delay: float = 1.0,
+    ) -> None:
+        if request_timeout <= 0:
+            raise ValueError("request_timeout must be positive")
+        if max_attempts <= 0:
+            raise ValueError("max_attempts must be positive")
+        if retry_delay < 0:
+            raise ValueError("retry_delay cannot be negative")
+        self.request_timeout = request_timeout
+        self.max_attempts = max_attempts
+        self.retry_delay = retry_delay
+
     def download(self, tickers: tuple[str, ...], start: date, end: date) -> list[PriceBar]:
         import yfinance as yf
 
-        frame = yf.download(
-            list(tickers), start=start.isoformat(), end=end.isoformat(),
-            auto_adjust=False, actions=False, group_by="ticker", progress=False,
-            threads=True,
-        )
         bars: list[PriceBar] = []
         for ticker in tickers:
-            ticker_frame = frame[ticker] if len(tickers) > 1 else frame
-            for timestamp, row in ticker_frame.dropna(subset=["Close"]).iterrows():
-                adjusted = row.get("Adj Close", row["Close"])
-                bars.append(PriceBar(
-                    ticker=ticker,
-                    trading_date=timestamp.date(),
-                    open=float(row["Open"]), high=float(row["High"]),
-                    low=float(row["Low"]), close=float(row["Close"]),
-                    adjusted_close=float(adjusted), volume=int(row["Volume"]),
-                ))
+            last_error: Exception | None = None
+            for attempt in range(1, self.max_attempts + 1):
+                try:
+                    frame = yf.download(
+                        ticker,
+                        start=start.isoformat(),
+                        end=end.isoformat(),
+                        auto_adjust=False,
+                        actions=False,
+                        group_by="ticker",
+                        progress=False,
+                        threads=False,
+                        timeout=self.request_timeout,
+                    )
+                    if frame.empty:
+                        raise RuntimeError("provider returned an empty frame")
+
+                    ticker_frame = frame
+                    if getattr(frame.columns, "nlevels", 1) > 1:
+                        first_level = frame.columns.get_level_values(0)
+                        if ticker in first_level:
+                            ticker_frame = frame[ticker]
+                        elif len(set(first_level)) == 1:
+                            ticker_frame = frame.xs(
+                                first_level[0], axis=1, level=0
+                            )
+
+                    ticker_bars: list[PriceBar] = []
+                    for timestamp, row in ticker_frame.dropna(
+                        subset=["Close"]
+                    ).iterrows():
+                        adjusted = (
+                            row["Adj Close"]
+                            if "Adj Close" in ticker_frame.columns
+                            else row["Close"]
+                        )
+                        ticker_bars.append(
+                            PriceBar(
+                                ticker=ticker,
+                                trading_date=timestamp.date(),
+                                open=float(row["Open"]),
+                                high=float(row["High"]),
+                                low=float(row["Low"]),
+                                close=float(row["Close"]),
+                                adjusted_close=float(adjusted),
+                                volume=int(row["Volume"]),
+                            )
+                        )
+                    if not ticker_bars:
+                        raise RuntimeError("provider returned no usable price bars")
+                    bars.extend(ticker_bars)
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < self.max_attempts:
+                        sleep(self.retry_delay * attempt)
+            else:
+                detail = str(last_error) if last_error else "unknown error"
+                raise RuntimeError(
+                    f"Failed to download {ticker} after "
+                    f"{self.max_attempts} attempts: {detail}"
+                ) from last_error
         return bars
 
 
@@ -138,22 +203,56 @@ class MarketDataRepository:
                 for bar in bars
             ]
 
+            incoming = pd.DataFrame(
+                rows,
+                columns=[
+                    "ticker",
+                    "trading_date",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "adjusted_close",
+                    "volume",
+                    "source",
+                    "ingested_at",
+                ],
+            )
             with self.connect() as connection:
-                connection.executemany(
-                    """
-                    INSERT OR REPLACE INTO price_bars
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    rows,
-                )
-                connection.execute(
-                    """
-                    UPDATE ingestion_runs
-                    SET completed_at=?, status='completed', rows_written=?
-                    WHERE run_id=?
-                    """,
-                    [ingested_at, len(bars), run_id],
-                )
+                connection.register("incoming_price_bars", incoming)
+                connection.execute("BEGIN TRANSACTION")
+                try:
+                    connection.execute(
+                        """
+                        INSERT OR REPLACE INTO price_bars
+                        SELECT
+                            ticker,
+                            CAST(trading_date AS DATE),
+                            open,
+                            high,
+                            low,
+                            close,
+                            adjusted_close,
+                            CAST(volume AS BIGINT),
+                            source,
+                            CAST(ingested_at AS TIMESTAMP)
+                        FROM incoming_price_bars
+                        """
+                    )
+                    connection.execute(
+                        """
+                        UPDATE ingestion_runs
+                        SET completed_at=?, status='completed', rows_written=?
+                        WHERE run_id=?
+                        """,
+                        [ingested_at, len(bars), run_id],
+                    )
+                    connection.execute("COMMIT")
+                except Exception:
+                    connection.execute("ROLLBACK")
+                    raise
+                finally:
+                    connection.unregister("incoming_price_bars")
             return run_id
 
         except (Exception, KeyboardInterrupt) as exc:

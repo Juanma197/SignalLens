@@ -38,13 +38,19 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - Source timestamps and provenance
 - Missing-data and stale-data handling
 
-## Milestone 6 — Private deployment
+## Milestone 6 — Private deployment (complete)
 
-- Authentication and secrets management
-- Continuous integration
-- Private GitHub repository
-- Managed frontend, API, and database deployment
-- Monitoring, backups, and scheduled ranking jobs
+- [x] Authentication and secrets management
+- [x] Continuous integration
+- [x] Private GitHub repository
+- [x] Managed frontend, API, and database deployment
+- [x] Application-managed backups with freshness and retention gates
+- [x] Stateless scheduled monthly ranking job through the authenticated API
+
+### Post-release hardening (non-blocking)
+
+- [ ] Replicate validated backups outside the Railway volume
+- [ ] Add automated monthly-cycle failure notifications
 
 ## Guardrails
 

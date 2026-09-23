@@ -218,9 +218,19 @@ const unavailableOutcomes: OutcomeResponse = {
 };
 
 async function fetchJson<T>(path: string, fallbackValue: T): Promise<T> {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+  const apiUrl =
+    process.env.SIGNALLENS_API_URL ??
+    process.env.NEXT_PUBLIC_API_URL ??
+    "http://127.0.0.1:8000";
+  const apiToken = process.env.SIGNALLENS_API_TOKEN;
+  const headers = apiToken
+    ? { Authorization: `Bearer ${apiToken}` }
+    : undefined;
   try {
-    const response = await fetch(`${apiUrl}${path}`, { cache: "no-store" });
+    const response = await fetch(`${apiUrl}${path}`, {
+      cache: "no-store",
+      headers,
+    });
     return response.ok ? await response.json() : fallbackValue;
   } catch {
     return fallbackValue;

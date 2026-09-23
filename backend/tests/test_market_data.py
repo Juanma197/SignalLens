@@ -1,9 +1,13 @@
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
+import sys
+
+import pandas as pd
 
 import pytest
 
-from app.market_data import MarketDataRepository, PriceBar, validate_bars
+from app.market_data import MarketDataRepository, PriceBar, YFinanceProvider, validate_bars
 from app.universe import Security
 
 
@@ -72,3 +76,78 @@ def test_validation_rejects_missing_ticker() -> None:
     bar = PriceBar("AAA", date(2026, 9, 18), 100, 105, 99, 103, 102.5, 1000)
     with pytest.raises(ValueError, match="No data returned"):
         validate_bars([bar], {"AAA", "BBB"})
+
+
+
+def _provider_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Open": [100.0],
+            "High": [105.0],
+            "Low": [99.0],
+            "Close": [103.0],
+            "Adj Close": [102.5],
+            "Volume": [1000],
+        },
+        index=pd.to_datetime(["2026-09-18"]),
+    )
+
+
+def test_yfinance_provider_downloads_sequentially_with_timeouts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, bool, int]] = []
+
+    def fake_download(ticker, **kwargs):
+        calls.append((ticker, kwargs["threads"], kwargs["timeout"]))
+        return _provider_frame()
+
+    monkeypatch.setitem(sys.modules, "yfinance", SimpleNamespace(download=fake_download))
+    provider = YFinanceProvider(request_timeout=7, max_attempts=2, retry_delay=0)
+
+    bars = provider.download(
+        ("AAA", "BBB"), date(2026, 9, 1), date(2026, 9, 19)
+    )
+
+    assert [bar.ticker for bar in bars] == ["AAA", "BBB"]
+    assert calls == [("AAA", False, 7), ("BBB", False, 7)]
+
+
+def test_yfinance_provider_retries_a_failed_ticker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def flaky_download(ticker, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise TimeoutError("request timed out")
+        return _provider_frame()
+
+    monkeypatch.setitem(sys.modules, "yfinance", SimpleNamespace(download=flaky_download))
+    provider = YFinanceProvider(request_timeout=5, max_attempts=2, retry_delay=0)
+
+    bars = provider.download(
+        ("AAA",), date(2026, 9, 1), date(2026, 9, 19)
+    )
+
+    assert attempts == 2
+    assert len(bars) == 1
+
+
+def test_yfinance_provider_reports_ticker_after_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def empty_download(ticker, **kwargs):
+        return pd.DataFrame()
+
+    monkeypatch.setitem(sys.modules, "yfinance", SimpleNamespace(download=empty_download))
+    provider = YFinanceProvider(request_timeout=5, max_attempts=2, retry_delay=0)
+
+    with pytest.raises(
+        RuntimeError, match="Failed to download AAA after 2 attempts"
+    ):
+        provider.download(
+            ("AAA",), date(2026, 9, 1), date(2026, 9, 19)
+        )
