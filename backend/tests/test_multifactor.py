@@ -34,6 +34,7 @@ def fact(
     value: float,
     *,
     available_at: str = "2026-06-01T00:00:00Z",
+    retrieved_at: str | None = None,
     period_end: str = "2026-03-31",
 ) -> dict:
     return {
@@ -41,6 +42,7 @@ def fact(
         "metric": metric,
         "value": value,
         "available_at": available_at,
+        "retrieved_at": retrieved_at or available_at,
         "period_end": period_end,
     }
 
@@ -134,6 +136,49 @@ def test_scoring_is_point_in_time_and_ignores_future_facts() -> None:
     ).set_index("ticker")
 
     assert result.loc["AAA", "profit_margin"] == pytest.approx(0.1)
+    assert result.loc["BBB", "profit_margin"] == pytest.approx(0.1)
+
+
+def test_scoring_ignores_facts_retrieved_after_the_boundary() -> None:
+    prices = pd.concat(
+        [
+            price_history("AAA", daily_return=0.002),
+            price_history("BBB", daily_return=0.002),
+        ],
+        ignore_index=True,
+    )
+    fundamentals = pd.DataFrame(
+        complete_facts(
+            "AAA",
+            revenue=1_000,
+            net_income=100,
+            cash=200,
+            liabilities=400,
+        )
+        + complete_facts(
+            "BBB",
+            revenue=1_000,
+            net_income=100,
+            cash=200,
+            liabilities=400,
+        )
+        + [
+            fact(
+                "BBB",
+                "net_income",
+                900,
+                available_at="2026-05-01T00:00:00Z",
+                retrieved_at="2026-09-22T00:00:00Z",
+            )
+        ]
+    )
+
+    result = build_multifactor_scores(
+        prices,
+        fundamentals,
+        as_of=pd.Timestamp("2026-07-29"),
+    ).set_index("ticker")
+
     assert result.loc["BBB", "profit_margin"] == pytest.approx(0.1)
 
 
