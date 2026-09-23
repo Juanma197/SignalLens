@@ -7,7 +7,7 @@ import pandas as pd
 
 
 STRATEGY_NAME = "multifactor_research"
-STRATEGY_VERSION = "0.1.0"
+STRATEGY_VERSION = "0.1.1"
 MOMENTUM_DAYS = 126
 TREND_DAYS = 21
 RISK_DAYS = 63
@@ -51,19 +51,30 @@ def _latest_fundamentals(
     if fundamental_facts.empty:
         return pd.DataFrame(columns=metrics)
 
+    required = {
+        "ticker", "metric", "value", "available_at", "retrieved_at", "period_end"
+    }
+    missing = required.difference(fundamental_facts.columns)
+    if missing:
+        raise ValueError(f"Missing fundamental columns: {sorted(missing)}")
+
     facts = fundamental_facts.copy()
     facts["available_at"] = pd.to_datetime(facts["available_at"], utc=True)
+    facts["retrieved_at"] = pd.to_datetime(facts["retrieved_at"], utc=True)
     facts["period_end"] = pd.to_datetime(facts["period_end"])
     boundary = pd.Timestamp(as_of)
     if boundary.tzinfo is None:
         boundary = boundary.tz_localize("UTC")
     else:
         boundary = boundary.tz_convert("UTC")
-    facts = facts.loc[facts["available_at"].le(boundary)]
+    facts = facts.loc[
+        facts["available_at"].le(boundary)
+        & facts["retrieved_at"].le(boundary)
+    ]
     facts = facts.loc[facts["metric"].isin(metrics)]
     facts = facts.sort_values(
-        ["ticker", "metric", "available_at", "period_end"],
-        ascending=[True, True, False, False],
+        ["ticker", "metric", "available_at", "retrieved_at", "period_end"],
+        ascending=[True, True, False, False, False],
     ).drop_duplicates(["ticker", "metric"])
     if facts.empty:
         return pd.DataFrame(columns=metrics)
