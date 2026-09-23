@@ -7,6 +7,7 @@ from app.config import Settings
 from app.market_data import MarketDataRepository
 from app.prediction_store import PredictionVintageStore
 from app.production_readiness import run_preflight
+from app.database_backup import create_backup
 import app.production_readiness as readiness
 
 
@@ -75,6 +76,19 @@ def test_preflight_requires_a_recent_backup(tmp_path: Path) -> None:
                            now=datetime(2026, 10, 5, tzinfo=timezone.utc))
     backup = next(item for item in report["checks"] if item["name"] == "latest_backup")
     assert backup["status"] == "fail"
+
+
+def test_preflight_recognises_recent_validated_application_backup(tmp_path: Path) -> None:
+    path = tmp_path / "volume" / "signal.duckdb"
+    initialized_database(path)
+    backups = tmp_path / "volume" / "backups"
+    created = create_backup(path, backups)
+
+    report = run_preflight(settings_for(path, path.parent, backups))
+
+    backup = next(item for item in report["checks"] if item["name"] == "latest_backup")
+    assert backup["status"] == "pass"
+    assert str(created) in backup["detail"]
 
 
 def test_admin_trigger_refuses_to_create_a_missing_database(

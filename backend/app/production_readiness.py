@@ -9,6 +9,7 @@ from typing import Any
 import duckdb
 
 from .config import Settings
+from .database_backup import validated_backups, verify_backup
 
 
 REQUIRED_TABLES = {"price_bars", "prediction_vintages", "prediction_records"}
@@ -74,13 +75,18 @@ def run_preflight(settings: Settings, *, now: datetime | None = None) -> dict[st
 
     backup = settings.backup_path
     latest: Path | None = None
-    if backup:
-        backup = backup.expanduser().resolve()
-        candidates = [backup] if backup.is_file() else ([item for item in backup.iterdir() if item.is_file()] if backup.is_dir() else [])
-        latest = max(candidates, key=lambda item: item.stat().st_mtime, default=None)
+    backup = backup.expanduser().resolve()
+    if backup.is_file():
+        try:
+            verify_backup(backup)
+            latest = backup
+        except (OSError, duckdb.Error, ValueError):
+            latest = None
+    else:
+        latest = next(iter(validated_backups(backup)), None)
     age_hours = ((checked_at.timestamp() - latest.stat().st_mtime) / 3600) if latest else None
     fresh = age_hours is not None and 0 <= age_hours <= settings.backup_max_age_hours
-    checks.append(_check("latest_backup", fresh, f"latest={latest}; age_hours={round(age_hours, 1) if age_hours is not None else None}; max_age_hours={settings.backup_max_age_hours}"))
+    checks.append(_check("latest_backup", fresh, f"latest_validated={latest}; age_hours={round(age_hours, 1) if age_hours is not None else None}; max_age_hours={settings.backup_max_age_hours}"))
 
     return {
         "command": "production_preflight",
