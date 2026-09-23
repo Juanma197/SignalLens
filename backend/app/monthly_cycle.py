@@ -12,6 +12,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import duckdb
 
 from .config import get_settings
+from .database_backup import create_backup
 from .evidence import EvidenceRepository
 from .evidence_ingest import ingest_evidence
 from .fred_macro import FRED_SERIES, FREDMacroProvider
@@ -235,6 +236,25 @@ def run_monthly_cycle(
         raise
 
 
+def run_production_monthly_cycle(
+    repository: MarketDataRepository,
+    stages: CycleStages,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Back up the database before the production cycle performs any write."""
+    settings = get_settings()
+    backup = create_backup(
+        repository.path,
+        settings.backup_path,
+        retention_count=settings.backup_retention_count,
+        now=now,
+    )
+    result = run_monthly_cycle(repository, stages, now=now)
+    result["backup"] = str(backup)
+    return result
+
+
 def dry_run_monthly_cycle(path: Path, *, now: datetime | None = None) -> dict[str, Any]:
     """Plan a run using read-only SQL; never construct a mutating repository."""
     captured_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -358,7 +378,7 @@ def main() -> None:
         print(json.dumps(report, default=str, sort_keys=True))
         raise SystemExit(0 if report["status"] == "validated" else 1)
     repository = MarketDataRepository(path)
-    print(json.dumps(run_monthly_cycle(repository, production_stages(repository)), default=str))
+    print(json.dumps(run_production_monthly_cycle(repository, production_stages(repository)), default=str))
 
 
 if __name__ == "__main__":

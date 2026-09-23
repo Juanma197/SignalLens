@@ -87,6 +87,13 @@ python -m app.monthly_cycle
 
 Production readiness and a mutation-free rehearsal are available with
 `python -m app.monthly_cycle --preflight` and `python -m app.monthly_cycle --dry-run`.
+Create and verify the initial application-managed backup with
+`python -m app.database_backup create` and
+`python -m app.database_backup verify /data/backups/<backup>.duckdb`. Production
+monthly runs then create a validated backup before any cycle mutation and retain
+three by default (`SIGNALLENS_BACKUP_RETENTION_COUNT`). Same-volume backups cover
+corruption and operator mistakes, not loss of the entire Railway volume; see the
+runbook for safe restore and off-platform guidance.
 The exact, intentionally-not-enabled Railway architecture, UTC schedule, variables,
 and rollback procedure are in [`docs/railway-monthly-cycle.md`](docs/railway-monthly-cycle.md).
 

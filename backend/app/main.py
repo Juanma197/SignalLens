@@ -11,7 +11,7 @@ from .fred_macro import FRED_SERIES
 from .fundamentals import FundamentalRepository
 from .macro import MacroRepository
 from .market_data import MarketDataRepository
-from .monthly_cycle import production_stages, run_monthly_cycle
+from .monthly_cycle import production_stages, run_production_monthly_cycle
 from .outcomes import evaluate_prediction_vintage
 from .prediction_store import PredictionVintageStore
 from .production_readiness import run_preflight
@@ -89,7 +89,7 @@ def trigger_monthly_cycle() -> dict:
     if preflight["status"] != "ready":
         raise HTTPException(status_code=503, detail=preflight)
     repository = MarketDataRepository(settings.database_path)
-    return run_monthly_cycle(repository, production_stages(repository))
+    return run_production_monthly_cycle(repository, production_stages(repository))
 
 
 @app.get("/api/v1/data/status", response_model=DataStatusResponse)

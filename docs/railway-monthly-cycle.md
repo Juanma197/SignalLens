@@ -29,16 +29,37 @@ SIGNALLENS_ENVIRONMENT=production
 SIGNALLENS_DATABASE_PATH=/data/signallens.duckdb
 SIGNALLENS_PERSISTENT_VOLUME_PATH=/data
 SIGNALLENS_BACKUP_PATH=/data/backups
+SIGNALLENS_BACKUP_RETENTION_COUNT=3
 SIGNALLENS_BACKUP_MAX_AGE_HOURS=48
 SIGNALLENS_SEC_USER_AGENT=SignalLens ops monitored-address@example.com
 SIGNALLENS_FRED_API_KEY=<secret>
 SIGNALLENS_API_TOKEN=<at-least-32-character-secret>
 ```
 
-The backup location must contain a successfully completed, recent copy made while
-DuckDB is quiescent (or by DuckDB's supported export/copy workflow). Prefer an
-off-platform backup; if `/data/backups` is used for the freshness gate, separately
-replicate it off-platform.
+The application creates transactionally consistent backups with DuckDB's supported
+`EXPORT DATABASE` and `IMPORT DATABASE` operations. It writes a temporary database
+under `/data/backups`, opens that database read-only to check the required tables,
+and only then atomically renames it into the rolling set. The default retention is
+three validated backups.
+Every production monthly run creates one before its first cycle-ledger, ingestion,
+or publication write; any backup failure aborts the run before publication.
+
+**Backups on `/data/backups` protect against database corruption and operator error,
+but they do not protect against total loss of the Railway volume.** Copy validated
+backups off-platform when that protection is required.
+
+For initial setup, or to take a supervised manual backup, run:
+
+```bash
+cd /app
+python -m app.database_backup create
+python -m app.database_backup verify /data/backups/signallens-backup-<timestamp>.duckdb
+```
+
+The commands return non-zero on failure. Never use `cp` on the open live DuckDB
+file. Preflight ignores incomplete, corrupt, incorrectly named, and structurally
+invalid files; only a recent backup that passes the same read-only validation meets
+the backup check.
 
 ## Mandatory preflight and rehearsal
 
@@ -101,7 +122,17 @@ research model. Never delete or edit a prediction vintage to force a retry.
    take a fresh backup, repeat preflight and dry-run, then invoke the endpoint once.
 4. If the reserved vintage exists, do not restore over it, delete it, or republish;
    retrying will reuse it and repair only the cycle ledger.
-5. Restore a backup only for verified database corruption: stop/scale down the API,
-   preserve the damaged file, restore to the same `/data/signallens.duckdb` path,
-   run preflight read-only, and start exactly one API replica. Confirm immutable
-   vintage counts before re-enabling any future schedule.
+5. Restore a backup only for verified database corruption. Stop/scale down the API
+   so no DuckDB connection is open. Move (do not overwrite) the damaged database to
+   a separate diagnostic name, leaving `/data/signallens.duckdb` absent. Verify and
+   restore with:
+
+   ```bash
+   python -m app.database_backup verify /data/backups/signallens-backup-<timestamp>.duckdb
+   python -m app.database_backup restore /data/backups/signallens-backup-<timestamp>.duckdb /data/signallens.duckdb
+   ```
+
+   The restore command refuses an existing destination, copies through DuckDB into
+   a temporary database, validates it, and atomically installs it. Run preflight
+   read-only, then start exactly one API replica. Confirm immutable vintage counts
+   before re-enabling any future schedule.
