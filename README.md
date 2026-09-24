@@ -4,7 +4,11 @@ SignalLens is a research dashboard for periodically ranking public companies and
 
 ## Current milestone
 
-Milestone 5 is complete. SignalLens now combines immutable 126-day momentum ranking vintages with point-in-time SEC fundamentals and filings, recent public news metadata, FRED macro context, provenance, freshness states, and missing-data handling. Evidence is preserved with each published vintage so historical research cannot silently change.
+Milestone 7 adds a provider-independent, point-in-time global security master and
+immutable monthly universe snapshots as shadow research infrastructure. It does
+not change the live 30-stock universe or the `momentum_126d` production strategy.
+See [`docs/global-universe.md`](docs/global-universe.md) for source, licensing,
+identity, FX, command, and operational limitations.
 
 ## Requirements
 
