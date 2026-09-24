@@ -88,3 +88,15 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [ ] Add global fundamentals and multifactor scoring
 - [ ] Complete global walk-forward validation
 - [ ] Review and explicitly approve any production promotion
+
+## Milestone 9 — Global multifactor shadow research (complete, promotion incomplete)
+
+- [x] Provider-independent raw/report/normalized point-in-time fundamental schemas
+- [x] Validated operator-file route for UK, Canada and Europe without prohibited scraping
+- [x] Robust peer-relative multifactor features, risk gates and confidence penalties
+- [x] Fixed baseline and constrained pre-cutoff learned-weight contract
+- [x] Separate immutable shadow vintages, authenticated read API and labelled dashboard
+- [x] Structured validation/import/feature/evaluation/vintage/status commands
+- [x] Production tables, publisher, scheduler and official cards remain isolated
+- [ ] Supply licensed regional data and complete a representative global walk-forward evaluation
+- [ ] Approve production promotion (explicitly not approved)

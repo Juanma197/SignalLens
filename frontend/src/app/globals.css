@@ -88,6 +88,10 @@ footer { border-top:1px solid var(--line); padding:16px 30px; font-size:12px; ov
 
 .macro-panel { margin-bottom:20px; }
 .universe-panel { margin-bottom:20px; }
+.shadow-panel { margin-bottom:20px; }
+.lens-list { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:22px; }
+.lens-list span { display:flex; justify-content:space-between; gap:8px; padding:8px; color:var(--muted); background:#0b1511; border:1px solid var(--line); border-radius:7px; font-size:11px; text-transform:capitalize; }
+.lens-list b { color:var(--ink); }
 .coverage-grid { display:grid; grid-template-columns:repeat(4,1fr); border-top:1px solid var(--line); }
 .coverage-grid div { display:flex; flex-direction:column; gap:6px; padding:22px 30px; border-right:1px solid var(--line); }
 .coverage-grid div:last-child { border-right:0; }
