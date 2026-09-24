@@ -87,6 +87,12 @@ footer { border-top:1px solid var(--line); padding:16px 30px; font-size:12px; ov
 .history-row span { color:var(--muted); font-size:11px; }
 
 .macro-panel { margin-bottom:20px; }
+.universe-panel { margin-bottom:20px; }
+.coverage-grid { display:grid; grid-template-columns:repeat(4,1fr); border-top:1px solid var(--line); }
+.coverage-grid div { display:flex; flex-direction:column; gap:6px; padding:22px 30px; border-right:1px solid var(--line); }
+.coverage-grid div:last-child { border-right:0; }
+.coverage-grid b { color:var(--green); font-size:25px; }
+.coverage-grid span { color:var(--muted); font-size:11px; }
 .macro-coverage { text-transform:uppercase; letter-spacing:.12em; font-size:10px; font-weight:800; border:1px solid var(--line); border-radius:20px; padding:8px 12px; }
 .macro-coverage.complete { color:var(--green); border-color:#315944; background:#14271d; }
 .macro-coverage.partial { color:#e3b687; border-color:#60472e; background:#281f16; }
@@ -117,4 +123,4 @@ footer { border-top:1px solid var(--line); padding:16px 30px; font-size:12px; ov
 .vintage-macro-values span,.vintage-macro-values small { color:var(--muted); font-size:9px; }
 .vintage-macro-values b { font-size:14px; }
 
-@media (max-width:760px) { .hero{padding-top:55px}.data-status{grid-template-columns:repeat(2,1fr)}.grid,.outcome-list,.macro-grid,.vintage-macro-values{grid-template-columns:1fr}article,.outcome-row,.macro-card{border-right:0;border-bottom:1px solid var(--line)}.outcome-row:last-child,.macro-card:last-child{border-bottom:0}.watchlist-row{grid-template-columns:1fr}.history-row{grid-template-columns:1fr;align-items:start}.history-row>div:nth-child(2){align-items:start}.history-row>div:last-child{text-align:left}.panel>header,.vintage-macro-heading{align-items:start;gap:18px;flex-direction:column} }
+@media (max-width:760px) { .hero{padding-top:55px}.data-status{grid-template-columns:repeat(2,1fr)}.grid,.outcome-list,.macro-grid,.vintage-macro-values,.coverage-grid{grid-template-columns:1fr}.coverage-grid div,article,.outcome-row,.macro-card{border-right:0;border-bottom:1px solid var(--line)}.coverage-grid div:last-child,.outcome-row:last-child,.macro-card:last-child{border-bottom:0}.watchlist-row{grid-template-columns:1fr}.history-row{grid-template-columns:1fr;align-items:start}.history-row>div:nth-child(2){align-items:start}.history-row>div:last-child{text-align:left}.panel>header,.vintage-macro-heading{align-items:start;gap:18px;flex-direction:column} }
