@@ -112,3 +112,17 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [ ] Run representative nested walk-forward evaluation (no result fabricated)
 - [ ] Create first current shadow ranking (withheld until every gate passes)
 - [ ] Production promotion (prohibited by incomplete global data)
+
+## Milestone 11 — EODHD free-tier capability probe (started; discovery only)
+
+- [x] Confirm the configured credential and a free-account EOD endpoint with one bounded request
+- [x] Add a mutation-free, provider-independent structured capability report
+- [x] Validate free-symbol metadata and EOD OHLCV/adjusted-price fields
+- [x] Classify available, restricted, unauthorized, rate-limited and unsupported endpoints
+- [x] Make split/dividend checks optional; never assume free-tier access
+- [x] Enforce timeouts, pacing, bounded retries, response size and total request limits
+- [x] Redact credentials and test exclusively against sanitized recorded fixtures
+- [x] Verify production and research DuckDB files remain byte-for-byte unchanged
+- [x] Document Linux and PowerShell operation and honest free-tier limitations
+- [ ] Evaluate licensed provider coverage before any ingestion proposal
+- [ ] Bulk ingestion, global shadow ranking and production promotion (explicitly out of scope)

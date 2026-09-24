@@ -4,6 +4,22 @@ Last updated: 2026-09-24
 
 ## Current milestone
 
+## Milestone 11 — EODHD free-tier capability probe (started; endpoint usable)
+
+- [x] A one-request prerequisite probe confirmed that the credential exists (23
+  characters; value never displayed) and `AAPL.US` EOD returned HTTP 200.
+- [x] The prerequisite response contained 16 rows from 2026-09-01 through
+  2026-09-23 and OHLC, adjusted close and volume fields.
+- [x] Read-only JSON capability command with explicit endpoint classifications,
+  validated metadata/OHLCV, historical depth, exchanges and limitations.
+- [x] Hard request/response bounds, timeout, pacing and bounded retry/backoff.
+- [x] Optional split/dividend checks that do not assume subscription access.
+- [x] Token-safe output/errors plus sanitized offline fixtures.
+- [x] Before/after byte count and SHA-256 verification for both DuckDB paths.
+- [x] Linux and PowerShell runbook; no ingestion, ranking, scheduler or deployment.
+- [ ] No broad provider suitability conclusion: only the designated free symbol has
+  been demonstrated, and free-tier capabilities may change upstream.
+
 ## Milestone 10 — Controlled global research evaluation (pipeline complete; evaluation unavailable)
 
 - [x] Isolated research database with deterministic, checksum-addressed manifests
@@ -139,7 +155,7 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 
 ## Verification
 
-- All 139 backend tests and Python compilation pass in the release verification environment.
+- All 162 backend tests and Python compilation pass in the Milestone 11 verification environment.
 - GitHub Actions passes, including a clean frontend `npm ci`, ESLint, and the optimized production build under Node 24 and npm 11.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
 - The immutable September 2026 production vintage is
