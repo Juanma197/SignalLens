@@ -1,17 +1,18 @@
 # SignalLens Status
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 ## Current milestone
 
-## Milestone 6 — Private deployment (complete)
+## Milestone 7 — Global investable-universe discovery (complete)
 
-- [x] Authentication and secrets management
-- [x] Continuous integration
-- [x] Private GitHub repository
-- [x] Managed frontend, API, and database deployment
-- [x] Application-managed backups with freshness and retention gates
-- [x] Stateless scheduled monthly ranking job through the authenticated API
+- [x] Provider-independent point-in-time security master
+- [x] Lawful reference-file discovery adapters and Nasdaq Trader parser
+- [x] Deterministic company/listing deduplication and canonical selection
+- [x] Configurable eligibility with explicit exclusion reasons
+- [x] Immutable monthly snapshots and point-in-time FX contract
+- [x] JSON operations, authenticated coverage API, and shadow dashboard
+- [x] Complete separation from the live 30-stock production ranking path
 
 ### Post-release hardening (non-blocking)
 
@@ -19,6 +20,23 @@ Last updated: 2026-09-23
 - [ ] Add automated monthly-cycle failure notifications
 
 ## Delivered
+
+### Global universe shadow infrastructure
+
+- Immutable, content-addressed listing retrievals preserve source metadata, identifiers,
+  local currency, activity, primary/secondary status, and first/last-seen timestamps.
+- Ticker collisions are exchange-qualified; LEI, CIK, ISIN evidence, then normalized
+  issuer identity drive deterministic company grouping.
+- Raw ADRs, secondary listings, alternate share classes, inactive listings, and
+  excluded instruments remain stored while one canonical listing is selected.
+- Monthly snapshots store the exact retrieval, source timestamp, configuration,
+  metrics, decision, and every exclusion reason. Existing months cannot be rewritten.
+- GBP is the default reporting currency. Historical conversion remains unavailable
+  unless a point-in-time FX observation was actually retrieved by that date.
+- Preview is mutation-free; refresh, snapshot, and status are separate explicit JSON
+  commands. The private API and dashboard expose shadow coverage and missing/stale data.
+- The live 30-stock universe, September 2026 vintage, monthly scheduler, Railway
+  configuration, and `momentum_126d` publication logic are unchanged.
 
 ### Existing research foundation
 
@@ -93,7 +111,7 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 
 ## Verification
 
-- All 115 backend tests and Python compilation pass in the release verification environment.
+- All 130 backend tests and Python compilation pass in the release verification environment.
 - GitHub Actions passes, including a clean frontend `npm ci`, ESLint, and the optimized production build under Node 24 and npm 11.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
 - The immutable September 2026 production vintage is
@@ -112,6 +130,12 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 - Automated failure notifications are not configured by this repository. Operators
   must check each cron deployment and escalate failures until alerting is added.
 - Watchlist mutations are intended only for local/private use.
+- Only the public Nasdaq Trader Symbol Directory has a built-in network provider.
+  Approved UK, Canadian, and developed-European exchange reference files must be
+  licensed/configured by an operator; unavailable providers are not approximated.
+- Global price and reliable point-in-time FX ingestion are not part of Milestone 7.
+  Global snapshots therefore record missing price/FX coverage and cannot replace
+  the production universe or support a new live ranking yet.
 
 ## Next action
 
@@ -119,3 +143,5 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
    entry, single deterministic vintage, dashboard evidence, and fresh valid backup.
 2. Add automated off-platform backup replication and alerting for failed cron
    deployments or cycle-ledger entries.
+3. Configure licensed regional reference feeds, then build global price/FX coverage
+   and walk-forward validation before considering any production-universe change.

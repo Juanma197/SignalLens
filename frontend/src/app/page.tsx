@@ -114,6 +114,20 @@ type DataStatus = {
   forward_horizon_trading_days: number;
 };
 
+type UniverseCoverage = {
+  status: "available" | "stale" | "unavailable";
+  listings_discovered: number;
+  canonical_companies: number;
+  eligible_securities: number;
+  excluded_by_reason: Record<string, number>;
+  by_country: Record<string, number>;
+  by_exchange: Record<string, number>;
+  by_currency: Record<string, number>;
+  missing: string[];
+  stale: string[];
+  latest_snapshot: { snapshot_id: string; month: string; snapshot_at: string } | null;
+};
+
 type MacroObservation = {
   observation_id: string;
   series_id: "FEDFUNDS" | "CPIAUCSL" | "UNRATE" | "DGS10";
@@ -296,7 +310,7 @@ function formatMacro(item: Pick<MacroObservation, "unit" | "value">): string {
 }
 
 export default async function Home() {
-  const [data, status, outcomes, history, watchlist, macro] =
+  const [data, status, outcomes, history, watchlist, macro, universeCoverage] =
     await Promise.all([
       fetchJson("/api/v1/rankings/latest", unavailable),
       fetchJson<DataStatus | null>("/api/v1/data/status", null),
@@ -304,6 +318,11 @@ export default async function Home() {
       fetchJson("/api/v1/rankings/history", unavailableHistory),
       fetchJson<WatchlistResponse>("/api/v1/watchlist", { items: [] }),
       fetchJson<MacroSnapshot>("/api/v1/macro/latest", unavailableMacro),
+      fetchJson<UniverseCoverage>("/api/v1/universe/coverage", {
+        status: "unavailable", listings_discovered: 0, canonical_companies: 0,
+        eligible_securities: 0, excluded_by_reason: {}, by_country: {}, by_exchange: {},
+        by_currency: {}, missing: ["coverage_api"], stale: [], latest_snapshot: null,
+      }),
     ]);
 
   const evidenceByTicker = new Map(
@@ -351,6 +370,33 @@ export default async function Home() {
         <div><b>{status?.row_count.toLocaleString() ?? "—"}</b><span>daily observations</span></div>
         <div><b>{status?.forward_horizon_trading_days ?? 21}</b><span>trading-day horizon</span></div>
         <div><b>{status?.duplicate_rows ?? "—"}</b><span>duplicate rows</span></div>
+      </section>
+
+      <section className="panel universe-panel">
+        <header>
+          <div>
+            <p className="eyebrow">GLOBAL UNIVERSE · SHADOW RESEARCH</p>
+            <h2>Discovery coverage</h2>
+          </div>
+          <span className={`macro-coverage ${universeCoverage.status === "available" ? "complete" : universeCoverage.status === "stale" ? "partial" : "missing"}`}>
+            {universeCoverage.status}
+          </span>
+        </header>
+        <div className="coverage-grid">
+          <div><b>{universeCoverage.listings_discovered.toLocaleString()}</b><span>listings discovered</span></div>
+          <div><b>{universeCoverage.canonical_companies.toLocaleString()}</b><span>canonical companies</span></div>
+          <div><b>{universeCoverage.eligible_securities.toLocaleString()}</b><span>eligible securities</span></div>
+          <div><b>{Object.values(universeCoverage.excluded_by_reason).reduce((sum, count) => sum + count, 0).toLocaleString()}</b><span>exclusion decisions</span></div>
+        </div>
+        <p className="notice warning">
+          Research infrastructure only. The live 30-stock momentum_126d universe and published vintages are unchanged.
+          {universeCoverage.latest_snapshot ? ` Latest immutable snapshot: ${universeCoverage.latest_snapshot.month}.` : " No monthly snapshot has been created."}
+        </p>
+        <footer>
+          Countries: {Object.keys(universeCoverage.by_country).length} · Exchanges: {Object.keys(universeCoverage.by_exchange).length} · Currencies: {Object.keys(universeCoverage.by_currency).length}
+          {universeCoverage.missing.length ? ` · Missing: ${universeCoverage.missing.join(", ")}` : ""}
+          {universeCoverage.stale.length ? ` · Stale: ${universeCoverage.stale.join(", ")}` : ""}
+        </footer>
       </section>
 
       <section className="panel macro-panel">

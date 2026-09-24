@@ -52,6 +52,23 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [ ] Replicate validated backups outside the Railway volume
 - [ ] Add automated monthly-cycle failure notifications
 
+## Milestone 7 — Global investable-universe discovery (complete)
+
+- [x] Provider-independent, point-in-time security-master schema and parsers
+- [x] Stable listing/company identity and deterministic canonical selection
+- [x] Explicit configurable eligibility decisions and exclusion reasons
+- [x] Immutable monthly shadow-universe snapshots
+- [x] Point-in-time FX interface/schema without fabricated conversion rates
+- [x] JSON preview, refresh, snapshot, and coverage commands
+- [x] Authenticated API and dashboard shadow-coverage reporting
+- [x] Production ranking, scheduler, Railway, and live 30-stock universe isolation
+
+### Required follow-on validation
+
+- [ ] License and configure approved UK, Canadian, and developed-Europe reference feeds
+- [ ] Ingest global point-in-time prices and FX observations
+- [ ] Complete global walk-forward validation before proposing a live-universe change
+
 ## Guardrails
 
 - Never describe a rank as guaranteed growth.

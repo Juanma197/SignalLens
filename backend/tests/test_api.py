@@ -26,6 +26,24 @@ def test_data_status_starts_with_declared_universe(tmp_path: Path, monkeypatch) 
     get_settings.cache_clear()
 
 
+def test_global_universe_coverage_is_read_only_when_unavailable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    database = tmp_path / "missing.duckdb"
+    monkeypatch.setenv("SIGNALLENS_DATABASE_PATH", str(database))
+    get_settings.cache_clear()
+    import app.main as main
+    main.settings = get_settings()
+
+    response = TestClient(main.app).get("/api/v1/universe/coverage")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["missing"] == ["database_missing"]
+    assert not database.exists()
+    get_settings.cache_clear()
+
+
 def test_demo_rankings_remain_explicitly_demo() -> None:
     from app.main import app
     body = TestClient(app).get("/api/v1/rankings/demo").json()
