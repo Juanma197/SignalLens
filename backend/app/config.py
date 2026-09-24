@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     allowed_origins: str = "http://localhost:3000"
     database_path: Path = Path("data/signallens.duckdb")
+    research_database_path: Path = Path("data/research/signallens-research.duckdb")
     persistent_volume_path: Path | None = None
     backup_path: Path = Path("/data/backups")
     backup_retention_count: int = 3

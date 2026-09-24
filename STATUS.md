@@ -4,6 +4,19 @@ Last updated: 2026-09-24
 
 ## Current milestone
 
+## Milestone 10 — Controlled global research evaluation (pipeline complete; evaluation unavailable)
+
+- [x] Isolated research database with deterministic, checksum-addressed manifests
+- [x] Point-in-time leakage and next-session execution audit contract
+- [x] Predetermined coverage, stability, cost, robustness, uncertainty and concentration gates
+- [x] Immutable gate-controlled shadow-vintage storage, including zero-candidate behavior
+- [x] Authenticated read-only evaluation API and structured dry-run-safe commands
+- [x] Source/licensing matrix, methodology, limitations, storage estimate and operator runbook
+- [ ] Historical operator/licensed dataset (none is present in the repository)
+- [ ] Supportable walk-forward results (no synthetic or fabricated performance)
+- [ ] Current shadow candidates (withheld until data, freshness and validation gates pass)
+- [ ] Global-model promotion (prohibited)
+
 ## Milestone 9 — Global multifactor shadow research (complete; promotion incomplete)
 
 - [x] Point-in-time raw and normalized fundamentals with revision lineage
@@ -131,6 +144,9 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
 - The immutable September 2026 production vintage is
   `5dcce39d-f98a-55b1-9010-279501142186` and uses `momentum_126d`.
+- Milestone 10 deliberately reports no evaluation return or shadow ranking because no
+  licensed historical global dataset is installed. Its isolated pipeline cannot write
+  production prediction vintages.
 
 ## Known limitations
 

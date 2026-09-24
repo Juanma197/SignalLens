@@ -100,3 +100,15 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Production tables, publisher, scheduler and official cards remain isolated
 - [ ] Supply licensed regional data and complete a representative global walk-forward evaluation
 - [ ] Approve production promotion (explicitly not approved)
+
+## Milestone 10 — Controlled global research evaluation (pipeline complete; data blocked)
+
+- [x] Separate research database, deterministic manifests, hashes, and import locations
+- [x] Leakage audit, next-session boundary, explicit costs, uncertainty, and fixed gates
+- [x] Immutable, gate-controlled current shadow storage with zero-candidate support
+- [x] Authenticated read-only evaluation status and structured non-mutating commands
+- [x] Licensing/coverage register, methodology, operator runbook, and honest evaluation report
+- [ ] Acquire licensed historical membership, delistings, prices/actions, FX, and non-US fundamentals
+- [ ] Run representative nested walk-forward evaluation (no result fabricated)
+- [ ] Create first current shadow ranking (withheld until every gate passes)
+- [ ] Production promotion (prohibited by incomplete global data)
