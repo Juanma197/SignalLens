@@ -128,6 +128,13 @@ type UniverseCoverage = {
   latest_snapshot: { snapshot_id: string; month: string; snapshot_at: string } | null;
 };
 
+type GlobalMarketCoverage = {
+  status: "available" | "unavailable";
+  price_coverage: Array<{ exchange: string; currency: string; securities: number; latest_trading_date: string }>;
+  fx_coverage: Array<{ currency: string; latest_observation_date: string; stale: boolean }>;
+  latest_run: { finished_at: string; status: string; failures: number } | null;
+};
+
 type MacroObservation = {
   observation_id: string;
   series_id: "FEDFUNDS" | "CPIAUCSL" | "UNRATE" | "DGS10";
@@ -310,7 +317,7 @@ function formatMacro(item: Pick<MacroObservation, "unit" | "value">): string {
 }
 
 export default async function Home() {
-  const [data, status, outcomes, history, watchlist, macro, universeCoverage] =
+  const [data, status, outcomes, history, watchlist, macro, universeCoverage, marketCoverage] =
     await Promise.all([
       fetchJson("/api/v1/rankings/latest", unavailable),
       fetchJson<DataStatus | null>("/api/v1/data/status", null),
@@ -322,6 +329,9 @@ export default async function Home() {
         status: "unavailable", listings_discovered: 0, canonical_companies: 0,
         eligible_securities: 0, excluded_by_reason: {}, by_country: {}, by_exchange: {},
         by_currency: {}, missing: ["coverage_api"], stale: [], latest_snapshot: null,
+      }),
+      fetchJson<GlobalMarketCoverage>("/api/v1/universe/market-data-coverage", {
+        status: "unavailable", price_coverage: [], fx_coverage: [], latest_run: null,
       }),
     ]);
 
@@ -394,6 +404,9 @@ export default async function Home() {
         </p>
         <footer>
           Countries: {Object.keys(universeCoverage.by_country).length} · Exchanges: {Object.keys(universeCoverage.by_exchange).length} · Currencies: {Object.keys(universeCoverage.by_currency).length}
+          {` · Priced exchanges: ${marketCoverage.price_coverage.length} · FX currencies: ${marketCoverage.fx_coverage.length}`}
+          {marketCoverage.fx_coverage.some((item) => item.stale) ? " · FX stale" : ""}
+          {marketCoverage.latest_run ? ` · Latest ingestion: ${marketCoverage.latest_run.status} (${marketCoverage.latest_run.failures} failures)` : " · Price/FX ingestion unavailable"}
           {universeCoverage.missing.length ? ` · Missing: ${universeCoverage.missing.join(", ")}` : ""}
           {universeCoverage.stale.length ? ` · Stale: ${universeCoverage.stale.join(", ")}` : ""}
         </footer>

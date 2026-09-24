@@ -75,3 +75,16 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - Never train on information unavailable at prediction time.
 - Keep research results separate from real-money execution.
 - Preserve every published prediction so performance cannot be rewritten later.
+
+## Milestone 8 — Global market data infrastructure (complete)
+
+- [x] Validated operator-file adapters for listings, prices, actions, and FX
+- [x] Idempotent bounded ingestion with batching, retries, checkpoints, and failures
+- [x] Historical GBP conversion, including GBX and bounded missing/stale FX handling
+- [x] Venue-specific exchange calendars and authenticated shadow coverage
+- [x] Research-only eligibility and representative cross-region fixtures
+- [x] Production universe, publisher, vintages, scheduler, and Railway isolation
+- [ ] License/configure complete regional operator feeds and ingest at scale
+- [ ] Add global fundamentals and multifactor scoring
+- [ ] Complete global walk-forward validation
+- [ ] Review and explicitly approve any production promotion

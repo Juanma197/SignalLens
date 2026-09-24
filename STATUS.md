@@ -4,7 +4,7 @@ Last updated: 2026-09-24
 
 ## Current milestone
 
-## Milestone 7 — Global investable-universe discovery (complete)
+## Milestone 8 — Global market data infrastructure (complete)
 
 - [x] Provider-independent point-in-time security master
 - [x] Lawful reference-file discovery adapters and Nasdaq Trader parser
@@ -13,6 +13,10 @@ Last updated: 2026-09-24
 - [x] Immutable monthly snapshots and point-in-time FX contract
 - [x] JSON operations, authenticated coverage API, and shadow dashboard
 - [x] Complete separation from the live 30-stock production ranking path
+- [x] Validated adjusted-price, corporate-action, and historical FX CSV ingestion
+- [x] Local/GBP returns with GBX handling and bounded point-in-time FX alignment
+- [x] Venue calendars, bounded batches/retries, checkpoints, and structured failures
+- [x] Research eligibility and authenticated price/FX dashboard coverage
 
 ### Post-release hardening (non-blocking)
 
@@ -111,7 +115,7 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 
 ## Verification
 
-- All 130 backend tests and Python compilation pass in the release verification environment.
+- All 139 backend tests and Python compilation pass in the release verification environment.
 - GitHub Actions passes, including a clean frontend `npm ci`, ESLint, and the optimized production build under Node 24 and npm 11.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
 - The immutable September 2026 production vintage is
@@ -133,9 +137,11 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 - Only the public Nasdaq Trader Symbol Directory has a built-in network provider.
   Approved UK, Canadian, and developed-European exchange reference files must be
   licensed/configured by an operator; unavailable providers are not approximated.
-- Global price and reliable point-in-time FX ingestion are not part of Milestone 7.
-  Global snapshots therefore record missing price/FX coverage and cannot replace
-  the production universe or support a new live ranking yet.
+- Global price/FX infrastructure is available, but complete licensed regional feeds
+  are not configured and no bulk production ingestion occurred. Missing regions stay
+  unavailable rather than being approximated.
+- Global fundamentals, multifactor scoring, walk-forward validation, and production
+  promotion remain explicitly incomplete.
 
 ## Next action
 
@@ -143,5 +149,6 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
    entry, single deterministic vintage, dashboard evidence, and fresh valid backup.
 2. Add automated off-platform backup replication and alerting for failed cron
    deployments or cycle-ledger entries.
-3. Configure licensed regional reference feeds, then build global price/FX coverage
-   and walk-forward validation before considering any production-universe change.
+3. Configure licensed regional reference/price feeds and approved point-in-time FX,
+   then complete fundamentals, multifactor scoring, and walk-forward validation before
+   considering any production-universe change.

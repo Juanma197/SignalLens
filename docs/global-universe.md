@@ -104,3 +104,55 @@ missing/stale inputs, and the latest snapshot.
 Do not add these commands to `monthly_cycle`, attach another DuckDB writer, or use
 them against production without the existing backup/preflight operating controls.
 The September 2026 vintage and `momentum_126d` production path remain untouched.
+
+## Milestone 8 price, action, FX, and calendar contract
+
+Milestone 8 adds validated CSV adapters rather than pretending that an unofficial
+website is an institutional data licence. Nasdaq Trader's exchange-operated symbol
+directory remains the only built-in automated listing feed. LSE, TMX (TSX/TSXV),
+Euronext, Deutsche Börse/Xetra, SIX, Nasdaq Nordic, Borsa Italiana, and BME files
+must be obtained and used under the operator's terms. Those regions report
+**unavailable** until a file is supplied. Yahoo/yfinance is an unofficial convenience
+provider: its existing 30-stock production use is unchanged, but it is not claimed
+as authoritative global listing or price coverage. Scraping exchange sites, bypassing
+access controls, and automating sources whose terms prohibit it are unsupported.
+
+Price CSV columns are `qualified_symbol,trading_date,exchange,currency,open,high,low,
+close,adjusted_close,volume`; optional `status` is `available`, `missing`, `stale`, or
+`failed`. Corporate-action columns are `qualified_symbol,ex_date,action_type,value,
+currency`, where the type is `split` or `cash_distribution`. FX columns are
+`base_currency,quote_currency,observed_on,rate,available_at`. Use an approved
+point-in-time source; official ECB or Bank of England reference data may be suitable
+only after the operator confirms current terms, supported pairs, publication timing,
+and transformation. The adapter does not invent direct pairs or availability times.
+
+```bash
+cd backend
+python -m app.global_market_data_cli import-prices --source licensed_vendor \
+  --price-file /approved/prices.csv --actions-file /approved/actions.csv --dry-run
+python -m app.global_market_data_cli import-fx --source approved_reference_rates \
+  --fx-file /approved/fx.csv --dry-run
+python -m app.global_market_data_cli status
+```
+
+Dry-run parses and validates without initializing or writing the database. Natural
+keys make imports idempotent. Programmatic providers use per-run item limits,
+batches, retries, inter-batch rate limits, maximum duration, checkpoints, and
+structured failures. Defaults are 50 symbols per batch, 500 per run, three attempts,
+and 15 minutes; choose lower provider/region limits where terms require them.
+
+Local OHLC, volume, adjusted close, splits, and distributions are preserved.
+Conversion uses only an FX observation whose `available_at` was known by query time
+and whose observation is no more than four calendar days old. Missing/stale FX stays
+missing; there is no indefinite forward fill or current-FX historical conversion.
+GBX divides by 100 to produce GBP. Calendars accept venue-specific holiday sets.
+
+At planning scale, 10,000 securities × ten years × 252 sessions is about 25 million
+rows. Budget roughly 25–50 GB before DuckDB compression. Development uses only
+representative fixtures; no bulk ingestion is performed.
+
+`GET /api/v1/universe/market-data-coverage` is authenticated and read-only. It
+reports price coverage by exchange/currency, trading/retrieval freshness, FX
+freshness, and latest run failures. The research eligibility report exposes metadata,
+history, liquidity, FX, momentum-history, and explicit exclusion flags without
+publishing a production vintage.
