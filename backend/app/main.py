@@ -10,6 +10,7 @@ from .evidence import EvidenceRepository, EvidenceType
 from .fred_macro import FRED_SERIES
 from .fundamentals import FundamentalRepository
 from .global_universe import GlobalUniverseRepository
+from .global_market_data import GlobalMarketDataRepository
 from .macro import MacroRepository
 from .market_data import MarketDataRepository
 from .monthly_cycle import (
@@ -124,6 +125,12 @@ def data_status() -> DataStatusResponse:
 def global_universe_coverage() -> dict:
     """Read-only coverage for the research-only global security master."""
     return GlobalUniverseRepository(settings.database_path).coverage()
+
+
+@app.get("/api/v1/universe/market-data-coverage")
+def global_market_data_coverage() -> dict:
+    """Read-only price, FX, and failure coverage for shadow research."""
+    return GlobalMarketDataRepository(settings.database_path).coverage()
 
 
 @app.get("/api/v1/rankings/latest", response_model=PublishedRankingResponse)
