@@ -12,6 +12,7 @@ from .fundamentals import FundamentalRepository
 from .global_universe import GlobalUniverseRepository
 from .global_market_data import GlobalMarketDataRepository
 from .global_research import GlobalResearchRepository
+from .research_evaluation import ResearchEvaluationRepository
 from .macro import MacroRepository
 from .market_data import MarketDataRepository
 from .monthly_cycle import (
@@ -147,6 +148,14 @@ def latest_global_multifactor() -> dict:
     if vintage is None:
         return {"status": "unavailable", "label": "SHADOW RESEARCH — NOT A PRODUCTION RANKING", "candidates": []}
     return {"status": "available", "label": "SHADOW RESEARCH — NOT A PRODUCTION RANKING", **vintage}
+
+
+@app.get("/api/v1/research/global-evaluation/status")
+def global_evaluation_status() -> dict:
+    """Authenticated read-only Milestone 10 results from the isolated database."""
+    return ResearchEvaluationRepository(
+        settings.research_database_path, production_path=settings.database_path
+    ).status()
 
 
 @app.get("/api/v1/rankings/latest", response_model=PublishedRankingResponse)
