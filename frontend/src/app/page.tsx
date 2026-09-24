@@ -135,6 +135,9 @@ type GlobalMarketCoverage = {
   latest_run: { finished_at: string; status: string; failures: number } | null;
 };
 
+type ShadowCandidate = { security_id: string; rank: number | null; overall_score: number; confidence: number; eligible: boolean; lens_scores: Record<string, number>; contributions: Record<string, number>; exclusions: string[]; evidence: string[] };
+type ShadowResearch = { status: "available" | "unavailable"; label: string; model_version?: string; feature_version?: string; evaluated_at?: string; candidates: ShadowCandidate[] };
+
 type MacroObservation = {
   observation_id: string;
   series_id: "FEDFUNDS" | "CPIAUCSL" | "UNRATE" | "DGS10";
@@ -317,7 +320,7 @@ function formatMacro(item: Pick<MacroObservation, "unit" | "value">): string {
 }
 
 export default async function Home() {
-  const [data, status, outcomes, history, watchlist, macro, universeCoverage, marketCoverage] =
+  const [data, status, outcomes, history, watchlist, macro, universeCoverage, marketCoverage, shadow] =
     await Promise.all([
       fetchJson("/api/v1/rankings/latest", unavailable),
       fetchJson<DataStatus | null>("/api/v1/data/status", null),
@@ -332,6 +335,9 @@ export default async function Home() {
       }),
       fetchJson<GlobalMarketCoverage>("/api/v1/universe/market-data-coverage", {
         status: "unavailable", price_coverage: [], fx_coverage: [], latest_run: null,
+      }),
+      fetchJson<ShadowResearch>("/api/v1/research/global-multifactor/latest", {
+        status: "unavailable", label: "SHADOW RESEARCH — NOT A PRODUCTION RANKING", candidates: [],
       }),
     ]);
 
@@ -410,6 +416,20 @@ export default async function Home() {
           {universeCoverage.missing.length ? ` · Missing: ${universeCoverage.missing.join(", ")}` : ""}
           {universeCoverage.stale.length ? ` · Stale: ${universeCoverage.stale.join(", ")}` : ""}
         </footer>
+      </section>
+
+      <section className="panel shadow-panel">
+        <header><div><p className="eyebrow">GLOBAL MULTIFACTOR · SHADOW ONLY</p><h2>Research top three</h2></div><span className={`macro-coverage ${shadow.status === "available" ? "complete" : "missing"}`}>{shadow.status}</span></header>
+        <p className="notice warning">{shadow.label}. This does not change the official momentum_126d ranking and may show fewer than three candidates.</p>
+        {shadow.candidates.some((item) => item.rank !== null) ? <div className="grid">
+          {shadow.candidates.filter((item) => item.rank !== null).slice(0, 3).map((item) => <article key={item.security_id}>
+            <div className="rank">0{item.rank}</div><div className="score">{item.overall_score.toFixed(2)}<small> score</small></div>
+            <h3>{item.security_id}</h3><p className="company">Confidence {formatPercent(item.confidence)}</p>
+            <div className="lens-list">{Object.entries(item.lens_scores).map(([lens, score]) => <span key={lens}><b>{lens}</b>{score.toFixed(2)}</span>)}</div>
+            <p className="risk"><b>Risk and missing evidence</b>{item.exclusions.length ? item.exclusions.join("; ") : "No hard exclusion; inspect evidence before use."}</p>
+          </article>)}
+        </div> : <div className="empty">No qualified shadow candidate. Fundamentals or a completed research vintage may be unavailable.</div>}
+        <footer>Model {shadow.model_version ?? "not fitted"} · features {shadow.feature_version ?? "not generated"} · official comparison: momentum_126d remains the sole production publisher.</footer>
       </section>
 
       <section className="panel macro-panel">

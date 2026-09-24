@@ -11,6 +11,7 @@ from .fred_macro import FRED_SERIES
 from .fundamentals import FundamentalRepository
 from .global_universe import GlobalUniverseRepository
 from .global_market_data import GlobalMarketDataRepository
+from .global_research import GlobalResearchRepository
 from .macro import MacroRepository
 from .market_data import MarketDataRepository
 from .monthly_cycle import (
@@ -131,6 +132,21 @@ def global_universe_coverage() -> dict:
 def global_market_data_coverage() -> dict:
     """Read-only price, FX, and failure coverage for shadow research."""
     return GlobalMarketDataRepository(settings.database_path).coverage()
+
+
+@app.get("/api/v1/research/global-multifactor/status")
+def global_multifactor_status() -> dict:
+    """Read-only coverage; mutations are available only through explicit CLI commands."""
+    return GlobalResearchRepository(settings.database_path).status()
+
+
+@app.get("/api/v1/research/global-multifactor/latest")
+def latest_global_multifactor() -> dict:
+    """Return the latest shadow vintage without touching production predictions."""
+    vintage = GlobalResearchRepository(settings.database_path).latest_vintage()
+    if vintage is None:
+        return {"status": "unavailable", "label": "SHADOW RESEARCH — NOT A PRODUCTION RANKING", "candidates": []}
+    return {"status": "available", "label": "SHADOW RESEARCH — NOT A PRODUCTION RANKING", **vintage}
 
 
 @app.get("/api/v1/rankings/latest", response_model=PublishedRankingResponse)

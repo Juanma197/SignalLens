@@ -4,6 +4,17 @@ Last updated: 2026-09-24
 
 ## Current milestone
 
+## Milestone 9 — Global multifactor shadow research (complete; promotion incomplete)
+
+- [x] Point-in-time raw and normalized fundamentals with revision lineage
+- [x] Research lenses, peer fallback hierarchy, robust outlier handling and risk gates
+- [x] Fixed baseline plus constrained learned-weight training boundary
+- [x] Immutable research-only vintages and authenticated read-only dashboard/API
+- [x] Explicit JSON commands and byte-for-byte non-mutating validation
+- [x] Production publisher, tables, universe, scheduler and September vintage isolated
+- [ ] Licensed full-region coverage and completed representative walk-forward evidence
+- [ ] Production promotion (not approved)
+
 ## Milestone 8 — Global market data infrastructure (complete)
 
 - [x] Provider-independent point-in-time security master
@@ -140,8 +151,9 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 - Global price/FX infrastructure is available, but complete licensed regional feeds
   are not configured and no bulk production ingestion occurred. Missing regions stay
   unavailable rather than being approximated.
-- Global fundamentals, multifactor scoring, walk-forward validation, and production
-  promotion remain explicitly incomplete.
+- Global fundamentals and shadow scoring infrastructure are implemented, but licensed
+  regional coverage, representative walk-forward validation, and production promotion
+  remain explicitly incomplete.
 
 ## Next action
 
