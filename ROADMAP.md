@@ -130,3 +130,19 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Document Linux and PowerShell operation and honest configured-account limitations
 - [ ] Evaluate licensed provider coverage before any ingestion proposal
 - [ ] Bulk ingestion, global shadow ranking and production promotion (explicitly out of scope)
+
+## Milestone 12 — Bounded global market-data ingestion (pipeline complete)
+
+- [x] Research-only EODHD catalogue, EOD price, dividend and FX adapters for US,
+  LSE, TO, XETRA and PA
+- [x] Hard pilot ceilings of 100 securities per region and 500 total
+- [x] Conservative ordinary-equity classification, canonical deduplication and
+  explicit exclusions
+- [x] Ten-year ceiling, adjusted/unadjusted OHLCV validation, point-in-time FX,
+  provenance, checkpoints and idempotent writes into the existing schemas
+- [x] Plan, dry-run, catalogue, price, FX, resume, status and coverage operations
+- [x] Request/runtime/response bounds, production-path refusal and token redaction
+- [ ] Licensed historical membership and delisting coverage (current catalogues are
+  not survivorship-free)
+- [ ] Full 500-security operator ingestion (not run in Codex Cloud)
+- [ ] Historical-membership backtest or production promotion (prohibited)

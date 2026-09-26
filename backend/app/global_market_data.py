@@ -241,18 +241,22 @@ class GlobalMarketDataRepository:
         with duckdb.connect(str(self.path)) as connection:
             connection.execute("BEGIN")
             try:
-                for row in prices:
-                    connection.execute("INSERT OR REPLACE INTO global_price_observations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                price_values = [[
                         row.qualified_symbol, row.trading_date, row.exchange, row.currency, row.open, row.high,
-                        row.low, row.close, row.adjusted_close, row.volume, row.status, row.source, utc_naive(row.retrieved_at)])
-                for row in actions:
-                    connection.execute("INSERT OR REPLACE INTO global_corporate_actions VALUES (?,?,?,?,?,?,?)", [
+                        row.low, row.close, row.adjusted_close, row.volume, row.status, row.source, utc_naive(row.retrieved_at)]
+                    for row in prices]
+                if price_values:
+                    connection.executemany("INSERT OR REPLACE INTO global_price_observations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", price_values)
+                action_values = [[
                         row.qualified_symbol, row.ex_date, row.action_type, row.value, row.currency,
-                        row.source, utc_naive(row.retrieved_at)])
-                for row in fx:
-                    connection.execute("INSERT OR REPLACE INTO global_fx_observations VALUES (?,?,?,?,?,?,?)", [
+                        row.source, utc_naive(row.retrieved_at)] for row in actions]
+                if action_values:
+                    connection.executemany("INSERT OR REPLACE INTO global_corporate_actions VALUES (?,?,?,?,?,?,?)", action_values)
+                fx_values = [[
                         row.base_currency, row.quote_currency, row.observed_on, row.rate, row.source,
-                        utc_naive(row.retrieved_at), utc_naive(row.available_at)])
+                        utc_naive(row.retrieved_at), utc_naive(row.available_at)] for row in fx]
+                if fx_values:
+                    connection.executemany("INSERT OR REPLACE INTO global_fx_observations VALUES (?,?,?,?,?,?,?)", fx_values)
                 connection.execute("COMMIT")
             except BaseException:
                 connection.execute("ROLLBACK")

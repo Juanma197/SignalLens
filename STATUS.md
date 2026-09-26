@@ -4,6 +4,33 @@ Last updated: 2026-09-26
 
 ## Current milestone
 
+## Milestone 12 — Bounded global market-data ingestion (research pipeline complete)
+
+- [x] Resumable EODHD pipeline for US, LSE, TO, XETRA and PA, limited to 100
+  securities per region and 500 total.
+- [x] Current catalogue metadata is conservatively classified; ETFs, funds,
+  indices, preferreds, warrants, depositary receipts and ambiguous types retain
+  explicit exclusion reasons. Existing canonical company logic removes secondary
+  listings.
+- [x] Existing security-master, global price, corporate-action and FX schemas are
+  reused. Prices retain adjusted and unadjusted OHLCV, provider, retrieval time,
+  currency and exchange-qualified symbol; dividends are imported and splits are
+  explicitly `provider_unsupported`.
+- [x] Ten-year ceiling, monotonic/duplicate/date/OHLC/volume validation,
+  point-in-time FX availability, idempotent keys and resumable checkpoints.
+- [x] Plan and mutation-free dry-run plus catalogue, price, FX, resume, status and
+  coverage operations; production database paths are refused.
+- [x] Configurable daily/minute request budgets, retries, timeouts, response size,
+  maximum runtime and redacted failures.
+- [x] Disposable live smoke test stayed within one security per region (five total):
+  6,918 validated price rows and 8,042 point-in-time FX rows were written, coverage
+  was available for all five regions and all three FX pairs, then the database was
+  deleted. The full pilot was not run.
+- [ ] The current catalogue is not survivorship-free and is invalid for historical-
+  membership backtests, model promotion or production use.
+- [ ] No full 500-security ingestion, shadow ranking, deployment, Railway access or
+  production change was performed.
+
 ## Milestone 11 — EODHD capability probe (paid entitlement validated)
 
 - [x] A one-request prerequisite probe confirmed that the credential exists (23
