@@ -28,8 +28,8 @@ def transport(request: httpx.Request) -> httpx.Response:
         rows[0]["Name"] = f"Alpha {region} Holdings"
         country, currency = {"US": ("US", "USD"), "LSE": ("GB", "GBP"), "TO": ("CA", "CAD"), "XETRA": ("DE", "EUR"), "PA": ("FR", "EUR")}[region]
         rows[0]["Country"], rows[0]["Currency"] = country, currency
-        rows[0]["Exchange"] = {"US": "NASDAQ", "LSE": "London Stock Exchange", "TO": "TSX",
-                               "XETRA": "XETRA", "PA": "Euronext Paris"}[region]
+        rows[0]["Exchange"] = {"US": "NASDAQ", "LSE": "London Stock Exchange", "TO": "TO",
+                               "XETRA": "XETRA", "PA": "PA"}[region]
         rows[0].pop("Isin", None)
         return httpx.Response(200, json=rows)
     if "/div/" in path:
@@ -87,13 +87,17 @@ def test_dry_run_is_byte_for_byte_mutation_free(tmp_path: Path) -> None:
     before = path.read_bytes()
     operation = EODHDIngestion(path, tmp_path / "prod.duckdb", client(per_region=1, total=5))
     report = operation.catalogue(retrieved_at=NOW, dry_run=True)
-    assert report["accepted"] == 5 and path.read_bytes() == before
+    assert report["candidate_accepted"] == 5
+    assert report["activated"] is False and report["activated_selection_count"] == 0
+    assert path.read_bytes() == before
 
 
 def test_catalogue_prices_actions_resume_and_existing_schemas(tmp_path: Path) -> None:
     path = tmp_path / "research.duckdb"
     operation = EODHDIngestion(path, tmp_path / "prod.duckdb", client(per_region=1, total=5))
-    assert operation.catalogue(retrieved_at=NOW)["accepted"] == 5
+    catalogue = operation.catalogue(retrieved_at=NOW)
+    assert catalogue["candidate_accepted"] == catalogue["activated_selection_count"] == 5
+    assert catalogue["activated"] is True
     result = operation.prices(retrieved_at=NOW)
     assert result["completed"] == 5 and result["split_status"] == "provider_unsupported"
     resumed = operation.prices(retrieved_at=NOW + __import__("datetime").timedelta(seconds=1), resume=True)
@@ -139,6 +143,27 @@ def test_primary_venue_selection_allows_foreign_domiciles_and_excludes_receipts(
     assert report["status"] == "validated"
 
 
+def test_live_to_and_pa_endpoint_venues_accept_ordinary_primary_stocks() -> None:
+    toronto, to_excluded = parse_catalogue([{"Code": "RY", "Name": "Royal Bank of Canada",
+        "Country": "Canada", "Currency": "CAD", "Exchange": "TO", "Type": "Common Stock",
+        "Isin": "CA7800871021"}], "TO")
+    paris, pa_excluded = parse_catalogue([{"Code": "OR", "Name": "L'Oreal SA",
+        "Country": "France", "Currency": "EUR", "Exchange": "PA", "Type": "Common Stock",
+        "Isin": "FR0000120321"}], "PA")
+    assert [item.qualified_symbol for item in toronto] == ["RY.TO"] and not to_excluded
+    assert [item.qualified_symbol for item in paris] == ["OR.PA"] and not pa_excluded
+    assert toronto[0].raw["Exchange"] == "TO" and paris[0].raw["Exchange"] == "PA"
+
+
+def test_to_cdrs_are_excluded_without_fictional_subvenue() -> None:
+    accepted, excluded = parse_catalogue([{"Code": "AAPL", "Name": "Apple CDR (CAD Hedged)",
+        "Country": "USA", "Currency": "CAD", "Exchange": "TO", "Type": "Common Stock",
+        "Isin": "CA03785Y1007"}], "TO")
+    assert accepted == []
+    assert excluded[0]["exchange_qualified_symbol"] == "AAPL.TO"
+    assert excluded[0]["reason"] == "excluded_depositary_receipt"
+
+
 def test_aggregate_diagnostic_normalizes_live_aliases_without_records() -> None:
     diagnostic = catalogue_diagnostics(fixture("pilot_catalogues.json")["US"], "exchange-symbol-list/US")
     assert diagnostic["records"] == 4
@@ -168,17 +193,22 @@ def test_zero_refresh_fails_closed_preserves_prior_selection_and_production(tmp_
     limits = EODHDLimits(per_region=1, total=5, requests_per_minute=100000)
     good = EODHDIngestion(research, production,
         EODHDClient("secret", limits, transport=httpx.MockTransport(pilot_transport), sleep=lambda _: None))
-    assert good.catalogue(retrieved_at=NOW)["accepted"] == 5
+    good_report = good.catalogue(retrieved_at=NOW)
+    assert good_report["activated_selection_count"] == 5
     prior = good._latest_listings(NOW)
 
-    def empty_transport(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=[{"Code": "ETF", "Name": "Index ETF", "Country": "USA",
-                                        "Currency": "USD", "Exchange": "NASDAQ", "Type": "ETF"}])
+    def invalid_transport(request: httpx.Request) -> httpx.Response:
+        region = request.url.path.rsplit("/", 1)[-1]
+        if region == "PA":
+            return httpx.Response(200, json=[{"Code": "ETF", "Name": "Index ETF", "Country": "France",
+                                            "Currency": "EUR", "Exchange": "PA", "Type": "ETF"}])
+        return httpx.Response(200, json=fixture("pilot_catalogues.json")[region])
     failed = EODHDIngestion(research, production,
-        EODHDClient("secret", limits, transport=httpx.MockTransport(empty_transport), sleep=lambda _: None))
+        EODHDClient("secret", limits, transport=httpx.MockTransport(invalid_transport), sleep=lambda _: None))
     report = failed.catalogue(retrieved_at=NOW + __import__("datetime").timedelta(seconds=1))
-    assert report["status"] == "failed_validation" and report["accepted"] == 0
-    assert report["unexpected_zero_regions"] == ["LSE", "PA", "TO", "US", "XETRA"]
+    assert report["status"] == "failed_validation" and report["candidate_accepted"] == 4
+    assert report["activated"] is False and report["activated_selection_count"] == 0
+    assert report["unexpected_zero_regions"] == ["PA"]
     assert len(failed._latest_listings(NOW + __import__("datetime").timedelta(seconds=2))) == len(prior)
     assert failed.prices(retrieved_at=NOW)["status"] == "failed_validation"
     assert production.read_bytes() == before

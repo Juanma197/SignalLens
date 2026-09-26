@@ -11,9 +11,9 @@
     {"Code":"0A3N","Name":"Foreign Secondary SA","Country":"France","Currency":"EUR","Exchange":"LSE","Type":"Common Stock","Isin":"FR0000000001"}
   ],
   "TO": [
-    {"Code":"RY","Name":"Royal Bank of Canada","Country":"Canada","Currency":"CAD","Exchange":"Toronto Stock Exchange","Type":"Common Stock","Isin":"CA7800871021"},
-    {"Code":"NTR","Name":"Nutrien Ltd","Country":"CANADA","Currency":"cad","Exchange":"TSX","Type":"Common Stock","Isin":"CA67077M1086"},
-    {"Code":"AAPL","Name":"Apple CDR (CAD Hedged)","Country":"USA","Currency":"CAD","Exchange":"NEO","Type":"Common Stock","Isin":"CA03785Y1007"}
+    {"Code":"RY","Name":"Royal Bank of Canada","Country":"Canada","Currency":"CAD","Exchange":"TO","Type":"Common Stock","Isin":"CA7800871021"},
+    {"Code":"NTR","Name":"Nutrien Ltd","Country":"CANADA","Currency":"cad","Exchange":"TO","Type":"Common Stock","Isin":"CA67077M1086"},
+    {"Code":"AAPL","Name":"Apple CDR (CAD Hedged)","Country":"USA","Currency":"CAD","Exchange":"TO","Type":"Common Stock","Isin":"CA03785Y1007"}
   ],
   "XETRA": [
     {"Code":"AIR","Name":"Airbus SE","Country":"Netherlands","Currency":"EUR","Exchange":"XETRA","Type":"Common Stock","Isin":"NL0000235190"},
@@ -21,8 +21,8 @@
     {"Code":"SIE","Name":"Siemens secondary line","Country":"Germany","Currency":"EUR","Exchange":"Frankfurt","Type":"Common Stock","Isin":"DE0007236101"}
   ],
   "PA": [
-    {"Code":"STLAP","Name":"Stellantis NV","Country":"Netherlands","Currency":"EUR","Exchange":"Euronext Paris","Type":"Common Stock","Isin":"NL00150001Q9"},
-    {"Code":"OR","Name":"L'Oreal SA","Country":"France","Currency":"EUR","Exchange":"Paris","Type":"Common Stock","Isin":"FR0000120321"},
-    {"Code":"AIR","Name":"Airbus SE","Country":"Netherlands","Currency":"EUR","Exchange":"Paris","Type":"Common Stock","IsPrimary":"false","Isin":"NL0000235190"}
+    {"Code":"STLAP","Name":"Stellantis NV","Country":"Netherlands","Currency":"EUR","Exchange":"PA","Type":"Common Stock","Isin":"NL00150001Q9"},
+    {"Code":"OR","Name":"L'Oreal SA","Country":"France","Currency":"EUR","Exchange":"PA","Type":"Common Stock","Isin":"FR0000120321"},
+    {"Code":"AIR","Name":"Airbus SE","Country":"Netherlands","Currency":"EUR","Exchange":"PA","Type":"Common Stock","IsPrimary":"false","Isin":"NL0000235190"}
   ]
 }
