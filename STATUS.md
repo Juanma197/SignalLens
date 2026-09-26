@@ -1,10 +1,10 @@
 # SignalLens Status
 
-Last updated: 2026-09-24
+Last updated: 2026-09-26
 
 ## Current milestone
 
-## Milestone 11 — EODHD free-tier capability probe (started; endpoint usable)
+## Milestone 11 — EODHD capability probe (paid entitlement validated)
 
 - [x] A one-request prerequisite probe confirmed that the credential exists (23
   characters; value never displayed) and `AAPL.US` EOD returned HTTP 200.
@@ -16,9 +16,16 @@ Last updated: 2026-09-24
 - [x] Optional split/dividend checks that do not assume subscription access.
 - [x] Token-safe output/errors plus sanitized offline fixtures.
 - [x] Before/after byte count and SHA-256 verification for both DuckDB paths.
+- [x] Separate metadata-only 16 MiB ceiling corrected the false US catalogue
+  rejection without relaxing the conservative 5,000,000-byte default.
+- [x] Bounded paid-account follow-up: EOD (11,539 rows, 1980-12-12 through
+  2026-09-25), exchange list (70 records), US symbols (51,071), and adjusted close
+  available; splits unsupported and dividends available (57 rows), in five requests.
+- [x] Local production and research database paths stayed absent and unchanged
+  (zero bytes and null SHA-256 before/after); no database was created.
 - [x] Linux and PowerShell runbook; no ingestion, ranking, scheduler or deployment.
-- [ ] No broad provider suitability conclusion: only the designated free symbol has
-  been demonstrated, and free-tier capabilities may change upstream.
+- [ ] No broad provider suitability conclusion: only the designated symbol and US
+  catalogue have been demonstrated, and account capabilities may change upstream.
 
 ## Milestone 10 — Controlled global research evaluation (pipeline complete; evaluation unavailable)
 
@@ -155,7 +162,7 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 
 ## Verification
 
-- All 162 backend tests and Python compilation pass in the Milestone 11 verification environment.
+- All 168 backend tests and Python compilation pass in the Milestone 11 verification environment.
 - GitHub Actions passes, including a clean frontend `npm ci`, ESLint, and the optimized production build under Node 24 and npm 11.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
 - The immutable September 2026 production vintage is
