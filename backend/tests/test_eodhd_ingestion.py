@@ -9,7 +9,8 @@ import httpx
 import pytest
 
 from app.eodhd_ingestion import (EODHDClient, EODHDIngestion, EODHDLimits,
-    classify_type, parse_catalogue, parse_eod)
+    catalogue_diagnostics, classify_type, parse_catalogue, parse_eod)
+from app.eodhd_ingestion_cli import build_parser, execute
 
 NOW = datetime(2026, 9, 26, 12, tzinfo=timezone.utc)
 
@@ -27,6 +28,8 @@ def transport(request: httpx.Request) -> httpx.Response:
         rows[0]["Name"] = f"Alpha {region} Holdings"
         country, currency = {"US": ("US", "USD"), "LSE": ("GB", "GBP"), "TO": ("CA", "CAD"), "XETRA": ("DE", "EUR"), "PA": ("FR", "EUR")}[region]
         rows[0]["Country"], rows[0]["Currency"] = country, currency
+        rows[0]["Exchange"] = {"US": "NASDAQ", "LSE": "London Stock Exchange", "TO": "TSX",
+                               "XETRA": "XETRA", "PA": "Euronext Paris"}[region]
         rows[0].pop("Isin", None)
         return httpx.Response(200, json=rows)
     if "/div/" in path:
@@ -119,16 +122,66 @@ def pilot_transport(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json=fixture("prices.json"))
 
 
-def test_primary_domestic_selection_excludes_receipts_foreign_and_secondary(tmp_path: Path) -> None:
+def test_primary_venue_selection_allows_foreign_domiciles_and_excludes_receipts(tmp_path: Path) -> None:
     limits = EODHDLimits(per_region=2, total=10, requests_per_minute=100000)
     operation = EODHDIngestion(tmp_path / "research.duckdb", tmp_path / "production.duckdb",
         EODHDClient("secret", limits, transport=httpx.MockTransport(pilot_transport), sleep=lambda _: None))
     report = operation.catalogue(retrieved_at=NOW, dry_run=True)
     assert report["selected_by_currency"] == {"CAD": 2, "EUR": 4, "GBP": 1, "GBX": 1, "USD": 2}
-    assert report["exclusions_by_reason"]["excluded_depositary_receipt"] == 1
-    assert report["exclusions_by_reason"]["excluded_foreign_or_secondary_listing"] >= 2
+    assert report["selected_by_region"] == {"LSE": 2, "PA": 2, "TO": 2, "US": 2, "XETRA": 2}
+    assert report["unexpected_zero_regions"] == []
+    assert report["exclusions_by_reason"]["excluded_depositary_receipt"] == 2
     assert report["exclusions_by_reason"]["excluded_secondary_listing"] == 1
+    assert report["exclusions_by_reason"]["excluded_otc_or_secondary_venue"] == 2
     assert report["selection_policy"] == "deterministic_sha256_not_liquidity_ranked"
+    # Provider country names describe domicile, not venue: foreign-domiciled
+    # Spotify, BHP, Airbus, and Stellantis remain eligible ordinary listings.
+    assert report["status"] == "validated"
+
+
+def test_aggregate_diagnostic_normalizes_live_aliases_without_records() -> None:
+    diagnostic = catalogue_diagnostics(fixture("pilot_catalogues.json")["US"], "exchange-symbol-list/US")
+    assert diagnostic["records"] == 4
+    assert diagnostic["distinct"]["country"]["US"] == 1
+    assert diagnostic["distinct"]["exchange"]["NYSE"] == 2
+    assert diagnostic["distinct"]["currency"] == {"USD": 4}
+    assert diagnostic["field_presence"]["isin"] == 4
+    assert "Code" not in json.dumps(diagnostic) and "AAPL" not in json.dumps(diagnostic)
+
+
+def test_read_only_diagnostic_cli_needs_no_token_and_changes_no_database(tmp_path: Path, monkeypatch) -> None:
+    fixture_path = Path(__file__).parent / "fixtures" / "eodhd_ingestion" / "pilot_catalogues.json"
+    research, production = tmp_path / "research.duckdb", tmp_path / "production.duckdb"
+    production.write_bytes(b"production-unchanged")
+    monkeypatch.delenv("SIGNALLENS_EODHD_API_TOKEN", raising=False)
+    args = build_parser().parse_args(["diagnose-catalogue", "--catalogue-fixture", str(fixture_path),
+                                      "--research-db", str(research), "--production-db", str(production)])
+    report = execute(args, now=NOW)
+    assert report["status"] == "completed" and len(report["provider_diagnostics"]) == 5
+    assert not research.exists() and production.read_bytes() == b"production-unchanged"
+
+
+def test_zero_refresh_fails_closed_preserves_prior_selection_and_production(tmp_path: Path) -> None:
+    research, production = tmp_path / "research.duckdb", tmp_path / "production.duckdb"
+    production.write_bytes(b"production diagnostic evidence")
+    before = production.read_bytes()
+    limits = EODHDLimits(per_region=1, total=5, requests_per_minute=100000)
+    good = EODHDIngestion(research, production,
+        EODHDClient("secret", limits, transport=httpx.MockTransport(pilot_transport), sleep=lambda _: None))
+    assert good.catalogue(retrieved_at=NOW)["accepted"] == 5
+    prior = good._latest_listings(NOW)
+
+    def empty_transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"Code": "ETF", "Name": "Index ETF", "Country": "USA",
+                                        "Currency": "USD", "Exchange": "NASDAQ", "Type": "ETF"}])
+    failed = EODHDIngestion(research, production,
+        EODHDClient("secret", limits, transport=httpx.MockTransport(empty_transport), sleep=lambda _: None))
+    report = failed.catalogue(retrieved_at=NOW + __import__("datetime").timedelta(seconds=1))
+    assert report["status"] == "failed_validation" and report["accepted"] == 0
+    assert report["unexpected_zero_regions"] == ["LSE", "PA", "TO", "US", "XETRA"]
+    assert len(failed._latest_listings(NOW + __import__("datetime").timedelta(seconds=2))) == len(prior)
+    assert failed.prices(retrieved_at=NOW)["status"] == "failed_validation"
+    assert production.read_bytes() == before
 
 
 def test_selection_is_reproducible_and_not_alphabetical(tmp_path: Path) -> None:

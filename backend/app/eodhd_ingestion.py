@@ -25,6 +25,25 @@ from .global_universe import GlobalUniverseRepository, ListingObservation, norma
 REGIONS = {"US": ("US", frozenset({"USD"})), "LSE": ("GB", frozenset({"GBP", "GBX"})),
            "TO": ("CA", frozenset({"CAD"})), "XETRA": ("DE", frozenset({"EUR"})),
            "PA": ("FR", frozenset({"EUR"}))}
+# EODHD's exchange-symbol-list Country is issuer domicile (usually a provider
+# country name), while Exchange is the actual listing venue.  Neither is an ISO
+# country contract.  Keep those concepts separate and normalize known aliases.
+COUNTRY_ALIASES = {
+    "US": "US", "USA": "US", "UNITED STATES": "US", "UNITED STATES OF AMERICA": "US",
+    "GB": "GB", "UK": "GB", "UNITED KINGDOM": "GB", "GREAT BRITAIN": "GB",
+    "CA": "CA", "CANADA": "CA", "DE": "DE", "GERMANY": "DE",
+    "FR": "FR", "FRANCE": "FR", "NL": "NL", "NETHERLANDS": "NL",
+}
+VENUE_ALIASES = {
+    "NYSE": "NYSE", "NEW YORK STOCK EXCHANGE": "NYSE", "NASDAQ": "NASDAQ", "NYSE ARCA": "NYSE_ARCA", "AMEX": "NYSE_AMERICAN",
+    "NYSE MKT": "NYSE_AMERICAN", "OTC": "OTC", "OTCQX": "OTC", "OTCQB": "OTC", "PINK": "OTC",
+    "LONDON": "LSE", "LONDON STOCK EXCHANGE": "LSE", "LSE": "LSE",
+    "TORONTO": "TSX", "TORONTO STOCK EXCHANGE": "TSX", "TSX": "TSX", "NEO": "NEO",
+    "XETRA": "XETRA", "DEUTSCHE BOERSE XETRA": "XETRA", "FRANKFURT": "FRANKFURT",
+    "EURONEXT PARIS": "PARIS", "PARIS": "PARIS",
+}
+REGION_VENUES = {"US": {"NYSE", "NASDAQ", "NYSE_ARCA", "NYSE_AMERICAN"}, "LSE": {"LSE"},
+                 "TO": {"TSX", "NEO"}, "XETRA": {"XETRA"}, "PA": {"PARIS"}}
 TYPE_MAP = {"common stock": "common_stock", "ordinary shares": "ordinary_share",
             "ordinary share": "ordinary_share", "common shares": "common_stock"}
 EXCLUDED_TYPES = {"etf": "excluded_etf", "fund": "excluded_fund", "index": "excluded_index",
@@ -108,9 +127,48 @@ def classify_type(value: str) -> tuple[str | None, str | None]:
     return None, "excluded_unreliable_instrument_classification"
 
 
+def _normalized(value: Any) -> str:
+    return " ".join(str(value or "").strip().upper().replace("_", " ").split())
+
+
+def normalize_country(value: Any) -> str:
+    normalized = _normalized(value)
+    return COUNTRY_ALIASES.get(normalized, normalized)
+
+
+def normalize_venue(value: Any, region: str) -> str:
+    normalized = _normalized(value)
+    # Old/sanitized responses omitted Exchange; the endpoint itself remains
+    # listing-venue evidence. Live responses retain their more specific venue.
+    return region if not normalized else VENUE_ALIASES.get(normalized, normalized)
+
+
+def catalogue_diagnostics(payload: Any, endpoint: str) -> dict:
+    """Return aggregate-only schema/value diagnostics (never individual rows)."""
+    if not isinstance(payload, list):
+        raise ValueError("invalid catalogue response")
+    fields = ("Country", "Exchange", "Currency", "Type")
+    counts: dict[str, dict[str, int]] = {}
+    for field in fields:
+        values: dict[str, int] = {}
+        for row in payload:
+            if not isinstance(row, dict): raise ValueError("invalid catalogue record")
+            raw = row.get(field)
+            if field == "Country": value = normalize_country(raw)
+            elif field == "Exchange": value = VENUE_ALIASES.get(_normalized(raw), _normalized(raw))
+            elif field == "Type": value = classify_type(str(raw))[0] or _normalized(raw)
+            else: value = _normalized(raw)
+            value = value or "<MISSING>"
+            values[value] = values.get(value, 0) + 1
+        counts[field.lower()] = dict(sorted(values.items()))
+    return {"endpoint": endpoint, "records": len(payload), "distinct": counts,
+            "field_presence": {field.lower(): sum(field in row and row[field] not in (None, "") for row in payload)
+                               for field in ("Code", "Country", "Currency", "Exchange", "Isin", "Name", "Type")}}
+
+
 def parse_catalogue(payload: Any, region: str) -> tuple[list[ListingObservation], list[dict]]:
     if region not in REGIONS or not isinstance(payload, list): raise ValueError("invalid catalogue response")
-    country, domestic_currencies = REGIONS[region]
+    listing_country, domestic_currencies = REGIONS[region]
     accepted, excluded = [], []
     for row in payload:
         if not isinstance(row, dict): raise ValueError("invalid catalogue record")
@@ -124,16 +182,19 @@ def parse_catalogue(payload: Any, region: str) -> tuple[list[ListingObservation]
         # Missing/unknown currency is not safe to infer (especially on LSE, where
         # GBP and GBX have different units).
         currency = str(row.get("Currency") or "").strip().upper()
-        row_country = str(row.get("Country") or "").strip().upper()
+        domicile = normalize_country(row.get("Country"))
+        venue = normalize_venue(row.get("Exchange"), region)
         name_lower = name.lower()
         if str(row.get("IsPrimary") or "").strip().lower() in {"false", "0", "no", "secondary"}:
             reason = "excluded_secondary_listing"
         elif currency not in domestic_currencies:
             reason = "excluded_non_domestic_currency" if currency else "excluded_missing_currency"
-        elif row_country != country:
-            reason = "excluded_foreign_or_secondary_listing"
+        elif venue == "OTC" or (row.get("Exchange") and venue not in REGION_VENUES[region]):
+            reason = "excluded_otc_or_secondary_venue"
         elif re.search(r"\b(adr|gdr|cdr|depositary|depository receipt)s?\b", name_lower):
             reason = "excluded_depositary_receipt"
+        elif re.search(r"(?:[-.]P(?:R)?[A-Z]?|[-.](?:WT|WS|WARRANT))$", code.upper()):
+            reason = "excluded_preferred_or_warrant_symbol"
         elif re.search(r"\b(acquisition|blank check|spac)\b", name_lower):
             reason = "excluded_acquisition_vehicle"
         if reason:
@@ -141,8 +202,8 @@ def parse_catalogue(payload: Any, region: str) -> tuple[list[ListingObservation]
                              "currency": currency or "UNKNOWN", "reason": reason})
             continue
         isin = str(row.get("Isin") or row.get("ISIN") or "").strip() or None
-        accepted.append(ListingObservation(f"eodhd:{code}.{region}", code, region, name, country,
-            currency, kind or "", domicile=row_country, is_primary=True, active=True, isin=isin, exchange_symbol=f"{code}.{region}",
+        accepted.append(ListingObservation(f"eodhd:{code}.{region}", code, region, name, listing_country,
+            currency, kind or "", domicile=domicile or None, is_primary=True, active=True, isin=isin, exchange_symbol=f"{code}.{region}",
             raw={k: str(v) for k, v in row.items()}))
     return accepted, excluded
 
@@ -206,37 +267,65 @@ class EODHDIngestion:
                  "Research only: invalid for production promotion and historical-membership backtests."]}
 
     def catalogue(self, *, retrieved_at: datetime, dry_run: bool = False) -> dict:
-        all_items, exclusions = [], []
+        all_items, exclusions, diagnostics = [], [], []
         for region in REGIONS:
-            items, rejected = parse_catalogue(self.client.get(f"exchange-symbol-list/{region}"), region)
+            endpoint = f"exchange-symbol-list/{region}"
+            payload = self.client.get(endpoint)
+            diagnostics.append(catalogue_diagnostics(payload, endpoint))
+            items, rejected = parse_catalogue(payload, region)
             all_items.extend(items); exclusions.extend(rejected)
-        selected, seen_companies = [], set()
+        selected, seen_companies, seen_isins = [], set(), set()
         for region in REGIONS:
             candidates = sorted((x for x in all_items if x.exchange == region),
                 key=lambda x: (hashlib.sha256(f"signallens-eodhd-pilot-v2|{x.qualified_symbol}".encode()).hexdigest(), x.qualified_symbol))
             for item in candidates:
                 issuer = normalized_company_name(re.sub(r"\b(ADR|GDR|CDR|DEPOSITARY|DEPOSITORY|RECEIPTS?)\b", "", item.company_name.upper()))
-                if issuer in seen_companies:
+                normalized_isin = (item.isin or "").strip().upper()
+                if issuer in seen_companies or (normalized_isin and normalized_isin in seen_isins):
                     exclusions.append({"exchange_qualified_symbol": item.qualified_symbol, "region": region,
                                        "currency": item.currency, "reason": "excluded_cross_region_duplicate_company"})
                 elif len([x for x in selected if x.exchange == region]) < self.client.limits.per_region and len(selected) < self.client.limits.total:
                     selected.append(item); seen_companies.add(issuer)
+                    if normalized_isin: seen_isins.add(normalized_isin)
                 else: exclusions.append({"exchange_qualified_symbol": item.qualified_symbol, "region": region,
                                          "currency": item.currency, "reason": "pilot_cap"})
-        result = {"command": "ingest-catalogue", "mode": "dry_run" if dry_run else "write", "accepted": len(selected),
+        selected_by_region = _item_counts(selected, "exchange")
+        zero_regions = sorted(set(REGIONS) - set(selected_by_region))
+        valid = bool(selected) and not zero_regions
+        result = {"command": "ingest-catalogue", "mode": "dry_run" if dry_run else "write",
+                  "status": "validated" if valid else "failed_validation", "accepted": len(selected),
                   "excluded": len(exclusions), "exclusions_by_reason": _counts(exclusions),
-                  "selected_by_region": _item_counts(selected, "exchange"), "selected_by_currency": _item_counts(selected, "currency"),
+                  "selected_by_region": selected_by_region, "selected_by_currency": _item_counts(selected, "currency"),
                   "excluded_by_region": _row_counts(exclusions, "region"), "excluded_by_currency": _row_counts(exclusions, "currency"),
+                  "unexpected_zero_regions": zero_regions, "provider_diagnostics": diagnostics,
                   "selection_policy": "deterministic_sha256_not_liquidity_ranked", "requests": self.client.requests}
-        if not dry_run:
+        if not dry_run and valid:
             result.update(self.universe.refresh(CatalogueProvider(selected), retrieved_at=retrieved_at))
+            self._record_catalogue_validation(retrieved_at, "validated", len(selected), [])
+        elif not dry_run:
+            self._record_catalogue_validation(retrieved_at, "failed_validation", len(selected), zero_regions)
         return result
+
+    @staticmethod
+    def diagnose(payloads: dict[str, Any]) -> dict:
+        """Inspect already-stored/sanitized payloads without network or database writes."""
+        missing = sorted(set(REGIONS) - set(payloads))
+        if missing: raise ValueError("catalogue diagnostic is missing required endpoints")
+        return {"command": "diagnose-catalogue", "mode": "read_only", "status": "completed",
+                "provider_diagnostics": [catalogue_diagnostics(payloads[region], f"exchange-symbol-list/{region}")
+                                         for region in REGIONS]}
 
     def _latest_listings(self, at: datetime) -> list[ListingObservation]:
         return self.universe.latest_items(as_of=at)[2]
 
     def prices(self, *, retrieved_at: datetime, resume: bool = False) -> dict:
+        if self._latest_catalogue_validation() == "failed_validation":
+            return {"command": "resume" if resume else "ingest-prices", "status": "failed_validation",
+                    "error": "latest catalogue validation failed; prior selection was preserved"}
         listings = self._latest_listings(retrieved_at)
+        if not listings:
+            return {"command": "resume" if resume else "ingest-prices", "status": "failed_validation",
+                    "error": "no validated catalogue selection"}
         start, end = retrieved_at.date() - timedelta(days=TEN_YEARS_DAYS), retrieved_at.date()
         self._state_schema()
         if not resume:
@@ -335,6 +424,19 @@ class EODHDIngestion:
         with duckdb.connect(str(self.path)) as db: db.execute("""CREATE TABLE IF NOT EXISTS eodhd_ingestion_checkpoints
             (stage VARCHAR, qualified_symbol VARCHAR, status VARCHAR, error_code VARCHAR, updated_at TIMESTAMP,
              PRIMARY KEY(stage, qualified_symbol))""")
+    def _record_catalogue_validation(self, at: datetime, status: str, accepted: int, zero_regions: list[str]) -> None:
+        self.market.initialize()
+        with duckdb.connect(str(self.path)) as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS eodhd_catalogue_validations
+                (validated_at TIMESTAMP PRIMARY KEY,status VARCHAR,accepted INTEGER,zero_regions_json VARCHAR)""")
+            db.execute("INSERT INTO eodhd_catalogue_validations VALUES (?,?,?,?)",
+                       [utc_naive(at), status, accepted, json.dumps(zero_regions)])
+    def _latest_catalogue_validation(self) -> str | None:
+        if not self.path.exists(): return None
+        with duckdb.connect(str(self.path), read_only=True) as db:
+            if "eodhd_catalogue_validations" not in {x[0] for x in db.execute("SHOW TABLES").fetchall()}: return None
+            row = db.execute("SELECT status FROM eodhd_catalogue_validations ORDER BY validated_at DESC LIMIT 1").fetchone()
+            return None if row is None else row[0]
     def _completed(self, stage: str) -> set[str]:
         if not self.path.exists(): return set()
         with duckdb.connect(str(self.path), read_only=True) as db:

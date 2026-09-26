@@ -14,7 +14,9 @@ from .eodhd_ingestion import EODHDClient, EODHDIngestion, EODHDLimits
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bounded EODHD global research ingestion")
-    parser.add_argument("command", choices=["plan", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "status", "coverage"])
+    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "status", "coverage"])
+    parser.add_argument("--catalogue-fixture", type=Path,
+                        help="local sanitized JSON object keyed by region (diagnose-catalogue only)")
     parser.add_argument("--research-db", type=Path)
     parser.add_argument("--production-db", type=Path)
     parser.add_argument("--per-region", type=int, default=100)
@@ -35,12 +37,15 @@ def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = 
         args.max_response_bytes, args.maximum_runtime_seconds)
     # A dummy value is sufficient for read-only local commands and never leaves the process.
     token = os.environ.get("SIGNALLENS_EODHD_API_TOKEN", "")
-    if args.command not in {"plan", "status", "coverage"} and not token:
+    if args.command not in {"plan", "diagnose-catalogue", "status", "coverage"} and not token:
         raise ValueError("SIGNALLENS_EODHD_API_TOKEN is required")
     client = EODHDClient(token or "offline-read-only", limits, transport=transport)
     operation = EODHDIngestion(args.research_db or settings.research_database_path,
                                args.production_db or settings.database_path, client)
     if args.command == "plan": return operation.plan()
+    if args.command == "diagnose-catalogue":
+        if args.catalogue_fixture is None: raise ValueError("--catalogue-fixture is required")
+        return operation.diagnose(json.loads(args.catalogue_fixture.read_text(encoding="utf-8")))
     if args.command == "dry-run": return operation.catalogue(retrieved_at=captured, dry_run=True)
     if args.command == "ingest-catalogue": return operation.catalogue(retrieved_at=captured)
     if args.command == "ingest-prices": return operation.prices(retrieved_at=captured)
