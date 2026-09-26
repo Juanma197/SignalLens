@@ -1,29 +1,28 @@
 {
   "US": [
-    {"Code":"0BAD","Name":"Zero Acquisition Corp","Country":"US","Currency":"USD","Type":"Common Stock","Isin":"US0000000100"},
-    {"Code":"AAPL","Name":"Apple Inc","Country":"US","Currency":"USD","Type":"Common Stock","Isin":"US0378331005"},
-    {"Code":"FORYF","Name":"Foreign Ordinary F","Country":"JP","Currency":"USD","Type":"Common Stock","Isin":"JP0000000001"},
-    {"Code":"MSFT","Name":"Microsoft Corp","Country":"US","Currency":"USD","Type":"Common Stock","Isin":"US5949181045"},
-    {"Code":"NVDA","Name":"Nvidia Corp","Country":"US","Currency":"USD","Type":"Common Stock","Isin":"US67066G1040"}
+    {"Code":"SPOT","Name":"Spotify Technology SA","Country":"Luxembourg","Currency":"usd","Exchange":"New York Stock Exchange","Type":"Common Stock","Isin":"LU1778762911"},
+    {"Code":"AAPL","Name":"Apple Inc","Country":"USA","Currency":"USD","Exchange":"NASDAQ","Type":"Common Stock","Isin":"US0378331005"},
+    {"Code":"BABA","Name":"Alibaba Group ADR","Country":"China","Currency":"USD","Exchange":"NYSE","Type":"Common Stock","Isin":"US01609W1027"},
+    {"Code":"FORYF","Name":"Foreign Ordinary","Country":"Japan","Currency":"USD","Exchange":"OTCQX","Type":"Common Stock","Isin":"JP0000000001"}
   ],
   "LSE": [
-    {"Code":"0A3N","Name":"Foreign Secondary SA","Country":"FR","Currency":"EUR","Type":"Common Stock","Isin":"FR0000000001"},
-    {"Code":"AZN","Name":"AstraZeneca PLC","Country":"GB","Currency":"GBP","Type":"Ordinary Shares","Isin":"GB0009895292"},
-    {"Code":"DGE","Name":"Diageo PLC","Country":"GB","Currency":"GBX","Type":"Ordinary Shares","Isin":"GB0002374006"}
+    {"Code":"BHP","Name":"BHP Group Limited","Country":"Australia","Currency":"GBX","Exchange":"London Stock Exchange","Type":"Ordinary Shares","Isin":"AU000000BHP4"},
+    {"Code":"AZN","Name":"AstraZeneca PLC","Country":"UK","Currency":"GBP","Exchange":"LSE","Type":"Common Stock","Isin":"GB0009895292"},
+    {"Code":"0A3N","Name":"Foreign Secondary SA","Country":"France","Currency":"EUR","Exchange":"LSE","Type":"Common Stock","Isin":"FR0000000001"}
   ],
   "TO": [
-    {"Code":"AAPL","Name":"Apple CDR (CAD Hedged)","Country":"CA","Currency":"CAD","Type":"Common Stock","Isin":"CA03785Y1007"},
-    {"Code":"RY","Name":"Royal Bank of Canada","Country":"CA","Currency":"CAD","Type":"Common Stock","Isin":"CA7800871021"},
-    {"Code":"SHOP","Name":"Shopify Inc","Country":"CA","Currency":"CAD","Type":"Common Stock","Isin":"CA82509L1076"}
+    {"Code":"RY","Name":"Royal Bank of Canada","Country":"Canada","Currency":"CAD","Exchange":"Toronto Stock Exchange","Type":"Common Stock","Isin":"CA7800871021"},
+    {"Code":"NTR","Name":"Nutrien Ltd","Country":"CANADA","Currency":"cad","Exchange":"TSX","Type":"Common Stock","Isin":"CA67077M1086"},
+    {"Code":"AAPL","Name":"Apple CDR (CAD Hedged)","Country":"USA","Currency":"CAD","Exchange":"NEO","Type":"Common Stock","Isin":"CA03785Y1007"}
   ],
   "XETRA": [
-    {"Code":"AIR","Name":"Airbus SE Secondary","Country":"FR","Currency":"EUR","Type":"Common Stock","IsPrimary":"false","Isin":"NL0000235190"},
-    {"Code":"SAP","Name":"SAP SE","Country":"DE","Currency":"EUR","Type":"Common Stock","Isin":"DE0007164600"},
-    {"Code":"SIE","Name":"Siemens AG","Country":"DE","Currency":"EUR","Type":"Common Stock","Isin":"DE0007236101"}
+    {"Code":"AIR","Name":"Airbus SE","Country":"Netherlands","Currency":"EUR","Exchange":"XETRA","Type":"Common Stock","Isin":"NL0000235190"},
+    {"Code":"SAP","Name":"SAP SE","Country":"Germany","Currency":"EUR","Exchange":"Deutsche Boerse Xetra","Type":"Common Stock","Isin":"DE0007164600"},
+    {"Code":"SIE","Name":"Siemens secondary line","Country":"Germany","Currency":"EUR","Exchange":"Frankfurt","Type":"Common Stock","Isin":"DE0007236101"}
   ],
   "PA": [
-    {"Code":"SAP","Name":"SAP SE","Country":"DE","Currency":"EUR","Type":"Common Stock","Isin":"DE0007164600"},
-    {"Code":"AIR","Name":"Airbus SE","Country":"FR","Currency":"EUR","Type":"Common Stock","Isin":"NL0000235190"},
-    {"Code":"OR","Name":"L'Oreal SA","Country":"FR","Currency":"EUR","Type":"Common Stock","Isin":"FR0000120321"}
+    {"Code":"STLAP","Name":"Stellantis NV","Country":"Netherlands","Currency":"EUR","Exchange":"Euronext Paris","Type":"Common Stock","Isin":"NL00150001Q9"},
+    {"Code":"OR","Name":"L'Oreal SA","Country":"France","Currency":"EUR","Exchange":"Paris","Type":"Common Stock","Isin":"FR0000120321"},
+    {"Code":"AIR","Name":"Airbus SE","Country":"Netherlands","Currency":"EUR","Exchange":"Paris","Type":"Common Stock","IsPrimary":"false","Isin":"NL0000235190"}
   ]
 }

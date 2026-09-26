@@ -37,6 +37,7 @@ Run from `backend/`. The token is read only from
 
 ```bash
 python -m app.eodhd_ingestion_cli plan
+python -m app.eodhd_ingestion_cli diagnose-catalogue --catalogue-fixture /path/to/sanitized-catalogues.json
 python -m app.eodhd_ingestion_cli dry-run
 python -m app.eodhd_ingestion_cli ingest-catalogue
 python -m app.eodhd_ingestion_cli ingest-prices
@@ -51,6 +52,16 @@ authorizes writes. `dry-run` makes bounded catalogue requests and validates the
 selection but does not open or create either database; it is byte-for-byte
 mutation-free. Use `--research-db` only for a separate research DuckDB. If it
 resolves to `--production-db`, the command refuses to run.
+
+`diagnose-catalogue` is the no-network alternative. It accepts an already stored,
+sanitized JSON object keyed by all five regions, opens no database, and emits only
+record counts, field-presence counts, and distinct country/exchange/currency/type
+aggregates. It never emits codes, ISINs, names, or raw records. In the live schema,
+`Code` is the venue symbol; `Country` is issuer domicile (provider country names,
+not listing country); `Currency` is trading currency; `Exchange` is listing venue;
+`Isin` identifies the instrument; `Name` is the security name; and `Type` is the
+provider instrument class. Known country/venue aliases, case, currency, and
+common/ordinary types are normalized before counting.
 
 Operational limits are configurable with `--daily-request-budget`,
 `--requests-per-minute`, `--retries`, `--timeout-seconds`,
@@ -84,18 +95,30 @@ capacity and runtime before separately authorizing a full operator run.
 The first operator-authorized 500-security attempt demonstrated that catalogue
 metadata is not a liquidity signal and that provider wall-clock time dominates the
 configured pacing floor. The corrected selector first requires an ordinary/common
-primary equity, a domestic issuer/listing, and the venue's domestic quote currency
+primary equity on the endpoint's venue and the venue's trading currency
 (`US=USD`, `LSE=GBP/GBX`, `TO=CAD`, `XETRA=EUR`, `PA=EUR`). Missing currency is
-rejected rather than inferred as GBP. Names/types and provider primary flags reject
+rejected rather than inferred as GBP. Issuer domicile is stored separately and is
+not required to match venue country: foreign-domiciled primary ordinary listings
+remain eligible. Venue, provider primary flags, instrument type, ISIN/company
+grouping, receipt markers, and symbol structure supply primary/secondary evidence.
+Names/types reject
 OTC/pink, funds, ETFs, indices, preferreds, warrants, acquisition vehicles,
 depositary receipts (including Canadian CDRs), ambiguous instruments, and foreign
-or secondary lines. ISIN and normalized issuer evidence prevent a company from
+or clear secondary lines. ISIN and normalized issuer evidence prevent a company from
 being selected twice across regions.
 
 After those rules, a versioned SHA-256 ordering provides a stable sample. It is
 intentionally non-alphabetical and reproducible, but **is not liquidity-ranked**;
 metadata cannot support that claim. Catalogue results report selected counts by
 region/currency and exclusions by region/currency/reason.
+
+The corrected live run examined 67,038 records in five successful requests but
+selected zero because provider domicile names were compared with ISO listing-country
+codes. Every region was excluded and 21,590 rows received the foreign/secondary
+reason. No subsequent provider request was made during this repair. A refresh now
+fails validation when the total or any expected region is zero, reports the missing
+regions, preserves the previous selection, and blocks price ingestion until a later
+catalogue validates.
 
 A global runtime or request-budget stop is a control event, not a provider error.
 The current and remaining items stay `pending`, the run becomes
