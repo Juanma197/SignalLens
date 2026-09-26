@@ -19,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-requests", type=int, default=6)
     parser.add_argument("--timeout-seconds", type=float, default=10.0)
     parser.add_argument("--rate-limit-seconds", type=float, default=1.0)
+    parser.add_argument("--metadata-max-response-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--production-db", type=Path)
     parser.add_argument("--research-db", type=Path)
     return parser
@@ -30,6 +31,7 @@ def execute(args: argparse.Namespace) -> dict:
     probe = EODHDCapabilityProbe(token, limits=ProbeLimits(
         max_requests=args.max_requests, timeout_seconds=args.timeout_seconds,
         rate_limit_seconds=args.rate_limit_seconds,
+        metadata_max_response_bytes=args.metadata_max_response_bytes,
     ))
     return probe.run(database_paths=[
         args.production_db or settings.database_path,

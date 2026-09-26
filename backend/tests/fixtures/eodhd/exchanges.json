@@ -1,0 +1,4 @@
+[
+  {"Code": "US", "Name": "United States", "Country": "USA", "Currency": "USD"},
+  {"Code": "LSE", "Name": "London Exchange", "Country": "UK", "Currency": "GBP"}
+]

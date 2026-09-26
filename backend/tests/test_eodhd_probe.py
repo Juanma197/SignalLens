@@ -25,6 +25,7 @@ def fixture_transport(statuses: dict[str, int] | None = None) -> httpx.MockTrans
         status = statuses.get(name, 200)
         files = {
             "eod": "eod_aapl_us.json", "exchange-symbol-list": "us_symbols.json",
+            "exchanges-list": "exchanges.json",
             "splits": "splits_aapl_us.json", "div": "div_aapl_us.json",
         }
         return httpx.Response(status, json=json.loads((FIXTURES / files[name]).read_text()))
@@ -41,11 +42,13 @@ def test_recorded_fixture_probe_validates_metadata_prices_actions_and_depth(tmp_
         TOKEN, limits=ProbeLimits(rate_limit_seconds=0), transport=fixture_transport(), sleep=lambda _: None,
     )
     result = probe.run(database_paths=[production, research], include_actions=True)
-    prices, metadata, splits, dividends = result["endpoints"]
-    assert result["status"] == "usable" and result["request_count"] == 4
+    prices, exchanges, metadata, splits, dividends = result["endpoints"]
+    assert result["status"] == "usable" and result["request_count"] == 5
     assert prices["classification"] == "available" and prices["valid_rows"] == 2
     assert prices["historical_depth"]["earliest"] == "2026-09-21"
     assert "adjusted_close" in prices["usable_fields"]
+    assert exchanges["classification"] == "available" and exchanges["records_returned"] == 2
+    assert exchanges["usable_fields"] == ["Code", "Country", "Currency", "Name"]
     assert metadata["metadata_valid"] is True and metadata["available_exchanges"] == ["NASDAQ"]
     assert splits["valid_rows"] == dividends["valid_rows"] == 1
     assert result["database_immutability"]["verified"] is True
@@ -70,8 +73,59 @@ def test_request_budget_is_hard_bounded_even_with_retries(tmp_path: Path) -> Non
                                  transport=fixture_transport({"eod": 429}), sleep=lambda _: None)
     result = probe.run(database_paths=[tmp_path / "one", tmp_path / "two"], include_actions=True)
     assert result["request_count"] == result["request_limit"] == 2
-    assert all(item["classification"] in {"available", "restricted", "unauthorized", "rate_limited", "unsupported"}
+    assert all(item["classification"] in {"available", "restricted", "unauthorized", "rate_limited", "unsupported", "response_too_large"}
                for item in result["endpoints"])
+
+
+def test_metadata_can_exceed_default_limit_but_retains_separate_ceiling(tmp_path: Path) -> None:
+    body = json.dumps([{"Code": "US", "Name": "United States", "Country": "USA",
+                        "Currency": "USD", "padding": "x" * 6000}]).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "exchanges-list" in request.url.path:
+            return httpx.Response(200, content=body, headers={"content-type": "application/json"})
+        return fixture_transport().handle_request(request)
+
+    probe = EODHDCapabilityProbe(TOKEN, limits=ProbeLimits(
+        max_response_bytes=5_000, metadata_max_response_bytes=10_000, rate_limit_seconds=0,
+    ), transport=httpx.MockTransport(handler), sleep=lambda _: None)
+    result = probe.run(database_paths=[tmp_path / "one", tmp_path / "two"])
+    assert result["endpoints"][1]["classification"] == "available"
+
+
+def test_metadata_over_limit_has_distinct_sanitized_classification(tmp_path: Path) -> None:
+    body = b"[" + b" " * 6000 + b"]"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "exchanges-list" in request.url.path:
+            return httpx.Response(200, content=body)
+        return fixture_transport().handle_request(request)
+
+    probe = EODHDCapabilityProbe(TOKEN, limits=ProbeLimits(
+        metadata_max_response_bytes=5_000, rate_limit_seconds=0,
+    ), transport=httpx.MockTransport(handler), sleep=lambda _: None)
+    result = probe.run(database_paths=[tmp_path / "one", tmp_path / "two"])
+    endpoint = result["endpoints"][1]
+    assert endpoint["classification"] == "response_too_large"
+    assert endpoint["records_returned"] == 0 and TOKEN not in json.dumps(endpoint)
+
+
+def test_metadata_limit_has_conservative_hard_maximum() -> None:
+    with pytest.raises(ValueError, match="metadata_max_response_bytes"):
+        ProbeLimits(metadata_max_response_bytes=16 * 1024 * 1024 + 1)
+
+
+@pytest.mark.parametrize("payload", [{"not": "a list"}, [{"Code": "US"}], ["invalid"]])
+def test_malformed_exchange_list_is_unsupported(payload: object, tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "exchanges-list" in request.url.path:
+            return httpx.Response(200, json=payload)
+        return fixture_transport().handle_request(request)
+
+    probe = EODHDCapabilityProbe(TOKEN, limits=ProbeLimits(rate_limit_seconds=0),
+                                 transport=httpx.MockTransport(handler), sleep=lambda _: None)
+    endpoint = probe.run(database_paths=[tmp_path / "one", tmp_path / "two"])["endpoints"][1]
+    assert endpoint["classification"] == "unsupported" and endpoint["valid_records"] == 0
 
 
 def test_token_is_absent_from_report_and_cli_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys) -> None:

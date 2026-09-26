@@ -113,16 +113,20 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [ ] Create first current shadow ranking (withheld until every gate passes)
 - [ ] Production promotion (prohibited by incomplete global data)
 
-## Milestone 11 — EODHD free-tier capability probe (started; discovery only)
+## Milestone 11 — EODHD configured-account capability probe (discovery only)
 
-- [x] Confirm the configured credential and a free-account EOD endpoint with one bounded request
+- [x] Confirm the configured credential and EOD endpoint with one bounded request
 - [x] Add a mutation-free, provider-independent structured capability report
 - [x] Validate free-symbol metadata and EOD OHLCV/adjusted-price fields
 - [x] Classify available, restricted, unauthorized, rate-limited and unsupported endpoints
-- [x] Make split/dividend checks optional; never assume free-tier access
+- [x] Make split/dividend checks optional; never assume account-level access
 - [x] Enforce timeouts, pacing, bounded retries, response size and total request limits
+- [x] Keep the 5,000,000-byte default while applying a hard-capped 16 MiB limit only
+  to exchange metadata, with a distinct `response_too_large` classification
+- [x] Parse and validate the 70-record exchange list and confirm the 51,071-record US
+  symbol list without emitting catalogue or company records
 - [x] Redact credentials and test exclusively against sanitized recorded fixtures
 - [x] Verify production and research DuckDB files remain byte-for-byte unchanged
-- [x] Document Linux and PowerShell operation and honest free-tier limitations
+- [x] Document Linux and PowerShell operation and honest configured-account limitations
 - [ ] Evaluate licensed provider coverage before any ingestion proposal
 - [ ] Bulk ingestion, global shadow ranking and production promotion (explicitly out of scope)
