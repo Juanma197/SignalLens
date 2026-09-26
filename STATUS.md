@@ -4,7 +4,7 @@ Last updated: 2026-09-26
 
 ## Current milestone
 
-## Milestone 12 — Bounded global market-data ingestion (research pipeline complete)
+## Milestone 12 — Bounded global market-data ingestion (pilot correction complete)
 
 - [x] Resumable EODHD pipeline for US, LSE, TO, XETRA and PA, limited to 100
   securities per region and 500 total.
@@ -28,8 +28,11 @@ Last updated: 2026-09-26
   deleted. The full pilot was not run.
 - [ ] The current catalogue is not survivorship-free and is invalid for historical-
   membership backtests, model promotion or production use.
-- [ ] No full 500-security ingestion, shadow ranking, deployment, Railway access or
-  production change was performed.
+- [x] The first operator 500-security run exposed a 900-second checkpoint/accounting defect: 41 completed securities (55,617 rows, 82 requests) were LSE-only and 459 unattempted securities were mislabeled failures; `latest_run` was null.
+- [x] Runtime/request stops now preserve pending checkpoints and return `partial_checkpointed`; resume processes only pending items and sanitized actual failures remain separate.
+- [x] Domestic-currency/primary-equity selection rejects receipts, foreign/secondary listings and acquisition vehicles, deduplicates issuers, and uses reproducible non-alphabetical hash sampling without claiming liquidity rank.
+- [x] Planning exposes request bounds and separate pacing/observed/timeout estimates; coverage exposes selection mix, progress, FX gaps, history depth/freshness, and complete run accounting.
+- [ ] No corrected bulk ingestion, shadow ranking, deployment, Railway access or production change was performed.
 
 ## Milestone 11 — EODHD capability probe (paid entitlement validated)
 

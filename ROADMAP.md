@@ -144,5 +144,6 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Request/runtime/response bounds, production-path refusal and token redaction
 - [ ] Licensed historical membership and delisting coverage (current catalogues are
   not survivorship-free)
-- [ ] Full 500-security operator ingestion (not run in Codex Cloud)
+- [x] Diagnose first 500-security partial run and correct pending checkpoints, run accounting, representative deterministic selection, estimates and coverage
+- [ ] Corrected 500-security operator rebuild (requires explicit archive/rebuild review; not run here)
 - [ ] Historical-membership backtest or production promotion (prohibited)

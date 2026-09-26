@@ -340,11 +340,18 @@ class GlobalMarketDataRepository:
             prices = connection.execute("""SELECT exchange,currency,COUNT(DISTINCT qualified_symbol),MAX(trading_date),MAX(retrieved_at),
                 SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) FROM global_price_observations GROUP BY exchange,currency ORDER BY exchange,currency""").fetchall()
             fx = connection.execute("SELECT base_currency,MAX(observed_on),MAX(retrieved_at) FROM global_fx_observations GROUP BY base_currency ORDER BY base_currency").fetchall()
-            run = connection.execute("SELECT finished_at,status,failed FROM global_ingestion_runs ORDER BY started_at DESC LIMIT 1").fetchone()
+            run = connection.execute("SELECT finished_at,status,attempted,completed,failed,report_json FROM global_ingestion_runs ORDER BY started_at DESC LIMIT 1").fetchone()
+        latest_run = None
+        if run is not None:
+            report = json.loads(run[5] or "{}")
+            latest_run = {"finished_at": run[0], "status": run[1], "attempted": run[2],
+                "completed": run[3], "actual_failed": run[4], "pending": report.get("pending", 0),
+                "request_count": report.get("request_count"), "elapsed_seconds": report.get("elapsed_seconds"),
+                "stop_reason": report.get("stop_reason")}
         return {"status": "available" if prices else "unavailable",
                 "price_coverage": [{"exchange": r[0], "currency": r[1], "securities": r[2], "latest_trading_date": r[3], "latest_retrieval_at": r[4], "failed_observations": r[5]} for r in prices],
                 "fx_coverage": [{"currency": r[0], "latest_observation_date": r[1], "latest_retrieval_at": r[2], "stale": (captured.date() - r[1]).days > 4} for r in fx],
-                "latest_run": None if run is None else {"finished_at": run[0], "status": run[1], "failures": run[2]}}
+                "latest_run": latest_run}
 
     def eligibility_report(self, *, as_of: datetime, minimum_history: int = 126,
                            minimum_median_value_gbp: Decimal = Decimal("1000000")) -> list[dict]:
