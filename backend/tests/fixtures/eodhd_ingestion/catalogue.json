@@ -1,0 +1,5 @@
+[
+  {"Code":"AAA","Name":"Alpha Holdings","Country":"US","Exchange":"NYSE","Currency":"USD","Type":"Common Stock","Isin":"US0000000001"},
+  {"Code":"ETF1","Name":"Index Tracker","Country":"US","Exchange":"NYSE","Currency":"USD","Type":"ETF"},
+  {"Code":"WAR1","Name":"Alpha Warrant","Country":"US","Exchange":"NYSE","Currency":"USD","Type":"Warrant"}
+]
