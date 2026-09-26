@@ -109,13 +109,27 @@ being selected twice across regions.
 
 After those rules, a versioned SHA-256 ordering provides a stable sample. It is
 intentionally non-alphabetical and reproducible, but **is not liquidity-ranked**;
-metadata cannot support that claim. Catalogue results report selected counts by
-region/currency and exclusions by region/currency/reason.
+metadata cannot support that claim. The provider returns `Exchange=TO` throughout
+the Toronto endpoint and `Exchange=PA` throughout the Paris endpoint. Those values
+establish endpoint venue identity; they do not claim unavailable TSX/NEO or Paris
+sub-venue detail. The raw provider fields remain attached to each listing for
+provenance. Canadian receipts/CDRs are instead rejected using receipt markers,
+symbol/name/ISIN evidence, and cross-region normalized-company duplicates.
 
-The corrected live run examined 67,038 records in five successful requests but
-selected zero because provider domicile names were compared with ISO listing-country
-codes. Every region was excluded and 21,590 rows received the foreign/secondary
-reason. No subsequent provider request was made during this repair. A refresh now
+Catalogue results report candidate counts by region/currency and exclusions by
+region/currency/reason. `candidate_accepted` (and the backward-compatible
+`accepted`) describes the proposed bounded sample. `activated` and
+`activated_selection_count` alone describe whether a write-mode validation
+actually refreshed the research selection. A dry-run never activates a selection;
+a failed validation reports zero activated selections even when some regions had
+acceptable candidates.
+
+The latest live catalogue diagnostic examined 67,038 records in five successful
+requests. Candidate selection reached 100 US, 100 LSE, and 100 XETRA securities,
+but Toronto and Paris were zero because the sanitized fixture had invented
+TSX/NEO/PARIS values while the live endpoints consistently returned `TO` and `PA`.
+Validation therefore failed, no selection was activated, and coverage remained
+unavailable. No subsequent provider request was made during this repair. A refresh
 fails validation when the total or any expected region is zero, reports the missing
 regions, preserves the previous selection, and blocks price ingestion until a later
 catalogue validates.

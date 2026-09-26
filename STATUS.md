@@ -4,7 +4,7 @@ Last updated: 2026-09-26
 
 ## Current milestone
 
-## Milestone 12 — Bounded global market-data ingestion (zero-selection regression corrected)
+## Milestone 12 — Bounded global market-data ingestion (live venue aliases corrected)
 
 - [x] Resumable EODHD pipeline for US, LSE, TO, XETRA and PA, limited to 100
   securities per region and 500 total.
@@ -31,9 +31,20 @@ Last updated: 2026-09-26
 - [x] The first operator 500-security run exposed a 900-second checkpoint/accounting defect: 41 completed securities (55,617 rows, 82 requests) were LSE-only and 459 unattempted securities were mislabeled failures; `latest_run` was null.
 - [x] Runtime/request stops now preserve pending checkpoints and return `partial_checkpointed`; resume processes only pending items and sanitized actual failures remain separate.
 - [x] Trading-currency/venue primary-equity selection separates issuer domicile from listing venue, normalizes provider aliases, rejects receipts/OTC/clear secondary listings and acquisition vehicles, deduplicates issuers, and uses reproducible non-alphabetical hash sampling without claiming liquidity rank.
-- [x] The live diagnostic is preserved: five requests examined 67,038 records but the invalid domicile comparison selected zero (LSE 7,262; PA 1,375; TO 3,038; US 51,072; XETRA 4,291; 21,590 labeled foreign/secondary). This repair made no provider requests.
+- [x] The earlier domicile-regression diagnostic remains documented: five requests
+  examined 67,038 records and demonstrated that provider `Country` is issuer
+  domicile rather than listing venue. Its repair made no provider requests.
 - [x] Aggregate-only local catalogue diagnostics expose normalized country, exchange, currency and type counts without records or credentials.
 - [x] Zero-total or zero-region refreshes return `failed_validation`, preserve prior selections, and block price ingestion; valid reports include region/currency counts.
+- [x] Live Toronto and Paris provider venue values are `TO` and `PA`; endpoint
+  identity is accepted without inventing TSX/NEO/PARIS sub-venues, while raw fields
+  retain provenance and TO CDRs remain excluded by receipt and duplicate evidence.
+- [x] Catalogue output separates proposed `candidate_accepted` counts from
+  `activated_selection_count`; dry-runs and failed validation activate nothing.
+- [x] The post-PR-19 live catalogue examined 67,038 records in five requests and
+  found 100 candidates each for US/LSE/XETRA but zero for TO/PA. Fail-closed
+  validation prevented activation and preserved production; this local repair made
+  no further provider request.
 - [x] Planning exposes request bounds and separate pacing/observed/timeout estimates; coverage exposes selection mix, progress, FX gaps, history depth/freshness, and complete run accounting.
 - [ ] No corrected bulk ingestion, shadow ranking, deployment, Railway access or production change was performed.
 

@@ -38,12 +38,14 @@ VENUE_ALIASES = {
     "NYSE": "NYSE", "NEW YORK STOCK EXCHANGE": "NYSE", "NASDAQ": "NASDAQ", "NYSE ARCA": "NYSE_ARCA", "AMEX": "NYSE_AMERICAN",
     "NYSE MKT": "NYSE_AMERICAN", "OTC": "OTC", "OTCQX": "OTC", "OTCQB": "OTC", "PINK": "OTC",
     "LONDON": "LSE", "LONDON STOCK EXCHANGE": "LSE", "LSE": "LSE",
-    "TORONTO": "TSX", "TORONTO STOCK EXCHANGE": "TSX", "TSX": "TSX", "NEO": "NEO",
+    # The exchange-symbol-list endpoint returns its endpoint code for Toronto
+    # and Paris. It does not expose a reliable sub-venue in this field.
+    "TO": "TO",
     "XETRA": "XETRA", "DEUTSCHE BOERSE XETRA": "XETRA", "FRANKFURT": "FRANKFURT",
-    "EURONEXT PARIS": "PARIS", "PARIS": "PARIS",
+    "PA": "PA",
 }
 REGION_VENUES = {"US": {"NYSE", "NASDAQ", "NYSE_ARCA", "NYSE_AMERICAN"}, "LSE": {"LSE"},
-                 "TO": {"TSX", "NEO"}, "XETRA": {"XETRA"}, "PA": {"PARIS"}}
+                 "TO": {"TO"}, "XETRA": {"XETRA"}, "PA": {"PA"}}
 TYPE_MAP = {"common stock": "common_stock", "ordinary shares": "ordinary_share",
             "ordinary share": "ordinary_share", "common shares": "common_stock"}
 EXCLUDED_TYPES = {"etf": "excluded_etf", "fund": "excluded_fund", "index": "excluded_index",
@@ -292,8 +294,14 @@ class EODHDIngestion:
         selected_by_region = _item_counts(selected, "exchange")
         zero_regions = sorted(set(REGIONS) - set(selected_by_region))
         valid = bool(selected) and not zero_regions
+        activated = not dry_run and valid
         result = {"command": "ingest-catalogue", "mode": "dry_run" if dry_run else "write",
-                  "status": "validated" if valid else "failed_validation", "accepted": len(selected),
+                  "status": "validated" if valid else "failed_validation",
+                  "candidate_accepted": len(selected),
+                  # Backward-compatible candidate count; this never means that
+                  # a failed validation replaced the active selection.
+                  "accepted": len(selected), "activated": activated,
+                  "activated_selection_count": len(selected) if activated else 0,
                   "excluded": len(exclusions), "exclusions_by_reason": _counts(exclusions),
                   "selected_by_region": selected_by_region, "selected_by_currency": _item_counts(selected, "currency"),
                   "excluded_by_region": _row_counts(exclusions, "region"), "excluded_by_currency": _row_counts(exclusions, "currency"),
