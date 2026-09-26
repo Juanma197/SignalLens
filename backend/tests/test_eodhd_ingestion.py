@@ -25,6 +25,8 @@ def transport(request: httpx.Request) -> httpx.Response:
         rows = fixture("catalogue.json")
         rows[0]["Code"] = f"AAA{region}"
         rows[0]["Name"] = f"Alpha {region} Holdings"
+        country, currency = {"US": ("US", "USD"), "LSE": ("GB", "GBP"), "TO": ("CA", "CAD"), "XETRA": ("DE", "EUR"), "PA": ("FR", "EUR")}[region]
+        rows[0]["Country"], rows[0]["Currency"] = country, currency
         rows[0].pop("Isin", None)
         return httpx.Response(200, json=rows)
     if "/div/" in path:
@@ -45,8 +47,8 @@ def test_classification_is_conservative_and_has_explicit_reasons() -> None:
 
 
 def test_catalogue_preserves_qualified_symbol_and_exclusions() -> None:
-    accepted, excluded = parse_catalogue(fixture("catalogue.json"), "LSE")
-    assert accepted[0].qualified_symbol == "AAA.LSE"
+    accepted, excluded = parse_catalogue(fixture("catalogue.json"), "US")
+    assert accepted[0].qualified_symbol == "AAA.US"
     assert accepted[0].raw["Code"] == "AAA"
     assert {x["reason"] for x in excluded} == {"excluded_etf", "excluded_warrant"}
 
@@ -64,7 +66,8 @@ def test_plan_reports_bounded_cost_and_honest_limitations(tmp_path: Path) -> Non
     operation = EODHDIngestion(tmp_path / "research.duckdb", tmp_path / "production.duckdb", client(per_region=5, total=25))
     report = operation.plan()
     assert report["maximum_securities"] == 25
-    assert report["estimated_requests"] == 58
+    assert report["request_count_bounds"] == {"lower": 58, "upper": 111}
+    assert "pacing_only_lower" in report["runtime_estimates_minutes"]
     assert "not survivorship-free" in report["warnings"][0]
     assert not (tmp_path / "research.duckdb").exists()
 
@@ -90,7 +93,7 @@ def test_catalogue_prices_actions_resume_and_existing_schemas(tmp_path: Path) ->
     assert operation.catalogue(retrieved_at=NOW)["accepted"] == 5
     result = operation.prices(retrieved_at=NOW)
     assert result["completed"] == 5 and result["split_status"] == "provider_unsupported"
-    resumed = operation.prices(retrieved_at=NOW, resume=True)
+    resumed = operation.prices(retrieved_at=NOW + __import__("datetime").timedelta(seconds=1), resume=True)
     assert resumed["completed"] == 0
     with duckdb.connect(str(path), read_only=True) as db:
         tables = {x[0] for x in db.execute("SHOW TABLES").fetchall()}
@@ -105,3 +108,64 @@ def test_fx_has_point_in_time_availability_not_todays_rate(tmp_path: Path) -> No
     with duckdb.connect(str(operation.path), read_only=True) as db:
         observed, available = db.execute("SELECT observed_on,available_at FROM global_fx_observations LIMIT 1").fetchone()
         assert available.date() == observed.replace(day=observed.day) + __import__('datetime').timedelta(days=1)
+
+
+def pilot_transport(request: httpx.Request) -> httpx.Response:
+    if "exchange-symbol-list" in request.url.path:
+        region = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json=fixture("pilot_catalogues.json")[region])
+    if "/div/" in request.url.path:
+        return httpx.Response(200, json=fixture("dividends.json"))
+    return httpx.Response(200, json=fixture("prices.json"))
+
+
+def test_primary_domestic_selection_excludes_receipts_foreign_and_secondary(tmp_path: Path) -> None:
+    limits = EODHDLimits(per_region=2, total=10, requests_per_minute=100000)
+    operation = EODHDIngestion(tmp_path / "research.duckdb", tmp_path / "production.duckdb",
+        EODHDClient("secret", limits, transport=httpx.MockTransport(pilot_transport), sleep=lambda _: None))
+    report = operation.catalogue(retrieved_at=NOW, dry_run=True)
+    assert report["selected_by_currency"] == {"CAD": 2, "EUR": 4, "GBP": 1, "GBX": 1, "USD": 2}
+    assert report["exclusions_by_reason"]["excluded_depositary_receipt"] == 1
+    assert report["exclusions_by_reason"]["excluded_foreign_or_secondary_listing"] >= 2
+    assert report["exclusions_by_reason"]["excluded_secondary_listing"] == 1
+    assert report["selection_policy"] == "deterministic_sha256_not_liquidity_ranked"
+
+
+def test_selection_is_reproducible_and_not_alphabetical(tmp_path: Path) -> None:
+    limits = EODHDLimits(per_region=1, total=5, requests_per_minute=100000)
+    def run(name: str) -> dict:
+        return EODHDIngestion(tmp_path / name, tmp_path / "prod.duckdb",
+            EODHDClient("secret", limits, transport=httpx.MockTransport(pilot_transport), sleep=lambda _: None)).catalogue(retrieved_at=NOW, dry_run=True)
+    first, second = run("one.duckdb"), run("two.duckdb")
+    assert first == second
+    assert first["excluded_by_region"]["US"] >= 3
+
+
+def test_runtime_stop_is_checkpointed_and_resume_only_processes_pending(tmp_path: Path) -> None:
+    path, clock = tmp_path / "research.duckdb", [0.0]
+    production = tmp_path / "prod.duckdb"
+    production.write_bytes(b"production-unchanged")
+    production_before = production.read_bytes()
+    def timed_transport(request: httpx.Request) -> httpx.Response:
+        if "exchange-symbol-list" not in request.url.path:
+            clock[0] += 1.0
+        return pilot_transport(request)
+    limits = EODHDLimits(per_region=1, total=5, requests_per_minute=100000, maximum_runtime_seconds=2.5)
+    first_client = EODHDClient("secret", limits, transport=httpx.MockTransport(timed_transport), sleep=lambda _: None, monotonic=lambda: clock[0])
+    operation = EODHDIngestion(path, production, first_client)
+    operation.catalogue(retrieved_at=NOW)
+    first_client.started = clock[0]
+    first = operation.prices(retrieved_at=NOW)
+    assert first["status"] == "partial_checkpointed"
+    assert first["completed"] == 1 and first["pending"] == 4 and first["actual_failed"] == 0
+    assert first["stop_reason"] == "maximum_runtime_exceeded"
+
+    resume_client = EODHDClient("secret", EODHDLimits(per_region=1, total=5, requests_per_minute=100000), transport=httpx.MockTransport(pilot_transport), sleep=lambda _: None)
+    resumed = EODHDIngestion(path, production, resume_client).prices(retrieved_at=NOW + __import__("datetime").timedelta(seconds=1), resume=True)
+    assert resumed["completed"] == 4 and resumed["pending"] == 0 and resumed["actual_failed"] == 0
+    coverage = EODHDIngestion(path, production, resume_client).coverage()
+    assert coverage["latest_run"]["attempted"] == 4
+    assert coverage["latest_run"]["request_count"] == 8
+    assert coverage["security_progress"] == {"attempted": 5, "completed": 5, "pending": 0, "actual_failed": 0}
+    assert coverage["catalogue_selections"] and len(coverage["price_history"]) == 5
+    assert production.read_bytes() == production_before
