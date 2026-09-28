@@ -4,14 +4,23 @@ SignalLens is a research dashboard for periodically ranking public companies and
 
 ## Current milestone
 
-Milestone 14 adds a pure, offline transformation from the five-region pilot
-schema to validated model-ready research observations. It fails closed on bad or
-incomplete price, FX, action, freshness, identity, and provider-failure evidence,
-and preserves adjusted-price and point-in-time FX semantics. It does not inspect
-an operator database, produce a ranking, change the live 30-stock universe, or
-alter the `momentum_126d` production strategy. See
-[`docs/milestone-14-model-ready-observations.md`](docs/milestone-14-model-ready-observations.md)
-for the contract and limitations.
+Milestone 15 adds a strictly read-only bridge from the existing five-region
+research DuckDB to the Milestone 14 trustworthy-observation transformation. The
+`model-readiness` command reports aggregate coverage and quality, verifies both
+research and production database fingerprints, and fails closed on unsafe paths,
+schemas, keys, or missing regions. It never creates a ranking, model/output table,
+database, WAL, or checkpoint and does not alter the `momentum_126d` publisher.
+See [`docs/milestone-15-model-readiness.md`](docs/milestone-15-model-readiness.md).
+
+After this change is merged, assess an operator-held database from PowerShell
+with explicit, distinct paths (the production path is fingerprinted but never
+opened):
+
+```powershell
+Push-Location backend
+& ..\.venv\Scripts\python.exe -m app.eodhd_ingestion_cli model-readiness --research-db "C:\path\to\research.duckdb" --production-db "C:\path\to\production.duckdb"
+Pop-Location
+```
 
 ## Requirements
 
