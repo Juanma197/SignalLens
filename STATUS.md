@@ -345,3 +345,17 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
   candidates; passing fixtures are explicitly synthetic and research-only.
 - Neither database, frontend, Railway, providers, nor the production
   `momentum_126d` publisher is modified. A live assessment has not been run.
+- The first operator scoring run selected 500 securities, found 492 model-ready
+  (98.4% coverage), passed integrity and eligible-universe coverage, but produced
+  zero predictions/vintages and correctly withheld ranking. Both databases were
+  byte-for-byte unchanged; this is not a live strategy pass.
+- Root cause: historical rows were batch-ingested recently, while the evaluator
+  reused the latest cross-section and required each row's ingestion audit time to
+  precede a years-old decision date. That removed every historical feature row.
+  The repaired evaluator uses a separate bounded month-end panel: records must be
+  loaded by the final cutoff, effective price dates must be no later than each
+  vintage, and complete labels must be strictly later and within the cutoff.
+- Stage diagnostics now expose selection/load/readiness, price range, possible
+  and generated vintages, feature/label eligibility and removals, date bounds,
+  and bounded zero-vintage reason codes. Current-catalogue membership remains
+  prominently not survivorship-free.

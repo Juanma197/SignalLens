@@ -26,6 +26,11 @@ REASON_CODES = frozenset({
     "baseline_underperformance", "insufficient_discrimination",
     "regional_instability", "temporal_instability", "integrity_failure",
 })
+ZERO_VINTAGE_REASON_CODES = frozenset({
+    "no_eligible_securities", "no_visible_prices_by_evaluation_cutoff",
+    "insufficient_feature_history", "no_complete_label_periods",
+    "no_feature_eligible_rows", "no_label_eligible_rows",
+})
 CANDIDATE_REASON_CODES = frozenset({
     "POSITIVE_MOMENTUM", "POSITIVE_TREND", "LOWER_REGIONAL_RISK",
     "FUNDAMENTALS_UNAVAILABLE",
@@ -61,7 +66,8 @@ def _rank(values: pd.Series, *, higher: bool = True) -> pd.Series:
 
 
 def prepare_cross_section(
-    observations: pd.DataFrame, prices: pd.DataFrame, *, decision_at: datetime
+    observations: pd.DataFrame, prices: pd.DataFrame, *, decision_at: datetime,
+    knowledge_cutoff: datetime | None = None,
 ) -> pd.DataFrame:
     """Prepare region-neutral factors for explicitly model-ready observations.
 
@@ -82,12 +88,21 @@ def prepare_cross_section(
     if ready.empty:
         return pd.DataFrame()
 
+    # ``knowledge_cutoff`` is deliberately separate from the feature boundary.
+    # A historical database is commonly backfilled in one ingestion run, so its
+    # audit timestamp is later than the observation's effective trading date.
+    # Evaluation may use records loaded by the final evaluation cutoff, but the
+    # feature boundary below still excludes every later trading observation.
+    known_at = pd.Timestamp(knowledge_cutoff or decision_at)
+    if known_at.tzinfo is None:
+        raise ValueError("knowledge_cutoff must be timezone-aware")
+    known_at = known_at.tz_convert("UTC")
     frame = prices.copy()
     frame["retrieved_at"] = pd.to_datetime(frame["retrieved_at"], utc=True)
     frame["trading_date"] = pd.to_datetime(frame["trading_date"])
     frame = frame.loc[
         frame["qualified_symbol"].isin(ready["qualified_symbol"])
-        & frame["retrieved_at"].le(boundary)
+        & frame["retrieved_at"].le(known_at)
         & frame["trading_date"].le(boundary.tz_localize(None))
         & frame["status"].eq("available")
     ].sort_values(["qualified_symbol", "trading_date"])
@@ -158,42 +173,110 @@ def walk_forward_evidence(
     observations: pd.DataFrame, prices: pd.DataFrame, *, decision_at: datetime,
     horizon_sessions: int = 21,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Evaluate trailing monthly vintages with labels strictly after each vintage."""
+    """Evaluate month-end vintages from a bounded historical panel.
+
+    Membership is the current eligible catalogue (and therefore is explicitly
+    not survivorship-free). Database ingestion timestamps are bounded by the
+    final evaluation cutoff; effective trading dates provide each historical
+    feature/label boundary. This distinction is required for a backfilled
+    research database and never makes a future-dated price visible early.
+    """
     eligible = set(observations.loc[observations["eligible"].eq(True), "qualified_symbol"])
     frame = prices.loc[prices["qualified_symbol"].isin(eligible)].copy()
     frame["retrieved_at"] = pd.to_datetime(frame["retrieved_at"], utc=True)
     frame["trading_date"] = pd.to_datetime(frame["trading_date"])
     boundary = pd.Timestamp(decision_at).tz_convert("UTC")
     frame = frame.loc[frame["retrieved_at"].le(boundary) & frame["status"].eq("available")]
-    dates = sorted(frame["trading_date"].unique())
-    vintage_indexes = list(range(MOMENTUM_DAYS, len(dates) - horizon_sessions, 21))
+    dates = pd.DatetimeIndex(sorted(frame["trading_date"].unique()))
+    # Last observed session in each calendar month. Requiring both the complete
+    # feature lookback and forward horizon excludes the incomplete final period.
+    month_ends = (
+        pd.Series(range(len(dates)), index=dates.to_period("M"))
+        .groupby(level=0).last().astype(int).tolist()
+    ) if len(dates) else []
+    possible = [index for index in month_ends if index >= MOMENTUM_DAYS]
+    vintage_indexes = [index for index in possible if index + horizon_sessions < len(dates)]
     identity = observations.set_index("qualified_symbol")
+    close_lookup = frame.set_index(["qualified_symbol", "trading_date"])["adjusted_close"]
     rows = []
+    feature_rows = label_rows = 0
+    removed_missing_feature = removed_missing_label = 0
     for index in vintage_indexes:
         vintage_date, label_date = pd.Timestamp(dates[index]), pd.Timestamp(dates[index + horizon_sessions])
         # Rebuild features at each cutoff. Retrieval availability remains explicit.
         vintage_obs = observations.copy()
         vintage_at = vintage_date.tz_localize("UTC") + pd.Timedelta(hours=23)
         vintage_obs["decision_at"] = vintage_at
-        scores = prepare_cross_section(vintage_obs, frame, decision_at=vintage_at.to_pydatetime())
+        scores = prepare_cross_section(
+            vintage_obs, frame, decision_at=vintage_at.to_pydatetime(),
+            knowledge_cutoff=boundary.to_pydatetime(),
+        )
+        feature_rows += len(scores)
+        removed_missing_feature += max(0, len(eligible) - len(scores))
         for score in scores.itertuples(index=False):
-            series = frame.loc[
-                (frame["qualified_symbol"] == score.qualified_symbol)
-                & frame["trading_date"].isin([vintage_date, label_date])
-            ].sort_values("trading_date")
-            if len(series) != 2:
+            try:
+                entry = float(close_lookup.loc[(score.qualified_symbol, vintage_date)])
+                exit_value = float(close_lookup.loc[(score.qualified_symbol, label_date)])
+            except KeyError:
+                removed_missing_label += 1
                 continue
+            label_rows += 1
             rows.append({
                 "qualified_symbol": score.qualified_symbol,
                 "region": identity.loc[score.qualified_symbol, "region"],
                 "vintage_date": vintage_date,
                 "label_date": label_date,
                 "score": score.composite_score,
-                "forward_return": series.iloc[1].adjusted_close / series.iloc[0].adjusted_close - 1,
+                "forward_return": exit_value / entry - 1,
             })
     predictions = pd.DataFrame(rows)
+    def date_value(value: Any) -> str | None:
+        return pd.Timestamp(value).date().isoformat() if value is not None else None
+
+    zero_reasons: list[str] = []
+    if not eligible:
+        zero_reasons.append("no_eligible_securities")
+    if frame.empty:
+        zero_reasons.append("no_visible_prices_by_evaluation_cutoff")
+    if not possible:
+        zero_reasons.append("insufficient_feature_history")
+    if possible and not vintage_indexes:
+        zero_reasons.append("no_complete_label_periods")
+    if vintage_indexes and not feature_rows:
+        zero_reasons.append("no_feature_eligible_rows")
+    if feature_rows and not label_rows:
+        zero_reasons.append("no_label_eligible_rows")
+    diagnostics = {
+        "cadence": "calendar_month_end_session",
+        "selected_securities": int(len(observations)),
+        "model_ready_securities": int(len(eligible)),
+        "loaded_securities": int(frame["qualified_symbol"].nunique()) if not frame.empty else 0,
+        "available_price_date_range": {
+            "earliest": date_value(frame["trading_date"].min()) if not frame.empty else None,
+            "latest": date_value(frame["trading_date"].max()) if not frame.empty else None,
+        },
+        "possible_decision_dates": int(len(possible)),
+        "generated_decision_vintages": int(len(vintage_indexes)),
+        "feature_eligible_rows": int(feature_rows),
+        "label_eligible_rows": int(label_rows),
+        "rows_removed": {
+            "not_model_ready_at_final_cutoff": int(len(observations) - len(eligible)),
+            "missing_feature_history": int(removed_missing_feature),
+            "incomplete_or_missing_label": int(removed_missing_label),
+            "incomplete_final_period_decision_dates": int(len(possible) - len(vintage_indexes)),
+        },
+        "earliest_feature_date": date_value(dates[vintage_indexes[0]]) if vintage_indexes else None,
+        "latest_feature_date": date_value(dates[vintage_indexes[-1]]) if vintage_indexes else None,
+        "earliest_label_date": date_value(dates[vintage_indexes[0] + horizon_sessions]) if vintage_indexes else None,
+        "latest_label_date": date_value(dates[vintage_indexes[-1] + horizon_sessions]) if vintage_indexes else None,
+        "zero_vintage_reason_codes": zero_reasons,
+        "membership_basis": "current_catalogue_not_survivorship_free",
+        "availability_semantics": "loaded_by_final_cutoff_effective_by_trading_date",
+        "historical_fx_semantics": "model_ready_asof_fx_for_each_price_date",
+    }
     if predictions.empty:
-        return predictions, {"valid": False, "vintages": 0, "predictions": 0}
+        return predictions, {"valid": False, "vintages": 0, "predictions": 0,
+                             "diagnostics": diagnostics}
     predictions["score_rank"] = predictions.groupby("vintage_date")["score"].rank(pct=True)
     predictions["return_rank"] = predictions.groupby("vintage_date")["forward_return"].rank(pct=True)
     correlations = predictions.groupby("vintage_date").apply(
@@ -236,6 +319,7 @@ def walk_forward_evidence(
         "regional_vintages": {
             str(k): int(v) for k, v in predictions.groupby("region")["vintage_date"].nunique().items()
         },
+        "diagnostics": diagnostics,
     }
     return predictions, metrics
 
@@ -335,17 +419,29 @@ def assess_research_scoring(*, research_db: Path, production_db: Path,
     _, evaluation = walk_forward_evidence(dataset.observations, prices, decision_at=captured)
     after = {"research": fingerprint(research_db), "production": fingerprint(production_db)}
     unchanged = all(before[key] == after[key] for key in before)
+    if not unchanged:
+        raise ReadinessError("database fingerprint changed during read-only research scoring")
     gates = evaluate_evidence(observations=dataset.observations, evaluation=evaluation,
                               integrity_ok=unchanged, policy=policy)
     ranking = build_research_ranking(scores, gates, policy=policy)
     return {"command": "research-scoring", "mode": "strictly_read_only",
         "decision_at": pd.Timestamp(captured).isoformat(), "label": "RESEARCH ONLY — NOT INVESTMENT ADVICE",
         "prior_readiness_result_implies_gate_pass": False,
+        "survivorship_free": False,
+        "membership_basis": "current_catalogue_not_survivorship_free",
         "model_ready_securities": int(dataset.observations.eligible.sum()),
         "withheld_securities": int((~dataset.observations.eligible).sum()),
         "feature_evidence": {"available": ["adjusted_close_momentum_126d", "trend_21d",
             "volatility_63d", "drawdown_126d", "historical_fx_converted_observations"],
             "unavailable": ["point_in_time_fundamentals", "valuation", "quality", "catalyst", "sentiment"]},
+        "current_scoring_cross_section": {
+            "purpose": "potential_candidates_only_if_all_evidence_gates_pass",
+            "rows": int(len(scores)),
+        },
+        "historical_evaluation_panel": {
+            "purpose": "evidence_evaluation_only_never_candidate_selection",
+            **evaluation["diagnostics"],
+        },
         "evaluation": evaluation, "evidence_gates": gates, "ranking": ranking,
         "database_fingerprints": {key: {"before": asdict(before[key]), "after": asdict(after[key]),
             "unchanged": before[key] == after[key]} for key in before}}

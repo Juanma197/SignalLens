@@ -217,6 +217,9 @@ def build_model_ready_observations(
     fx_frame["available_at"] = _utc(fx_frame["available_at"], "FX availability")
     action_frame = actions.copy()
     action_frame["ex_date"] = pd.to_datetime(action_frame["ex_date"]).dt.date
+    # Corporate actions are effective-dated evidence. A future action must not
+    # invalidate or otherwise alter an earlier decision-time observation.
+    action_frame = action_frame.loc[action_frame["ex_date"].le(boundary.date())]
 
     rows: list[dict[str, Any]] = []
     eligible_catalogue = catalogue.loc[catalogue["eligible"].astype(bool)].copy()
