@@ -55,6 +55,9 @@ TEN_YEARS_DAYS = 3653
 REFRESH_OVERLAP_DAYS = 7
 SHORT_HISTORY_OBSERVATIONS = 252
 STALE_CALENDAR_DAYS = 7
+PERMANENT_FAILURE_CODES = frozenset({"invalid_provider_payload"})
+RETRYABLE_FAILURE_CODES = frozenset({"provider_http_error", "provider_request_failed"})
+PLANNED_REQUEST_SAMPLE_LIMIT = 10
 
 
 class BudgetStop(RuntimeError):
@@ -466,19 +469,37 @@ class EODHDIngestion:
         result["database_unchanged"] = True
         return result
 
-    def plan_refresh(self, *, as_of: datetime, reconcile: bool = False) -> dict:
+    def plan_refresh(self, *, as_of: datetime, reconcile: bool = False,
+                     include_request_details: bool = False,
+                     include_permanent_failures: bool = False) -> dict:
         """Plan bounded endpoint ranges without opening the database for writes."""
         listings = self._latest_listings(as_of) if self.path.exists() else []
         latest: dict[str, date] = {}
         fx_latest: dict[str, date] = {}
+        states: dict[str, tuple[str, str | None]] = {}
         if self.path.exists():
             with duckdb.connect(str(self.path), read_only=True) as db:
                 tables = {r[0] for r in db.execute("SHOW TABLES").fetchall()}
                 if "global_price_observations" in tables: latest = dict(db.execute("SELECT qualified_symbol,MAX(trading_date) FROM global_price_observations GROUP BY 1").fetchall())
                 if "global_fx_observations" in tables: fx_latest = dict(db.execute("SELECT base_currency,MAX(observed_on) FROM global_fx_observations WHERE quote_currency='GBP' GROUP BY 1").fetchall())
+                if "eodhd_ingestion_checkpoints" in tables:
+                    for stage in ("prices", "refresh"):
+                        states.update({r[0]: (r[1], r[2]) for r in db.execute(
+                            "SELECT qualified_symbol,status,error_code FROM eodhd_ingestion_checkpoints WHERE stage=?", [stage]).fetchall()})
         requests, estimated = [], 0
         full = reconcile
+        skipped_permanent = skipped_nonretryable = pending = 0
         for item in listings:
+            state = states.get(item.qualified_symbol)
+            if state and state[0] == "pending": pending += 1
+            if state and state[0] == "failed":
+                if state[1] in PERMANENT_FAILURE_CODES:
+                    if not include_permanent_failures:
+                        skipped_permanent += 1
+                        continue
+                elif state[1] not in RETRYABLE_FAILURE_CODES:
+                    skipped_nonretryable += 1
+                    continue
             mode = "periodic_reconciliation" if reconcile else ("incremental_refresh" if item.qualified_symbol in latest else "initial_backfill")
             start = as_of.date() - timedelta(days=TEN_YEARS_DAYS) if mode != "incremental_refresh" else latest[item.qualified_symbol] - timedelta(days=REFRESH_OVERLAP_DAYS - 1)
             estimated += max(0, (as_of.date() - start).days * 5 // 7)
@@ -487,19 +508,33 @@ class EODHDIngestion:
             mode = "periodic_reconciliation" if reconcile else ("incremental_refresh" if currency in fx_latest else "initial_backfill")
             start = as_of.date() - timedelta(days=TEN_YEARS_DAYS) if mode != "incremental_refresh" else fx_latest[currency] - timedelta(days=REFRESH_OVERLAP_DAYS - 1)
             requests.append({"target": f"{currency}GBP.FOREX", "endpoints": ["eod"], "from": start, "to": as_of.date(), "mode": mode})
+        sample = requests if include_request_details else requests[:PLANNED_REQUEST_SAMPLE_LIMIT]
         return {"command": "plan-refresh", "mode": "read_only", "overlap_days": REFRESH_OVERLAP_DAYS,
-                "planned_requests": requests, "provider_request_estimate": sum(len(r["endpoints"]) for r in requests),
-                "estimated_rows": estimated, "pending_securities": self._pending_count(), "full_reconciliation_required": full,
+                "planned_requests": sample, "planned_requests_total": len(requests),
+                "planned_requests_truncated": len(sample) < len(requests),
+                "provider_request_estimate": sum(len(r["endpoints"]) for r in requests),
+                "estimated_rows": estimated, "eligible_securities": len(listings) - skipped_permanent - skipped_nonretryable,
+                "skipped_permanent_securities": skipped_permanent,
+                "skipped_nonretryable_securities": skipped_nonretryable,
+                "pending_securities": pending, "full_reconciliation_required": full,
                 "note": "Incremental refresh reduces response volume and processing time, but generally still needs about one provider request per endpoint/security."}
 
     def refresh(self, *, retrieved_at: datetime, retry_failures: bool = False, dry_run: bool = False,
-                reconcile: bool = False, authorized: bool = False) -> dict:
+                reconcile: bool = False, authorized: bool = False,
+                authorize_permanent_failures: bool = False) -> dict:
         if reconcile and not authorized: raise ValueError("full reconciliation requires --authorize-full-reconciliation")
-        plan = self.plan_refresh(as_of=retrieved_at, reconcile=reconcile)
-        if dry_run: return {**plan, "command": "reconcile" if reconcile else "refresh", "mode": "dry_run", "database_unchanged": True}
+        if authorize_permanent_failures and not retry_failures:
+            raise ValueError("permanent-failure authorization is only valid with retry-failures")
+        plan = self.plan_refresh(as_of=retrieved_at, reconcile=reconcile, include_request_details=True,
+            include_permanent_failures=retry_failures and authorize_permanent_failures)
+        if dry_run:
+            planned = plan["planned_requests"]
+            return {**plan, "command": "reconcile" if reconcile else ("retry-failures" if retry_failures else "refresh"),
+                    "mode": "dry_run", "planned_requests": planned[:PLANNED_REQUEST_SAMPLE_LIMIT],
+                    "planned_requests_truncated": len(planned) > PLANNED_REQUEST_SAMPLE_LIMIT,
+                    "database_unchanged": True}
         self._state_schema()
         listings = {x.qualified_symbol: x for x in self._latest_listings(retrieved_at)}
-        permanent = {"invalid_provider_payload"}
         with duckdb.connect(str(self.path), read_only=True) as db:
             states = {r[0]: (r[1], r[2]) for r in db.execute(
                 "SELECT qualified_symbol,status,error_code FROM eodhd_ingestion_checkpoints WHERE stage='prices'").fetchall()}
@@ -511,8 +546,10 @@ class EODHDIngestion:
             if symbol.endswith(".FOREX"): continue
             state = states.get(symbol)
             if state and state[0] == "pending": targets.append(request)
-            elif retry_failures and state and state[0] == "failed" and state[1] not in permanent: targets.append(request)
-            elif not retry_failures and (not state or state[0] != "failed" or state[1] not in permanent): targets.append(request)
+            elif retry_failures and state and state[0] == "failed" and (
+                    state[1] in RETRYABLE_FAILURE_CODES or
+                    authorize_permanent_failures and state[1] in PERMANENT_FAILURE_CODES): targets.append(request)
+            elif not retry_failures and (not state or state[0] != "failed" or state[1] in RETRYABLE_FAILURE_CODES): targets.append(request)
         for request in targets: self._checkpoint("refresh", request["target"], "pending", None)
         revisions = completed = 0; failures = []; stop = None
         for request in targets:

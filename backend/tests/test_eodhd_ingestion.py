@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -266,6 +267,82 @@ def test_incremental_plan_uses_bounded_overlap_not_ten_years(tmp_path: Path) -> 
     assert price["from"] == date(2026, 9, 19)  # latest stored date minus six days
     assert (price["to"] - price["from"]).days < 10
     assert plan["overlap_days"] == 7
+
+
+def test_refresh_plan_excludes_permanent_failure_and_bounds_request_details(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "research.duckdb"
+    operation = EODHDIngestion(path, tmp_path / "prod.duckdb", client(per_region=1, total=5))
+    operation.catalogue(retrieved_at=NOW)
+    base = operation._latest_listings(NOW)[0]
+    listings = [replace(base, exchange_symbol="AIIA-U.US")]
+    listings.extend(replace(base, exchange_symbol=f"SAFE-{index}.US")
+                    for index in range(499))
+    monkeypatch.setattr(operation, "_latest_listings", lambda _: listings)
+    operation._state_schema()
+    operation._checkpoint("prices", "AIIA-U.US", "failed", "invalid_provider_payload")
+
+    plan = operation.plan_refresh(as_of=NOW)
+
+    assert plan["eligible_securities"] == 499
+    assert plan["skipped_permanent_securities"] == 1
+    assert plan["skipped_nonretryable_securities"] == 0
+    assert plan["pending_securities"] == 0
+    assert plan["provider_request_estimate"] == 1001
+    assert plan["planned_requests_total"] == 502
+    assert len(plan["planned_requests"]) == 10
+    assert plan["planned_requests_truncated"] is True
+    assert all(request["target"] != "AIIA-U.US" for request in plan["planned_requests"])
+
+
+def test_normal_refresh_never_executes_permanent_initial_backfill_and_retry_requires_authorization(
+        tmp_path: Path) -> None:
+    path = tmp_path / "research.duckdb"
+    called_permanent = []
+
+    def guarded_transport(request: httpx.Request) -> httpx.Response:
+        if "AAAUS.US" in request.url.path:
+            called_permanent.append(request.url.path)
+        return transport(request)
+
+    guarded_client = EODHDClient("secret", EODHDLimits(per_region=1, total=5, requests_per_minute=100000),
+        transport=httpx.MockTransport(guarded_transport), sleep=lambda _: None)
+    operation = EODHDIngestion(path, tmp_path / "prod.duckdb", guarded_client)
+    operation.catalogue(retrieved_at=NOW)
+    operation._state_schema()
+    operation._checkpoint("prices", "AAAUS.US", "failed", "invalid_provider_payload")
+    guarded_client.requests = 0
+
+    routine = operation.refresh(retrieved_at=NOW)
+    assert called_permanent == []
+    assert routine["completed"] == 4
+    assert routine["requests"] == 11  # Four securities x two endpoints plus three FX pairs.
+
+    guarded_client.requests = 0
+    retry = operation.refresh(retrieved_at=NOW, retry_failures=True)
+    assert retry["completed"] == 0 and guarded_client.requests == 0
+    authorized = operation.refresh(retrieved_at=NOW, retry_failures=True,
+                                   authorize_permanent_failures=True)
+    assert authorized["completed"] == 1 and guarded_client.requests == 2
+    assert len(called_permanent) == 2
+
+
+def test_plan_reports_pending_and_nonretryable_aggregates(tmp_path: Path) -> None:
+    path = tmp_path / "research.duckdb"
+    operation = EODHDIngestion(path, tmp_path / "prod.duckdb", client(per_region=1, total=5))
+    operation.catalogue(retrieved_at=NOW)
+    operation._state_schema()
+    symbols = [item.qualified_symbol for item in operation._latest_listings(NOW)]
+    operation._checkpoint("prices", symbols[0], "pending", None)
+    operation._checkpoint("prices", symbols[1], "failed", "unexpected_provider_error")
+    operation._checkpoint("prices", symbols[2], "failed", "provider_request_failed")
+
+    plan = operation.plan_refresh(as_of=NOW)
+
+    assert plan["eligible_securities"] == 4
+    assert plan["pending_securities"] == 1
+    assert plan["skipped_nonretryable_securities"] == 1
+    assert plan["skipped_permanent_securities"] == 0
 
 
 def test_refresh_is_idempotent_and_reports_provider_corrections(tmp_path: Path) -> None:

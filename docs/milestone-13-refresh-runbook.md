@@ -50,6 +50,16 @@ symbols by default (`--affected-limit`, maximum 100). It checks selection, depth
 freshness, adjusted close, OHLCV validity, currency, FX, corporate actions,
 natural-key duplicates, and structured provider failures.
 
+`plan-refresh` reports aggregate counts for eligible, pending,
+skipped-permanent, and skipped-nonretryable securities. By default it includes
+only a sanitized sample of at most ten request records; add
+`--verbose-planned-requests` only when the complete local plan is genuinely
+needed. For the operator-reported state above, the routine plan is expected to
+contain 499 eligible securities, one skipped permanent failure, zero pending
+securities, and 1,001 provider requests (499 price/dividend pairs plus three FX
+requests). This expected result has offline regression coverage, but was not
+verified against the operator's local database here.
+
 ## Routine refresh versus reconciliation
 
 Normal daily or weekly `refresh` starts six days before the latest stored boundary,
@@ -58,9 +68,22 @@ upserts natural keys, reports materially changed overlapping rows, never deletes
 valid history, preserves retrieval/FX availability timestamps, and checkpoints a
 budget/runtime stop for resumption. Incremental ranges reduce response volume and
 processing time, but EODHD may still require approximately one request for each
-endpoint/security. `retry-failures` considers only pending or retryable failures;
-invalid payloads remain permanent unless an operator deliberately changes their
-classification after investigation.
+endpoint/security. Routine planning and refresh skip permanent failures such as
+`invalid_provider_payload`, while transient `provider_http_error` and
+`provider_request_failed` failures are explicitly classified as retryable.
+Unknown/nonretryable classifications are also skipped rather than guessed.
+`retry-failures` considers pending and retryable failures by default.
+
+A permanent failure must first be investigated. If the operator deliberately
+decides it is safe to retry, both the explicit operation and the separate
+authorization flag are required:
+
+```powershell
+python -m app.eodhd_ingestion_cli retry-failures --authorize-permanent-failures `
+  --research-db $Research --production-db $Production
+```
+
+Never add this authorization flag to the routine refresh command or scheduler.
 
 Adjusted history can change after splits, dividends, or provider corrections, so
 periodic deeper reconciliation is separate and never automatic. Review its plan
