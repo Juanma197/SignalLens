@@ -4,11 +4,14 @@ SignalLens is a research dashboard for periodically ranking public companies and
 
 ## Current milestone
 
-Milestone 7 adds a provider-independent, point-in-time global security master and
-immutable monthly universe snapshots as shadow research infrastructure. It does
-not change the live 30-stock universe or the `momentum_126d` production strategy.
-See [`docs/global-universe.md`](docs/global-universe.md) for source, licensing,
-identity, FX, command, and operational limitations.
+Milestone 14 adds a pure, offline transformation from the five-region pilot
+schema to validated model-ready research observations. It fails closed on bad or
+incomplete price, FX, action, freshness, identity, and provider-failure evidence,
+and preserves adjusted-price and point-in-time FX semantics. It does not inspect
+an operator database, produce a ranking, change the live 30-stock universe, or
+alter the `momentum_126d` production strategy. See
+[`docs/milestone-14-model-ready-observations.md`](docs/milestone-14-model-ready-observations.md)
+for the contract and limitations.
 
 ## Requirements
 

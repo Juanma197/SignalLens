@@ -158,3 +158,26 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [ ] Run audit and refresh against the operator-held database (not available in cloud)
 - [ ] Obtain survivorship-free membership before any historical-membership assertion
 - [ ] Production promotion, Railway changes and official `momentum_126d` changes (prohibited)
+
+## Milestone 14 — Trustworthy model-ready observations (implementation complete)
+
+- [x] Pure, offline current-catalogue transformation over existing global market
+  data and research feature architecture; no database or provider access
+- [x] Five-region identity and trading-currency contract for US, LSE, TO, XETRA
+  and PA
+- [x] Point-in-time retrieval/FX boundaries, adjusted-close return inputs, GBX
+  handling and corporate-action validation
+- [x] Fail-closed duplicate-key validation and per-security withholding for
+  missing FX, insufficient history, invalid prices/actions, stale evidence and
+  permanent provider failures
+- [x] Deterministic sanitized five-region fixtures and offline regression tests
+- [x] Research-only readiness report that never publishes a rank or forces a
+  highest-conviction selection
+- [ ] Run the transformation against an operator-approved export or database
+  adapter (the operator-held DuckDB was not accessed)
+- [ ] Add point-in-time fundamentals and historical membership before controlled
+  walk-forward evaluation; current catalogues are not survivorship-free
+- [ ] Produce a gated research-only monthly Top 3 and highest-conviction result
+  only when evidence thresholds pass
+- [ ] Production promotion, Railway changes and official `momentum_126d` changes
+  (prohibited)
