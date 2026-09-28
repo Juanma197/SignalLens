@@ -13,11 +13,12 @@ from .eodhd_ingestion import EODHDClient, EODHDIngestion, EODHDLimits
 from .extreme_label_diagnostics import diagnose_extreme_labels, plan_label_repair
 from .model_readiness import assess_model_readiness
 from .research_scoring import assess_research_scoring
+from .horizon_evaluation import assess_horizon_evaluation
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bounded EODHD global research ingestion")
-    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "diagnose-extreme-labels", "plan-label-repair", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage", "model-readiness", "research-scoring"])
+    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "diagnose-extreme-labels", "plan-label-repair", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage", "model-readiness", "research-scoring", "research-horizon-evaluation"])
     parser.add_argument("--catalogue-fixture", type=Path,
                         help="local sanitized JSON object keyed by region (diagnose-catalogue only)")
     parser.add_argument("--research-db", type=Path)
@@ -60,6 +61,11 @@ def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = 
             research_db=args.research_db, production_db=args.production_db,
             decision_at=args.decision_at or captured,
         )
+    if args.command == "research-horizon-evaluation":
+        if args.research_db is None or args.production_db is None:
+            raise ValueError("research-horizon-evaluation requires explicit --research-db and --production-db paths")
+        return assess_horizon_evaluation(research_db=args.research_db,
+            production_db=args.production_db, decision_at=args.decision_at or captured)
     if args.command == "diagnose-extreme-labels":
         if args.research_db is None or args.production_db is None:
             raise ValueError("diagnose-extreme-labels requires explicit --research-db and --production-db paths")

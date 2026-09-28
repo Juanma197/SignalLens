@@ -419,3 +419,18 @@ and no strategy-success claim is made.
   extremes and near-zero denominators. It neither repairs nor reinterprets the
   observations and uses only `possible_*` causal classifications where stored
   evidence cannot establish a cause.
+## Milestone 18 — Leakage-safe multi-horizon research evaluation
+
+- Implementation complete; an operator-data run is pending and no new live
+  performance claim is made.
+- The 21/63/126/252-session family, monthly cadence, block-bootstrap dependence
+  method, Holm-Bonferroni correction, and unchanged evidence thresholds are
+  locked in code before results are viewed.
+- Every horizon reports its own sample, equal-vintage return summaries,
+  dependence-aware interval and raw/adjusted significance, rank correlation,
+  calibration, regions, temporal stability, exclusions, integrity and gates.
+- The prior 21-session result (41,271 predictions, 113 vintages, -0.00463 mean
+  excess, 0.4779 positive-period rate, 0.04284 rank correlation) is frozen as a
+  failed baseline. It is not rewritten or obscured.
+- The command is database-immutable, provider-free and candidate-incapable.
+  Passing evidence can only support a later operator review and horizon lock.

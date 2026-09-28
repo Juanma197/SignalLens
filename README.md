@@ -4,6 +4,26 @@ SignalLens is a research dashboard for periodically ranking public companies and
 
 ## Current milestone
 
+Milestone 18 adds a strictly read-only, pre-registered multi-horizon evaluation
+over 21, 63, 126 and 252 trading sessions. It reuses the validated price, FX,
+segmentation and model-ready paths, applies a horizon-aware moving-block
+bootstrap and Holm-Bonferroni family correction, and always emits zero
+candidates. The failed 21-session result remains frozen rather than replaced.
+See [`docs/milestone-18-horizon-evaluation.md`](docs/milestone-18-horizon-evaluation.md).
+
+```bash
+cd backend
+PYTHONPATH=. python -m app.eodhd_ingestion_cli research-horizon-evaluation \
+  --research-db /path/to/research.duckdb \
+  --production-db /path/to/production.duckdb \
+  --decision-at 2026-09-28T20:00:00+00:00
+```
+
+The command opens the research database read-only, never contacts a provider,
+and fingerprints both database paths before and after the run.
+
+### Prior milestone
+
 Milestone 17 adds a bounded `fundamentals-capability` assessment for historical
 EODHD statements. It probes at most one representative security in each of US,
 LSE, TO, XETRA and PA, emits aggregates only, and requires a filing/accepted/
