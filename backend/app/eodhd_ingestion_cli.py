@@ -14,11 +14,13 @@ from .extreme_label_diagnostics import diagnose_extreme_labels, plan_label_repai
 from .model_readiness import assess_model_readiness
 from .research_scoring import assess_research_scoring
 from .horizon_evaluation import assess_horizon_evaluation
+from .shadow_portfolios import (create_shadow_vintage, evaluate_matured_shadows,
+    plan_shadow_vintage, shadow_status)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bounded EODHD global research ingestion")
-    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "diagnose-extreme-labels", "plan-label-repair", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage", "model-readiness", "research-scoring", "research-horizon-evaluation"])
+    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "diagnose-extreme-labels", "plan-label-repair", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage", "model-readiness", "research-scoring", "research-horizon-evaluation", "plan-shadow-vintage", "create-shadow-vintage", "shadow-status", "evaluate-matured-shadows"])
     parser.add_argument("--catalogue-fixture", type=Path,
                         help="local sanitized JSON object keyed by region (diagnose-catalogue only)")
     parser.add_argument("--research-db", type=Path)
@@ -39,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="deliberate authorization required by reconcile")
     parser.add_argument("--authorize-permanent-failures", action="store_true",
                         help="deliberate authorization to retry permanent failures (retry-failures only)")
+    parser.add_argument("--authorize-research-shadow", action="store_true",
+                        help="explicit authorization for research-only shadow persistence")
     parser.add_argument("--verbose-planned-requests", action="store_true",
                         help="include every planned request instead of the bounded sample")
     return parser
@@ -46,6 +50,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = None) -> dict:
     settings, captured = get_settings(), now or datetime.now(timezone.utc)
+    if args.command in {"plan-shadow-vintage", "create-shadow-vintage", "shadow-status", "evaluate-matured-shadows"}:
+        if args.research_db is None or args.production_db is None:
+            raise ValueError(f"{args.command} requires explicit --research-db and --production-db paths")
+        cutoff = args.decision_at or captured
+        if args.command == "plan-shadow-vintage":
+            return plan_shadow_vintage(research_db=args.research_db, production_db=args.production_db, cutoff=cutoff)
+        if args.command == "create-shadow-vintage":
+            return create_shadow_vintage(research_db=args.research_db, production_db=args.production_db,
+                                         cutoff=cutoff, authorized=args.authorize_research_shadow, now=captured)
+        if args.command == "shadow-status":
+            return shadow_status(research_db=args.research_db, production_db=args.production_db)
+        return evaluate_matured_shadows(research_db=args.research_db, production_db=args.production_db, as_of=cutoff)
     if args.command == "model-readiness":
         if args.research_db is None or args.production_db is None:
             raise ValueError("model-readiness requires explicit --research-db and --production-db paths")
