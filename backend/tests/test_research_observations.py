@@ -1,8 +1,12 @@
 from datetime import datetime, timezone
+import resource
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
 import pytest
+
+import app.research_observations as observations_module
 
 from app.research_observations import (
     ObservationValidationError,
@@ -115,6 +119,7 @@ def test_five_region_fixture_builds_point_in_time_model_ready_observations():
     ("mutation", "reason"),
     [
         (lambda p: p[2].drop(p[2].loc[p[2].base_currency == "USD"].index), "missing_fx"),
+        (lambda p: p[2].assign(rate=lambda x: np.where(x.base_currency == "USD", -1, x.rate)), "invalid_fx"),
         (lambda p: p[1].drop(p[1].loc[p[1].qualified_symbol == "CHARLIE.TO"].index[:-20]), "insufficient_history"),
         (lambda p: p[1].assign(adjusted_close=lambda x: np.where(x.qualified_symbol == "ECHO.PA", -1, x.adjusted_close)), "invalid_price_history"),
         (lambda p: p[1].assign(retrieved_at="2026-10-01T00:00:00Z"), "missing_price_history"),
@@ -124,7 +129,7 @@ def test_security_evidence_failures_are_withheld(mutation, reason):
     parts = list(fixtures())
     target = mutation(parts)
     if isinstance(target, pd.DataFrame):
-        if reason == "missing_fx":
+        if reason in {"missing_fx", "invalid_fx"}:
             parts[2] = target
         else:
             parts[1] = target
@@ -177,3 +182,92 @@ def test_missing_region_and_invalid_action_reject_or_withhold():
     parts[3].loc[0, "value"] = -1
     result = build(parts)
     assert result.report["exclusions"]["invalid_corporate_action"] == 1
+
+
+def test_ten_year_500_security_fixture_uses_one_vectorized_fx_lookup_per_security(
+    monkeypatch,
+):
+    """Guard algorithmic shape without making wall-clock speed the main assertion."""
+    days = pd.bdate_range("2016-09-26", "2026-09-25")
+    region_currency = [
+        ("US", "USD"), ("LSE", "GBX"), ("TO", "CAD"),
+        ("XETRA", "EUR"), ("PA", "EUR"),
+    ]
+    security_numbers = np.arange(500)
+    catalogue = pd.DataFrame(
+        {
+            "security_id": [f"scale-{number}" for number in security_numbers],
+            "qualified_symbol": [
+                f"SCALE{number:03d}.{region_currency[number % 5][0]}"
+                for number in security_numbers
+            ],
+            "region": [region_currency[number % 5][0] for number in security_numbers],
+            "currency": [region_currency[number % 5][1] for number in security_numbers],
+            "eligible": True,
+        }
+    )
+    symbols = np.repeat(catalogue["qualified_symbol"].to_numpy(), len(days))
+    currencies = np.repeat(catalogue["currency"].to_numpy(), len(days))
+    dates = np.tile(days.to_numpy(), len(catalogue))
+    close = (
+        40.0 + np.tile(np.arange(len(days), dtype=np.float32), len(catalogue)) / 100.0
+    ).astype(np.float32)
+    prices = pd.DataFrame(
+        {
+            "qualified_symbol": symbols,
+            "trading_date": dates,
+            "currency": currencies,
+            "open": close - .1,
+            "high": close + .2,
+            "low": close - .2,
+            "close": close,
+            "adjusted_close": close,
+            "volume": np.full(len(symbols), 100_000, dtype=np.int32),
+            "status": "available",
+            "source": "synthetic-scale-fixture",
+            "retrieved_at": "2026-09-26T08:00:00Z",
+        }
+    )
+    for column in ("qualified_symbol", "currency", "status", "source"):
+        prices[column] = prices[column].astype("category")
+    fx = pd.DataFrame(
+        {
+            "base_currency": np.repeat(["USD", "CAD", "EUR"], len(days)),
+            "quote_currency": "GBP",
+            "observed_on": np.tile(days.to_numpy(), 3),
+            "rate": np.repeat([.75, .55, .86], len(days)),
+            "available_at": np.tile(days + pd.Timedelta(hours=18), 3),
+        }
+    )
+
+    lookup_sizes = []
+    original_lookup = observations_module._FxPointInTimeIndex.lookup
+
+    def counted_lookup(self, base_currency, price_dates, maximum_age_days):
+        lookup_sizes.append(len(price_dates))
+        return original_lookup(self, base_currency, price_dates, maximum_age_days)
+
+    monkeypatch.setattr(observations_module._FxPointInTimeIndex, "lookup", counted_lookup)
+    started = perf_counter()
+    result = build_model_ready_observations(
+        catalogue=catalogue,
+        prices=prices,
+        fx=fx,
+        actions=pd.DataFrame(columns=["qualified_symbol", "ex_date", "action_type", "value"]),
+        failures=pd.DataFrame(columns=["qualified_symbol", "error_code"]),
+        decision_at=DECISION,
+    )
+    elapsed = perf_counter() - started
+
+    assert len(result.observations) == 500
+    assert result.observations["eligible"].all()
+    assert len(prices) >= 1_300_000
+    assert len(fx) >= 7_500
+    # 400 non-GBP securities, exactly one vectorized lookup for each. A return
+    # to one FX-frame scan per price row would make this assertion fail.
+    assert lookup_sizes == [len(days)] * 400
+    assert elapsed < 30
+    print(
+        f"scale_seconds={elapsed:.3f} "
+        f"scale_peak_rss_mib={resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.1f}"
+    )

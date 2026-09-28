@@ -195,6 +195,10 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Bounded sanitized affected-symbol samples and explicit no-ranking/no-Top-3/
   no-highest-conviction statements
 - [x] Sanitized five-region DuckDB fixture and mutation/path/quality regressions
+- [x] Repair the cancelled first-run performance regression with invocation-local,
+  sorted per-pair FX indexes and one vectorized point-in-time lookup per security;
+  group visible prices and actions once and cover 500 securities over ten years
 - [x] PowerShell operator runbook; no provider, production, Railway, or publisher changes
-- [ ] Run locally against the operator-held database (no live result claimed here)
+- [ ] Retry locally against the operator-held database after merge (the first
+  attempt was safely cancelled after approximately 29 minutes; no live result claimed)
 - [ ] Add point-in-time fundamentals and survivorship-aware membership before evaluation

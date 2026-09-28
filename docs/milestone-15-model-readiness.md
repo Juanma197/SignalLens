@@ -20,6 +20,33 @@ GBP remains an identity conversion, GBX is divided by 100, and USD/CAD/EUR use
 only historical GBP rates observed on or before each price date and available by
 the decision time.
 
+## Cancelled first attempt and performance correction
+
+The first operator attempt used a 78,131,200-byte research DuckDB and was safely
+cancelled with Ctrl+C after approximately 29 minutes, approximately 1,705 CPU
+seconds, and 645 MB working memory. Its size and modification time remained
+unchanged and Git remained clean. That cancellation is evidence of safe failure,
+not a successful live readiness assessment.
+
+The cause was repeated filtering and sorting of the complete FX frame for every
+historical price of every security. The corrected pure transformation now:
+
+1. normalizes FX date/rate fields, applies the decision-time `available_at` boundary
+   once, and builds sorted, invocation-local arrays per currency pair;
+2. resolves all dates for one security with NumPy `searchsorted`, retaining the
+   latest rate observed on or before each price date and visible at the decision
+   boundary;
+3. filters and sorts visible prices once and groups prices and corporate actions
+   once by symbol; and
+4. retains no module/global cache, so neither observations nor decision
+   boundaries can leak between assessments.
+
+The missing, stale, invalid, duplicate, short-history, invalid-action, and
+permanent-failure rules are unchanged, as are GBP identity and the GBX divisor.
+A 500-security, ten-year daily-price fixture with USD/GBP, CAD/GBP, and EUR/GBP
+history structurally asserts exactly one vectorized FX lookup per non-GBP
+security, avoiding dependence on a narrow timing threshold.
+
 ## Windows PowerShell operation
 
 After merging the PR, open PowerShell at the repository root. Substitute your

@@ -51,6 +51,66 @@ class ModelReadyDataset:
     report: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class _FxSeries:
+    """One immutable, decision-time-visible currency-pair time series."""
+
+    observed_on: np.ndarray
+    rates: np.ndarray
+
+
+class _FxPointInTimeIndex:
+    """Vectorized as-of FX lookup built once for an observation run.
+
+    Availability is filtered at construction time, while observation dates are
+    resolved independently for every price date.  Nothing is retained outside
+    the builder invocation, so decision boundaries cannot leak between runs.
+    """
+
+    def __init__(self, frame: pd.DataFrame, boundary: pd.Timestamp) -> None:
+        visible = frame.loc[frame["available_at"].le(boundary)].sort_values(
+            ["base_currency", "quote_currency", "observed_on", "available_at"]
+        )
+        self._pairs: dict[tuple[str, str], _FxSeries] = {}
+        for pair, group in visible.groupby(
+            ["base_currency", "quote_currency"], sort=False, observed=True
+        ):
+            self._pairs[(str(pair[0]), str(pair[1]))] = _FxSeries(
+                observed_on=pd.to_datetime(group["observed_on"]).to_numpy(dtype="datetime64[ns]"),
+                rates=pd.to_numeric(group["rate"], errors="coerce").to_numpy(dtype=float),
+            )
+
+    def lookup(
+        self, base_currency: str, price_dates: pd.Series, maximum_age_days: int
+    ) -> tuple[np.ndarray | None, str | None]:
+        """Return rates for all dates, or the legacy reason from the first bad date."""
+        series = self._pairs.get((base_currency, "GBP"))
+        if series is None or not len(series.observed_on):
+            return None, "missing_fx"
+
+        dates = pd.to_datetime(price_dates).to_numpy(dtype="datetime64[ns]")
+        positions = np.searchsorted(series.observed_on, dates, side="right") - 1
+        missing = positions < 0
+        safe_positions = np.maximum(positions, 0)
+        rates = series.rates[safe_positions]
+        invalid = (~np.isfinite(rates)) | (rates <= 0)
+        age_days = (dates - series.observed_on[safe_positions]) / np.timedelta64(1, "D")
+        stale = age_days > maximum_age_days
+
+        # The former row loop stopped at the first failure. Preserve that exact
+        # position and same-row precedence without returning to a Python row loop.
+        failures = []
+        for precedence, (mask, reason) in enumerate(
+            ((missing, "missing_fx"), (invalid, "invalid_fx"), (stale, "stale_fx"))
+        ):
+            offsets = np.flatnonzero(mask)
+            if len(offsets):
+                failures.append((int(offsets[0]), precedence, reason))
+        if failures:
+            return None, min(failures)[2]
+        return rates, None
+
+
 def _require_columns(frame: pd.DataFrame, columns: set[str], label: str) -> None:
     missing = columns - set(frame.columns)
     if missing:
@@ -161,6 +221,14 @@ def build_model_ready_observations(
     rows: list[dict[str, Any]] = []
     eligible_catalogue = catalogue.loc[catalogue["eligible"].astype(bool)].copy()
     eligible_catalogue = eligible_catalogue.sort_values(["region", "qualified_symbol"])
+    # Filter and sort each large input once. Grouped lookups below scale with a
+    # security's own history rather than rescanning all observations.
+    visible_prices = price_frame.loc[
+        price_frame["retrieved_at"].le(boundary) & price_frame["status"].eq("available")
+    ].sort_values(["qualified_symbol", "trading_date"])
+    prices_by_symbol = visible_prices.groupby("qualified_symbol", sort=False, observed=True)
+    actions_by_symbol = action_frame.groupby("qualified_symbol", sort=False, observed=True)
+    fx_index = _FxPointInTimeIndex(fx_frame, boundary)
     permanent = failures.loc[
         failures["error_code"].astype(str).str.lower().isin(PERMANENT_FAILURE_CODES)
     ]
@@ -170,11 +238,11 @@ def build_model_ready_observations(
         symbol = str(item.qualified_symbol)
         currency = str(item.currency).upper()
         reasons: list[str] = []
-        visible = price_frame.loc[
-            (price_frame["qualified_symbol"] == symbol)
-            & price_frame["retrieved_at"].le(boundary)
-            & (price_frame["status"] == "available")
-        ].sort_values("trading_date")
+        visible = (
+            prices_by_symbol.get_group(symbol)
+            if symbol in prices_by_symbol.indices
+            else visible_prices.iloc[0:0]
+        )
         if symbol in permanent_by_symbol:
             reasons.append("permanent_provider_failure")
         if visible.empty:
@@ -207,32 +275,24 @@ def build_model_ready_observations(
         local_adjusted = pd.to_numeric(visible["adjusted_close"], errors="coerce")
         gbp_values: list[float] = []
         if not visible.empty and not invalid_prices:
-            for price_row, adjusted in zip(visible.itertuples(index=False), local_adjusted):
-                if currency == "GBP":
-                    gbp_values.append(float(adjusted))
-                elif currency == "GBX":
-                    gbp_values.append(float(adjusted) / 100.0)
+            if currency == "GBP":
+                gbp_values = local_adjusted.astype(float).tolist()
+            elif currency == "GBX":
+                gbp_values = (local_adjusted.astype(float) / 100.0).tolist()
+            else:
+                rates, fx_reason = fx_index.lookup(
+                    currency, visible["trading_date"], policy.maximum_fx_age_days
+                )
+                if fx_reason:
+                    reasons.append(fx_reason)
                 else:
-                    available_fx = fx_frame.loc[
-                        (fx_frame["base_currency"] == currency)
-                        & (fx_frame["quote_currency"] == "GBP")
-                        & fx_frame["available_at"].le(boundary)
-                        & fx_frame["observed_on"].le(price_row.trading_date)
-                    ].sort_values(["observed_on", "available_at"])
-                    if available_fx.empty:
-                        reasons.append("missing_fx")
-                        break
-                    fx_row = available_fx.iloc[-1]
-                    rate = pd.to_numeric(pd.Series([fx_row["rate"]]), errors="coerce").iloc[0]
-                    if not np.isfinite(rate) or rate <= 0:
-                        reasons.append("invalid_fx")
-                        break
-                    if (price_row.trading_date - fx_row["observed_on"]).days > policy.maximum_fx_age_days:
-                        reasons.append("stale_fx")
-                        break
-                    gbp_values.append(float(adjusted) * float(rate))
+                    gbp_values = (local_adjusted.to_numpy(dtype=float) * rates).tolist()
 
-        symbol_actions = action_frame.loc[action_frame["qualified_symbol"] == symbol]
+        symbol_actions = (
+            actions_by_symbol.get_group(symbol)
+            if symbol in actions_by_symbol.indices
+            else action_frame.iloc[0:0]
+        )
         if not symbol_actions.empty:
             action_values = pd.to_numeric(symbol_actions["value"], errors="coerce")
             if (
