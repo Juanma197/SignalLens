@@ -14,7 +14,7 @@ from .eodhd_ingestion import EODHDClient, EODHDIngestion, EODHDLimits
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bounded EODHD global research ingestion")
-    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "status", "coverage"])
+    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage"])
     parser.add_argument("--catalogue-fixture", type=Path,
                         help="local sanitized JSON object keyed by region (diagnose-catalogue only)")
     parser.add_argument("--research-db", type=Path)
@@ -27,6 +27,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=float, default=15)
     parser.add_argument("--max-response-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--maximum-runtime-seconds", type=float, default=1800)
+    parser.add_argument("--affected-limit", type=int, default=25)
+    parser.add_argument("--dry-run", action="store_true", help="plan and validate without mutating the research database")
+    parser.add_argument("--authorize-full-reconciliation", action="store_true",
+                        help="deliberate authorization required by reconcile")
     return parser
 
 
@@ -37,7 +41,7 @@ def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = 
         args.max_response_bytes, args.maximum_runtime_seconds)
     # A dummy value is sufficient for read-only local commands and never leaves the process.
     token = os.environ.get("SIGNALLENS_EODHD_API_TOKEN", "")
-    if args.command not in {"plan", "diagnose-catalogue", "status", "coverage"} and not token:
+    if args.command not in {"plan", "diagnose-catalogue", "audit", "plan-refresh", "status", "coverage"} and not token and not args.dry_run:
         raise ValueError("SIGNALLENS_EODHD_API_TOKEN is required")
     client = EODHDClient(token or "offline-read-only", limits, transport=transport)
     operation = EODHDIngestion(args.research_db or settings.research_database_path,
@@ -52,6 +56,12 @@ def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = 
     if args.command == "resume": return operation.prices(retrieved_at=captured, resume=True)
     if args.command == "ingest-fx": return operation.fx(retrieved_at=captured)
     if args.command == "status": return operation.status()
+    if args.command == "audit": return operation.audit(as_of=captured, affected_limit=args.affected_limit)
+    if args.command == "plan-refresh": return operation.plan_refresh(as_of=captured)
+    if args.command == "refresh": return operation.refresh(retrieved_at=captured, dry_run=args.dry_run)
+    if args.command == "retry-failures": return operation.refresh(retrieved_at=captured, retry_failures=True, dry_run=args.dry_run)
+    if args.command == "reconcile": return operation.refresh(retrieved_at=captured, reconcile=True,
+        authorized=args.authorize_full_reconciliation, dry_run=args.dry_run)
     return operation.coverage()
 
 
