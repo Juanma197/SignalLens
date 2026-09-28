@@ -202,3 +202,21 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [ ] Retry locally against the operator-held database after merge (the first
   attempt was safely cancelled after approximately 29 minutes; no live result claimed)
 - [ ] Add point-in-time fundamentals and survivorship-aware membership before evaluation
+
+## Milestone 16 — Research scoring and evidence gates (implementation complete)
+
+- [x] Score only explicit Milestone 14/15 model-ready observations with the
+  existing momentum, trend and risk factor definitions
+- [x] Availability-aware decision boundaries, labels strictly after vintages,
+  and per-vintage cross-sectional normalization
+- [x] Region-neutral five-market scoring; return ratios avoid comparing raw
+  USD/CAD/EUR/GBP/GBX price levels
+- [x] Explicit coverage, sample, walk-forward, baseline, discrimination,
+  temporal, regional and integrity gates
+- [x] Bounded explainable components/reason codes and deterministic zero-to-three
+  research-only candidates; every failure yields no candidates
+- [x] Read-only CLI with before/after fingerprints and sanitized five-region tests
+- [ ] Run the gates against the operator database after merge; the prior 492
+  model-ready result is readiness evidence only, not a scoring-gate pass
+- [ ] Acquire point-in-time fundamentals and survivorship-aware membership;
+  production promotion and publisher changes remain prohibited

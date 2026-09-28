@@ -4,13 +4,14 @@ SignalLens is a research dashboard for periodically ranking public companies and
 
 ## Current milestone
 
-Milestone 15 adds a strictly read-only bridge from the existing five-region
-research DuckDB to the Milestone 14 trustworthy-observation transformation. The
-`model-readiness` command reports aggregate coverage and quality, verifies both
-research and production database fingerprints, and fails closed on unsafe paths,
-schemas, keys, or missing regions. It never creates a ranking, model/output table,
-database, WAL, or checkpoint and does not alter the `momentum_126d` publisher.
-See [`docs/milestone-15-model-readiness.md`](docs/milestone-15-model-readiness.md).
+Milestone 16 adds availability-aware, region-neutral scoring and explicit
+research evidence gates on top of the Milestone 14/15 model-ready observations.
+The read-only `research-scoring` command reports supported and missing evidence,
+walk-forward discrimination/calibration, baseline performance, temporal and
+regional stability, and either a gated zero-to-three research ranking or specific
+`ranking_withheld` reasons. It never writes either database or calls the official
+`momentum_126d` publisher. See
+[`docs/milestone-16-research-scoring.md`](docs/milestone-16-research-scoring.md).
 
 After this change is merged, assess an operator-held database from PowerShell
 with explicit, distinct paths (the production path is fingerprinted but never
@@ -18,7 +19,7 @@ opened):
 
 ```powershell
 Push-Location backend
-& ..\.venv\Scripts\python.exe -m app.eodhd_ingestion_cli model-readiness --research-db "C:\path\to\research.duckdb" --production-db "C:\path\to\production.duckdb"
+& ..\.venv\Scripts\python.exe -m app.eodhd_ingestion_cli research-scoring --research-db "C:\path\to\research.duckdb" --production-db "C:\path\to\production.duckdb"
 Pop-Location
 ```
 
