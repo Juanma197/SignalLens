@@ -189,11 +189,23 @@ integrity evidence applies. Evidence metrics are recomputed only from retained
 labels without capping, replacement, winsorization, or silent deletion, with
 original/retained counts and exclusions reported separately.
 
-`plan-label-repair` is strictly read-only. It reports boundary aggregates by
-reason and region, affected feature/label rows, original/retained/withheld label
-counts, bounded provenance samples, and before/after database SHA-256 and byte
-counts. It proposes classifications only and always confirms that ranking was
-withheld and not generated. The weak prior robust live results (trimmed mean
+`plan-label-repair` is strictly read-only. Its stage ledger now reports raw
+panel labels, feature-boundary candidates, distinct feature withholds, labels
+after feature validation, label-boundary candidates, distinct label withholds,
+retained labels, and total distinct withholds. The three subtraction identities
+are enforced before a report can be emitted. Candidate counts, distinct
+withholds, and overlapping (explicitly non-additive) reason counts are separate;
+one row can retain both boundary and extreme-return diagnostics while being
+withheld only once.
+
+The report also includes distinct affected-symbol aggregates by region, reason,
+feature stage, and label stage. Its bounded provenance sample is deterministic
+and prioritizes unresolved extreme returns, zero-volume discontinuities,
+adjusted-price discontinuities, raw/adjusted disagreement, and finally the
+largest discontinuity ratio rather than alphabetical symbol order. Aggregates,
+not the sample, establish detection. Before/after database SHA-256 and byte
+counts remain mandatory. The command proposes classifications only and always
+confirms that ranking was withheld and not generated. The weak prior robust live results (trimmed mean
 about -0.0030, median about -0.0017, positive-period rate about 0.4779) remain
 weak; removing corrupt evidence is not evidence of strategy success.
 

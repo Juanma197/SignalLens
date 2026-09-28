@@ -334,8 +334,10 @@ Deterministic raw/adjusted adjacent-session boundaries now withhold only feature
 or label windows that cross unresolved evidence. Clean later segments and
 continuous low-price securities remain eligible. The read-only
 `plan-label-repair` command reports bounded proposed classifications, retained
-versus withheld counts, reason/region aggregates, unchanged fingerprints, and
-never generates a ranking. Stored observations are not rewritten or deleted;
+versus withheld counts through an enforced raw → feature-validated → retained
+ledger, non-additive reason counts, severity-prioritized samples, distinct
+affected-symbol aggregates, unchanged fingerprints, and never generates a ranking.
+Stored observations are not rewritten or deleted;
 no corporate action is inferred. Existing weak robust live metrics remain weak
 and no strategy-success claim is made.
 

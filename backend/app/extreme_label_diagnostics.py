@@ -26,6 +26,45 @@ NEIGHBOUR_RADIUS = 2
 MAX_AFFECTED = 25
 
 
+def _stage_accounting(diagnostics: dict[str, Any]) -> dict[str, int]:
+    """Build and enforce the lossless feature/label accounting ledger."""
+    raw = int(diagnostics.get("raw_panel_labels", 0))
+    feature_withheld = int(diagnostics.get("segment_feature_rows_withheld", 0))
+    after_feature = int(diagnostics.get("label_eligible_rows", 0))
+    retained = int(diagnostics.get("retained_label_rows", 0))
+    label_withheld = after_feature - retained
+    ledger = {
+        "raw_panel_labels": raw,
+        "feature_boundary_candidates": int(diagnostics.get("feature_boundary_candidates", 0)),
+        "feature_withheld_distinct": feature_withheld,
+        "labels_after_feature_validation": after_feature,
+        "label_boundary_candidates": int(diagnostics.get("label_boundary_candidates", 0)),
+        "label_withheld_distinct": label_withheld,
+        "retained_labels": retained,
+        "total_withheld_distinct": raw - retained,
+    }
+    if (raw - feature_withheld != after_feature
+            or after_feature - label_withheld != retained
+            or raw - retained != ledger["total_withheld_distinct"]):
+        raise ReadinessError("inconsistent feature/label repair stage accounting")
+    return ledger
+
+
+def _severity_key(row: Any) -> tuple[Any, ...]:
+    """Sort the bounded sample by consequence, with deterministic tie breaks."""
+    reasons = set(row.reason_codes)
+    ratio = max(row.raw_ratio or 0, row.adjusted_ratio or 0)
+    return (
+        -int("unresolved_extreme_return" in reasons),
+        -int("zero_volume_discontinuity" in reasons),
+        -int("adjusted_price_discontinuity" in reasons),
+        -int("raw_adjusted_disagreement" in reasons),
+        -ratio,
+        str(row.qualified_symbol),
+        pd.Timestamp(row.boundary_date),
+    )
+
+
 def _ratio(left: float, right: float) -> float | None:
     if not np.isfinite(left) or not np.isfinite(right) or left <= 0 or right <= 0:
         return None
@@ -300,28 +339,50 @@ def plan_label_repair(*, research_db: Path, production_db: Path,
     boundaries = detect_price_segments(prices, actions)
     regions = listings.drop_duplicates("qualified_symbol", keep="last").set_index(
         "qualified_symbol")["region"].to_dict()
+    prioritized = sorted(boundaries.itertuples(index=False), key=_severity_key)
     samples = [{"qualified_symbol": row.qualified_symbol,
         "region": regions.get(row.qualified_symbol, "UNKNOWN"),
         "boundary_date": row.boundary_date.date().isoformat(),
         "reason_codes": list(row.reason_codes), "raw_ratio": row.raw_ratio,
         "adjusted_ratio": row.adjusted_ratio, "provenance": row.provenance}
-        for row in boundaries.head(affected_limit).itertuples(index=False)]
+        for row in prioritized[:affected_limit]]
     # Use the production scoring path to obtain exact retained/withheld window counts.
     scoring = assess_research_scoring(research_db=research_db, production_db=production_db,
                                       decision_at=captured)
     diag = scoring["evaluation"]["diagnostics"]
+    accounting = _stage_accounting(diag)
+    affected_boundary_symbols = set(boundaries["qualified_symbol"].astype(str))
+    affected_regions = Counter(regions.get(symbol, "UNKNOWN") for symbol in affected_boundary_symbols)
+    boundary_reason_symbols: dict[str, set[str]] = {}
+    for row in boundaries.itertuples(index=False):
+        for reason in row.reason_codes:
+            boundary_reason_symbols.setdefault(reason, set()).add(str(row.qualified_symbol))
     after = {"research": fingerprint(research_db), "production": fingerprint(production_db)}
     if before != after:
         raise ReadinessError("database fingerprint changed during read-only repair planning")
     return {"command": "plan-label-repair", "mode": "strictly_read_only",
         "proposal_only": True, "segment_boundaries": {"total": len(boundaries),
             **boundary_aggregates(boundaries, regions)},
-        "affected_rows": {"features": diag.get("segment_feature_rows_withheld", 0),
-            "labels": diag.get("segment_label_rows_withheld", 0)},
-        "labels": {"original": diag.get("label_eligible_rows", 0),
-            "retained": diag.get("retained_label_rows", 0),
-            "withheld": diag.get("label_eligible_rows", 0) - diag.get("retained_label_rows", 0),
-            "exclusions_by_reason": diag.get("label_exclusions_by_reason", {})},
+        "stage_accounting": accounting,
+        "affected_rows": {
+            "candidate_feature_boundary_rows": accounting["feature_boundary_candidates"],
+            "feature_withheld_distinct": accounting["feature_withheld_distinct"],
+            "candidate_label_boundary_rows": accounting["label_boundary_candidates"],
+            "label_withheld_distinct": accounting["label_withheld_distinct"],
+            "reason_counts_non_additive": True,
+            "exclusions_by_stage_and_reason": diag.get("label_exclusions_by_reason", {})},
+        "affected_symbols": {
+            "total": diag.get("affected_symbols", {}).get("total", len(affected_boundary_symbols)),
+            "by_region": diag.get("affected_symbols", {}).get(
+                "by_region", dict(sorted(affected_regions.items()))),
+            "by_reason": diag.get("affected_symbols", {}).get("by_reason", {
+                reason: len(symbols) for reason, symbols in sorted(boundary_reason_symbols.items())
+            }),
+            "feature_stage": diag.get("affected_symbols", {}).get("feature_stage", 0),
+            "label_stage": diag.get("affected_symbols", {}).get("label_stage", 0),
+            "stage_reason_counts_non_additive": diag.get("affected_symbols", {}).get(
+                "by_stage_and_reason", {}),
+        },
         "samples": samples, "sample_limit": affected_limit,
         "database_fingerprints": {name: {"before": asdict(before[name]),
             "after": asdict(after[name]), "unchanged": before[name] == after[name]}
