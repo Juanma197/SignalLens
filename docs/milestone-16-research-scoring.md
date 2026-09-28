@@ -121,19 +121,51 @@ concentration-created false pass, a legitimate but unresolved high return, and
 a warning-free five-region panel. These fixtures demonstrate the repair; they do
 not claim that the live model passes.
 
+## Live label-integrity findings and provenance procedure
+
+The completed live retry retained 41,609 labels. Its maximum forward return was
+19,999.0 and it found 29 near-zero adjusted-close denominators. The bounded
+extreme sample contains ATPC.US (vintage 2023-08-31, label 2023-09-29), SBET.US
+(2025-04-30, 2025-05-29), and AUMN.TO (2023-05-31, 2023-06-29), with no recorded
+corporate action within seven days. Top-one absolute contribution was 83.708%,
+median excess was -0.001703, 10% trimmed-mean excess was -0.003003, and the
+positive-period rate was 0.477876. The ranking remained withheld and both
+database files were byte-for-byte unchanged. None of these observations has yet
+been removed, capped, winsorized, repaired, or assigned a provider-level cause.
+
+`diagnose-extreme-labels` is the next diagnosis step. It calls the same
+model-ready builder and `walk_forward_evidence` panel constructor used by
+research scoring, then selects the union of labels beyond the configured
+absolute-return threshold and labels at or below the configured near-zero
+denominator threshold. For at most 25 affected labels it reports sanitized
+entry/exit raw and adjusted prices, returns and volumes; label-window adjusted
+range; largest adjacent raw/adjusted ratios; discontinuity position; 7/30/90-day
+recorded-action counts; retrieval/source provenance; key duplication state; and
+at most five sessions around the largest discontinuity. Aggregate classification
+and region counts accompany the sample.
+
+Classifications are evidence flags, not provider-cause claims. They include
+near-zero amplification, raw split-like and adjusted discontinuities,
+raw/adjusted disagreement, possible ticker reuse, possible missing split
+adjustment, isolated malformed observation, and insufficient evidence. In
+particular, `possible_*` remains explicitly tentative. The command opens only
+the research database in DuckDB read-only mode, refuses missing or aliased
+paths, hashes both database files before and after, raises on any change, makes
+no provider request, and never constructs a ranking.
+
 ## Post-merge PowerShell command
 
 Run from the repository root with distinct real paths:
 
 ```powershell
 Push-Location backend
-& ..\.venv\Scripts\python.exe -m app.eodhd_ingestion_cli research-scoring `
+& ..\.venv\Scripts\python.exe -m app.eodhd_ingestion_cli diagnose-extreme-labels `
   --research-db "C:\SignalLensData\global-research.duckdb" `
   --production-db "C:\SignalLensData\signallens.duckdb"
 Pop-Location
 ```
 
 Optionally add `--decision-at "2026-09-28T20:00:00+00:00"`. Confirm every
-fingerprint is unchanged and treat all output as research only, not investment
-advice. The reported live Milestone 15 result (492 eligible, eight withheld) did
-not itself pass these new gates; this command must assess them after merge.
+fingerprint is unchanged. Retain the JSON for review without sending database
+files or provider payloads; do not treat a classification as an established
+provider cause and do not alter observations until that review is complete.

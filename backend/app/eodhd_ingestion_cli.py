@@ -10,13 +10,14 @@ from pathlib import Path
 
 from .config import get_settings
 from .eodhd_ingestion import EODHDClient, EODHDIngestion, EODHDLimits
+from .extreme_label_diagnostics import diagnose_extreme_labels
 from .model_readiness import assess_model_readiness
 from .research_scoring import assess_research_scoring
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bounded EODHD global research ingestion")
-    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage", "model-readiness", "research-scoring"])
+    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "diagnose-extreme-labels", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage", "model-readiness", "research-scoring"])
     parser.add_argument("--catalogue-fixture", type=Path,
                         help="local sanitized JSON object keyed by region (diagnose-catalogue only)")
     parser.add_argument("--research-db", type=Path)
@@ -58,6 +59,14 @@ def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = 
         return assess_research_scoring(
             research_db=args.research_db, production_db=args.production_db,
             decision_at=args.decision_at or captured,
+        )
+    if args.command == "diagnose-extreme-labels":
+        if args.research_db is None or args.production_db is None:
+            raise ValueError("diagnose-extreme-labels requires explicit --research-db and --production-db paths")
+        return diagnose_extreme_labels(
+            research_db=args.research_db, production_db=args.production_db,
+            decision_at=args.decision_at or captured,
+            affected_limit=min(args.affected_limit, 25),
         )
     if args.authorize_permanent_failures and args.command != "retry-failures":
         raise ValueError("--authorize-permanent-failures requires retry-failures")

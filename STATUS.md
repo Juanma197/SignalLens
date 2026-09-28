@@ -377,3 +377,16 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
   region case without warnings. They do not establish a live pass; the exact
   operator-held extreme symbol and data-history cause require the post-merge
   read-only retry.
+- The subsequent live evidence contains 41,609 labels, a 19,999.0 maximum
+  forward return, 29 near-zero denominators, and three unresolved extremes:
+  ATPC.US (2023-08-31/2023-09-29), SBET.US
+  (2025-04-30/2025-05-29), and AUMN.TO
+  (2023-05-31/2023-06-29). No recorded action was within seven days.
+  Top-one contribution was 83.708%; median/trimmed-mean excess were
+  -0.001703/-0.003003 and the positive-period rate was 0.477876. Ranking
+  remained withheld and both databases were byte-for-byte unchanged.
+- `diagnose-extreme-labels` now reconstructs the identical scoring panel and
+  emits only bounded price/action/provenance evidence for policy-selected
+  extremes and near-zero denominators. It neither repairs nor reinterprets the
+  observations and uses only `possible_*` causal classifications where stored
+  evidence cannot establish a cause.
