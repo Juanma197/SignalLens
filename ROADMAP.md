@@ -246,3 +246,17 @@ Each milestone must end with passing tests, a production frontend build, an upda
   merge; do not exclude, repair, cap, winsorize, or reinterpret observations yet
 - [ ] Acquire point-in-time fundamentals and survivorship-aware membership;
   production promotion and publisher changes remain prohibited
+## Milestone 17 — Point-in-time fundamentals capability assessment
+
+- [x] Bound provider discovery to one representative security per pilot region,
+  five requests, two attempts, pacing, timeouts and response-size ceilings
+- [x] Require filing, accepted or reporting dates; never substitute fiscal end
+- [x] Preserve revisions for decision-time as-of selection and reject undated rows
+- [x] Classify candidate growth, profitability, cash-flow, balance-sheet and
+  valuation features without adding them to the score
+- [x] Add sanitized offline fixtures, deterministic leakage/immutability/budget tests,
+  and a read-only structured CLI
+- [ ] Validate live entitlement/field semantics after merge, then design a separate
+  bounded historical ingestion milestone if evidence is adequate
+- [ ] Obtain survivorship-aware historical membership before describing any
+  current-catalogue evaluation as a backtest

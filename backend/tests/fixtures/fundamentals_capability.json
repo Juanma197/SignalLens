@@ -1,0 +1,367 @@
+{
+  "US": {
+    "General": {
+      "Name": "REDACTED SYNTHETIC"
+    },
+    "Highlights": {
+      "MarketCapitalization": 999999
+    },
+    "Financials": {
+      "Income_Statement": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "USD",
+            "totalRevenue": "1000",
+            "netIncome": "100",
+            "operatingIncome": "125",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          },
+          "2024-Q1": {
+            "date": "2024-03-31",
+            "filing_date": "2024-05-10",
+            "currency_symbol": "USD",
+            "totalRevenue": "1100",
+            "netIncome": "110",
+            "operatingIncome": "137",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          }
+        },
+        "yearly": {
+          "2023": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "USD",
+            "totalRevenue": "4000",
+            "netIncome": "400",
+            "operatingIncome": "500",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          }
+        }
+      },
+      "Balance_Sheet": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "USD",
+            "totalAssets": "5000",
+            "totalStockholderEquity": "2000",
+            "longTermDebt": "700",
+            "cash": "300",
+            "commonStockSharesOutstanding": "105"
+          }
+        },
+        "yearly": {}
+      },
+      "Cash_Flow": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "USD",
+            "totalCashFromOperatingActivities": "300",
+            "capitalExpenditures": "-100"
+          }
+        },
+        "yearly": {}
+      }
+    }
+  },
+  "LSE": {
+    "General": {
+      "Name": "REDACTED SYNTHETIC"
+    },
+    "Highlights": {
+      "MarketCapitalization": 999999
+    },
+    "Financials": {
+      "Income_Statement": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "GBP",
+            "totalRevenue": "1010",
+            "netIncome": "101",
+            "operatingIncome": "126",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          },
+          "2024-Q1": {
+            "date": "2024-03-31",
+            "filing_date": "2024-05-10",
+            "currency_symbol": "GBP",
+            "totalRevenue": "1110",
+            "netIncome": "111",
+            "operatingIncome": "138",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          }
+        },
+        "yearly": {
+          "2023": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "GBP",
+            "totalRevenue": "4010",
+            "netIncome": "401",
+            "operatingIncome": "501",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          }
+        }
+      },
+      "Balance_Sheet": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "GBP",
+            "totalAssets": "5000",
+            "totalStockholderEquity": "2000",
+            "longTermDebt": "700",
+            "cash": "300",
+            "commonStockSharesOutstanding": "105"
+          }
+        },
+        "yearly": {}
+      },
+      "Cash_Flow": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "GBP",
+            "totalCashFromOperatingActivities": "300",
+            "capitalExpenditures": "-100"
+          }
+        },
+        "yearly": {}
+      }
+    }
+  },
+  "TO": {
+    "General": {
+      "Name": "REDACTED SYNTHETIC"
+    },
+    "Highlights": {
+      "MarketCapitalization": 999999
+    },
+    "Financials": {
+      "Income_Statement": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "CAD",
+            "totalRevenue": "1020",
+            "netIncome": "102",
+            "operatingIncome": "127",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          },
+          "2024-Q1": {
+            "date": "2024-03-31",
+            "filing_date": "2024-05-10",
+            "currency_symbol": "CAD",
+            "totalRevenue": "1120",
+            "netIncome": "112",
+            "operatingIncome": "140",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          }
+        },
+        "yearly": {
+          "2023": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "CAD",
+            "totalRevenue": "4020",
+            "netIncome": "402",
+            "operatingIncome": "502",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          }
+        }
+      },
+      "Balance_Sheet": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "CAD",
+            "totalAssets": "5000",
+            "totalStockholderEquity": "2000",
+            "longTermDebt": "700",
+            "cash": "300",
+            "commonStockSharesOutstanding": "105"
+          }
+        },
+        "yearly": {}
+      },
+      "Cash_Flow": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "CAD",
+            "totalCashFromOperatingActivities": "300",
+            "capitalExpenditures": "-100"
+          }
+        },
+        "yearly": {}
+      }
+    }
+  },
+  "XETRA": {
+    "General": {
+      "Name": "REDACTED SYNTHETIC"
+    },
+    "Highlights": {
+      "MarketCapitalization": 999999
+    },
+    "Financials": {
+      "Income_Statement": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "EUR",
+            "totalRevenue": "1030",
+            "netIncome": "103",
+            "operatingIncome": "128",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          },
+          "2024-Q1": {
+            "date": "2024-03-31",
+            "filing_date": "2024-05-10",
+            "currency_symbol": "EUR",
+            "totalRevenue": "1130",
+            "netIncome": "113",
+            "operatingIncome": "141",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          }
+        },
+        "yearly": {
+          "2023": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "EUR",
+            "totalRevenue": "4030",
+            "netIncome": "403",
+            "operatingIncome": "503",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          }
+        }
+      },
+      "Balance_Sheet": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "EUR",
+            "totalAssets": "5000",
+            "totalStockholderEquity": "2000",
+            "longTermDebt": "700",
+            "cash": "300",
+            "commonStockSharesOutstanding": "105"
+          }
+        },
+        "yearly": {}
+      },
+      "Cash_Flow": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "EUR",
+            "totalCashFromOperatingActivities": "300",
+            "capitalExpenditures": "-100"
+          }
+        },
+        "yearly": {}
+      }
+    }
+  },
+  "PA": {
+    "General": {
+      "Name": "REDACTED SYNTHETIC"
+    },
+    "Highlights": {
+      "MarketCapitalization": 999999
+    },
+    "Financials": {
+      "Income_Statement": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "EUR",
+            "totalRevenue": "1040",
+            "netIncome": "104",
+            "operatingIncome": "130",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          },
+          "2024-Q1": {
+            "date": "2024-03-31",
+            "filing_date": "2024-05-10",
+            "currency_symbol": "EUR",
+            "totalRevenue": "1140",
+            "netIncome": "114",
+            "operatingIncome": "142",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          }
+        },
+        "yearly": {
+          "2023": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "EUR",
+            "totalRevenue": "4040",
+            "netIncome": "404",
+            "operatingIncome": "505",
+            "interestExpense": "10",
+            "weightedAverageShsOut": "100"
+          }
+        }
+      },
+      "Balance_Sheet": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "EUR",
+            "totalAssets": "5000",
+            "totalStockholderEquity": "2000",
+            "longTermDebt": "700",
+            "cash": "300",
+            "commonStockSharesOutstanding": "105"
+          }
+        },
+        "yearly": {}
+      },
+      "Cash_Flow": {
+        "quarterly": {
+          "2023-Q4": {
+            "date": "2023-12-31",
+            "filing_date": "2024-02-15",
+            "currency_symbol": "EUR",
+            "totalCashFromOperatingActivities": "300",
+            "capitalExpenditures": "-100"
+          }
+        },
+        "yearly": {}
+      }
+    }
+  }
+}

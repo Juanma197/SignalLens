@@ -4,22 +4,19 @@ SignalLens is a research dashboard for periodically ranking public companies and
 
 ## Current milestone
 
-Milestone 16 adds availability-aware, region-neutral scoring and explicit
-research evidence gates on top of the Milestone 14/15 model-ready observations.
-The read-only `research-scoring` command reports supported and missing evidence,
-walk-forward discrimination/calibration, baseline performance, temporal and
-regional stability, and either a gated zero-to-three research ranking or specific
-`ranking_withheld` reasons. It never writes either database or calls the official
-`momentum_126d` publisher. See
-[`docs/milestone-16-research-scoring.md`](docs/milestone-16-research-scoring.md).
+Milestone 17 adds a bounded `fundamentals-capability` assessment for historical
+EODHD statements. It probes at most one representative security in each of US,
+LSE, TO, XETRA and PA, emits aggregates only, and requires a filing/accepted/
+reporting date before a record can enter a historical vintage. It does not ingest,
+score, rank, publish or write a database. The default documented workflow is the
+no-network fixture mode; see
+[`docs/milestone-17-fundamentals-capability.md`](docs/milestone-17-fundamentals-capability.md).
 
-After this change is merged, assess an operator-held database from PowerShell
-with explicit, distinct paths (the production path is fingerprinted but never
-opened):
+After merge, run the deterministic offline assessment from PowerShell:
 
 ```powershell
 Push-Location backend
-& ..\.venv\Scripts\python.exe -m app.eodhd_ingestion_cli research-scoring --research-db "C:\path\to\research.duckdb" --production-db "C:\path\to\production.duckdb"
+& ..\.venv\Scripts\python.exe -m app.fundamentals_capability_cli fundamentals-capability --fixture --research-db "C:\path\to\research.duckdb" --production-db "C:\path\to\production.duckdb"
 Pop-Location
 ```
 
