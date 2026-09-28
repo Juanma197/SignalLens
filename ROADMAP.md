@@ -260,3 +260,17 @@ Each milestone must end with passing tests, a production frontend build, an upda
   bounded historical ingestion milestone if evidence is adequate
 - [ ] Obtain survivorship-aware historical membership before describing any
   current-catalogue evaluation as a backtest
+## Milestone 18 — Leakage-safe multi-horizon evaluation (implementation complete)
+
+- [x] Pre-register 21, 63, 126 and 252 trading-session labels and monthly vintages
+- [x] Require strictly later, complete labels and fail closed across price segments
+- [x] Preserve point-in-time feature, retrieval and historical FX behavior
+- [x] Report per-horizon performance, calibration, regions, stability and exclusions
+- [x] Use deterministic circular moving-block bootstrap with `ceil(horizon/21)` blocks
+- [x] Apply Holm-Bonferroni family-wise protection across all four locked horizons
+- [x] Require independent sample, baseline, confidence, discrimination, stability,
+  integrity and adjusted-significance gates for each horizon
+- [x] Freeze the failed 21-session baseline and produce no candidates under all outcomes
+- [x] Fingerprint both databases before/after and provide deterministic offline tests
+- [ ] Run against operator-held data after merge and review evidence without selecting a horizon
+- [ ] Lock any reviewed horizon in a subsequent milestone before candidate generation
