@@ -20,6 +20,16 @@ values, request URLs, provider error text or the token. It includes only region-
 level counts, allow-listed field names, date-field names, currencies, earliest/
 latest fiscal periods, and a conservative reconstruction flag.
 
+Each attempted request now has a deliberately narrow diagnostic containing only
+HTTP status, content type, response byte count, top-level JSON type, allow-listed
+top-level field names, normalized classification and retry count. Classifications
+are `available`, `subscription_restricted`, `authentication_failed`,
+`rate_limited`, `endpoint_not_found`, `response_too_large`, `malformed_json`,
+`schema_mismatch`, `empty_payload`, `transport_error`, or
+`unknown_provider_failure`. Provider messages and arbitrary field names are not
+copied. Request URLs, tokens, response bodies and provider error text remain
+excluded.
+
 A record is visible only on or after a valid `filing_date`, `filingDate`,
 `accepted_date`, `acceptedDate`, `reporting_date`, or `reportedDate`. Fiscal-period
 end is descriptive and is never substituted. Missing availability dates remain
@@ -45,6 +55,30 @@ Provider current-summary ratios are `latest_only_not_backtestable`. A live probe
 may downgrade any derivable item to `ambiguous_requires_validation` or
 `unavailable` when date or field coverage is inadequate; the command makes no
 claim that a formula is ready for model use.
+
+The report separates `theoretical_schema_classification` (what the documented
+shape could support), `live_entitlement_classification` (whether this run reached
+fundamentals data), and `confirmed_live_feature_classification` (features actually
+supported by returned statement records). Schema/fixture theory never makes a
+live feature derivable when the live endpoint is unavailable. When every live
+request has an access/failure classification, the overall status is
+`provider_access_unavailable`, not a successful zero-record result.
+
+## Operator observation and entitlement status
+
+An operator-authorized run made five requests, one for each US, LSE, TO, XETRA
+and PA representative. Every region reported zero records, fields, currencies
+and availability-date fields, and point-in-time reconstruction was false. Both
+database files remained byte-for-byte unchanged. The operator has EODHD
+historical-price access, while EODHD presents its Fundamentals Data Feed as a
+separate subscription. Consequently, live fundamentals availability is **not
+confirmed**; the earlier zero-record output cannot establish whether the cause
+was entitlement, endpoint failure, an empty payload or schema mismatch.
+
+No purchase or subscription upgrade is recommended. A provider User API probe
+was considered but is not included: no stable, safely normalizable response
+contract has been established that would prove fundamentals entitlement without
+risking disclosure of account identity or credential-related information.
 
 Important limitations remain: statement taxonomy and signs can vary by issuer,
 venue and accounting regime; GBX versus GBP and reported currencies require
@@ -88,3 +122,22 @@ Remove-Item Env:SIGNALLENS_EODHD_API_TOKEN
 Do not redirect HTTP diagnostics or capture raw traffic. Retain only the sanitized
 JSON report. Stop if either fingerprint changes. This authorization covers five
 requests only; it does not authorize bulk ingestion, Railway access or deployment.
+
+## Optional single-request diagnostic
+
+To distinguish a provider-access failure without automatically running the
+five-region probe, explicitly select the one-request mode. It uses only the fixed
+US ordinary-equity representative, forces both the request and attempt limits to
+one, and emits the same sanitized diagnostic fields:
+
+```powershell
+Push-Location backend
+& ..\.venv\Scripts\python.exe -m app.fundamentals_capability_cli fundamentals-capability `
+  --authorize-live --diagnostic-one-request --timeout-seconds 10 `
+  --research-db "C:\SignalLensData\global-research.duckdb" `
+  --production-db "C:\SignalLensData\signallens.duckdb"
+Pop-Location
+```
+
+This mode does not fall through to, or automatically issue, the other four
+regional requests.
