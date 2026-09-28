@@ -359,3 +359,21 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
   and generated vintages, feature/label eligibility and removals, date bounds,
   and bounded zero-vintage reason codes. Current-catalogue membership remains
   prominently not survivorship-free.
+- The second read-only run produced 41,609 predictions over 113 vintages but an
+  implausible 58.578998 mean excess return (US regional excess 90.095465) and a
+  `[-0.013274, 175.754111]` interval. Baseline/discrimination passed only because
+  unresolved adjusted-price return extremes dominated the evidence; temporal
+  and regional gates withheld ranking and both files remained unchanged.
+- Diagnosis found no percent/decimal or FX scaling path: local adjusted-close
+  ratios are decimal returns. The missing control was per-label integrity after
+  otherwise valid OHLCV histories, compounded by a regional calculation that
+  selected a pooled regional slice rather than top three per region/vintage.
+- The evaluator now fails closed on nonfinite/duplicate labels, invalid or
+  near-zero denominators, unresolved >1,000% absolute returns, excessive
+  contribution concentration, and undersized correlation groups. It reports
+  bounded distributions/contributors/action proximity and conventional plus
+  robust, equal-vintage metrics without trimming the evidence used by gates.
+- Offline fixtures reproduce every diagnosed failure mode and a stable five-
+  region case without warnings. They do not establish a live pass; the exact
+  operator-held extreme symbol and data-history cause require the post-merge
+  read-only retry.

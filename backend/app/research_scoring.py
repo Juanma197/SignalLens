@@ -17,7 +17,6 @@ import pandas as pd
 
 from .model_readiness import ReadinessError, _frame, _same_file, _validate_schema, fingerprint
 from .multifactor import FACTOR_WEIGHTS, MOMENTUM_DAYS, RISK_DAYS, TREND_DAYS
-from .multifactor_backtest import multifactor_score_backtest
 from .research_evaluation import bootstrap_mean_ci
 from .research_observations import EXPECTED_REGIONS, ObservationPolicy, build_model_ready_observations
 
@@ -25,6 +24,7 @@ REASON_CODES = frozenset({
     "inadequate_coverage", "inadequate_history", "invalid_walk_forward",
     "baseline_underperformance", "insufficient_discrimination",
     "regional_instability", "temporal_instability", "integrity_failure",
+    "label_integrity_failure", "return_concentration", "insufficient_group_size",
 })
 ZERO_VINTAGE_REASON_CODES = frozenset({
     "no_eligible_securities", "no_visible_prices_by_evaluation_cutoff",
@@ -48,6 +48,10 @@ class EvidencePolicy:
     minimum_excess_return: float = 0.0
     minimum_rank_correlation: float = 0.0
     minimum_positive_period_rate: float = .50
+    minimum_correlation_group_size: int = 2
+    near_zero_adjusted_close: float = .01
+    extreme_absolute_return: float = 10.0
+    maximum_top_observation_contribution: float = .25
     maximum_candidates: int = 3
     minimum_candidate_score: float = 55.0
 
@@ -56,6 +60,12 @@ class EvidencePolicy:
             raise ValueError("minimum_coverage must be between zero and one")
         if not 0 <= self.maximum_candidates <= 3:
             raise ValueError("maximum_candidates must be between zero and three")
+        if self.minimum_correlation_group_size < 2:
+            raise ValueError("minimum_correlation_group_size must be at least two")
+        if self.near_zero_adjusted_close <= 0 or self.extreme_absolute_return <= 0:
+            raise ValueError("label-integrity thresholds must be positive")
+        if not 0 <= self.maximum_top_observation_contribution <= 1:
+            raise ValueError("maximum contribution must be between zero and one")
 
 
 def _rank(values: pd.Series, *, higher: bool = True) -> pd.Series:
@@ -171,7 +181,9 @@ def prepare_cross_section(
 
 def walk_forward_evidence(
     observations: pd.DataFrame, prices: pd.DataFrame, *, decision_at: datetime,
-    horizon_sessions: int = 21,
+    horizon_sessions: int = 21, actions: pd.DataFrame | None = None,
+    near_zero_adjusted_close: float = .01, extreme_absolute_return: float = 10.0,
+    minimum_correlation_group_size: int = 2,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Evaluate month-end vintages from a bounded historical panel.
 
@@ -197,7 +209,10 @@ def walk_forward_evidence(
     possible = [index for index in month_ends if index >= MOMENTUM_DAYS]
     vintage_indexes = [index for index in possible if index + horizon_sessions < len(dates)]
     identity = observations.set_index("qualified_symbol")
-    close_lookup = frame.set_index(["qualified_symbol", "trading_date"])["adjusted_close"]
+    duplicate_prices = frame.duplicated(["qualified_symbol", "trading_date"], keep=False)
+    close_lookup = frame.loc[~duplicate_prices].set_index(
+        ["qualified_symbol", "trading_date"]
+    )["adjusted_close"]
     rows = []
     feature_rows = label_rows = 0
     removed_missing_feature = removed_missing_label = 0
@@ -221,13 +236,15 @@ def walk_forward_evidence(
                 removed_missing_label += 1
                 continue
             label_rows += 1
+            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                forward_return = exit_value / entry - 1
             rows.append({
                 "qualified_symbol": score.qualified_symbol,
                 "region": identity.loc[score.qualified_symbol, "region"],
                 "vintage_date": vintage_date,
                 "label_date": label_date,
-                "score": score.composite_score,
-                "forward_return": exit_value / entry - 1,
+                "score": score.composite_score, "entry_adjusted_close": entry,
+                "exit_adjusted_close": exit_value, "forward_return": forward_return,
             })
     predictions = pd.DataFrame(rows)
     def date_value(value: Any) -> str | None:
@@ -265,6 +282,7 @@ def walk_forward_evidence(
             "incomplete_or_missing_label": int(removed_missing_label),
             "incomplete_final_period_decision_dates": int(len(possible) - len(vintage_indexes)),
         },
+        "duplicate_price_keys": int(duplicate_prices.sum()),
         "earliest_feature_date": date_value(dates[vintage_indexes[0]]) if vintage_indexes else None,
         "latest_feature_date": date_value(dates[vintage_indexes[-1]]) if vintage_indexes else None,
         "earliest_label_date": date_value(dates[vintage_indexes[0] + horizon_sessions]) if vintage_indexes else None,
@@ -277,51 +295,141 @@ def walk_forward_evidence(
     if predictions.empty:
         return predictions, {"valid": False, "vintages": 0, "predictions": 0,
                              "diagnostics": diagnostics}
-    predictions["score_rank"] = predictions.groupby("vintage_date")["score"].rank(pct=True)
-    predictions["return_rank"] = predictions.groupby("vintage_date")["forward_return"].rank(pct=True)
-    correlations = predictions.groupby("vintage_date").apply(
-        lambda x: x["score_rank"].corr(x["return_rank"]), include_groups=False
-    ).dropna()
-    top = predictions.loc[predictions.groupby("vintage_date")["score"].rank(
-        method="first", ascending=False
-    ).le(3)]
+    metrics = _evaluate_predictions(
+        predictions, diagnostics, actions=actions, near_zero=near_zero_adjusted_close,
+        extreme=extreme_absolute_return, minimum_group=minimum_correlation_group_size,
+    )
+    return predictions, metrics
+
+
+def _summary(values: pd.Series) -> dict[str, Any]:
+    """Bounded decimal-return distribution summary (never serializes raw payloads)."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    finite = numeric[np.isfinite(numeric)]
+    result: dict[str, Any] = {"count": int(len(numeric)), "finite": int(len(finite)),
+                              "nonfinite": int(len(numeric) - len(finite))}
+    for name, quantile in (("minimum", 0), ("p01", .01), ("p05", .05),
+                           ("median", .5), ("p95", .95), ("p99", .99), ("maximum", 1)):
+        result[name] = float(finite.quantile(quantile)) if len(finite) else None
+    return result
+
+
+def _trimmed_mean(values: pd.Series, proportion: float = .1) -> float | None:
+    finite = np.sort(pd.to_numeric(values, errors="coerce").to_numpy(dtype=float))
+    finite = finite[np.isfinite(finite)]
+    trim = int(len(finite) * proportion)
+    kept = finite[trim:len(finite) - trim] if trim and len(finite) > 2 * trim else finite
+    return float(kept.mean()) if len(kept) else None
+
+
+def _evaluate_predictions(predictions: pd.DataFrame, diagnostics: dict[str, Any], *,
+                          actions: pd.DataFrame | None = None,
+                          near_zero: float = .01, extreme: float = 10.0,
+                          minimum_group: int = 2) -> dict[str, Any]:
+    """Validate labels first, then calculate all evidence at the vintage level."""
+    labels = predictions.copy()
+    finite = np.isfinite(labels[["score", "entry_adjusted_close", "exit_adjusted_close",
+                                 "forward_return"]].to_numpy(dtype=float)).all(axis=1)
+    invalid_denominator = (~np.isfinite(labels["entry_adjusted_close"])) | \
+        labels["entry_adjusted_close"].le(0)
+    near_zero_denominator = labels["entry_adjusted_close"].abs().le(near_zero)
+    duplicate_labels = labels.duplicated(["qualified_symbol", "vintage_date"], keep=False)
+    extreme_mask = labels["forward_return"].abs().gt(extreme) & np.isfinite(labels["forward_return"])
+    valid_mask = finite & ~invalid_denominator & ~near_zero_denominator & ~duplicate_labels
+    valid = labels.loc[valid_mask].copy()
+
+    action_keys: set[tuple[str, pd.Timestamp]] = set()
+    if actions is not None and not actions.empty and {"qualified_symbol", "ex_date"} <= set(actions):
+        action_keys = {(str(row.qualified_symbol), pd.Timestamp(row.ex_date))
+                       for row in actions[["qualified_symbol", "ex_date"]].itertuples(index=False)}
+    samples = []
+    for row in labels.loc[extreme_mask].sort_values("forward_return", key=lambda x: x.abs(),
+                                                    ascending=False).head(10).itertuples():
+        proximity = any(symbol == row.qualified_symbol and
+                        row.vintage_date - pd.Timedelta(days=7) <= day <= row.label_date + pd.Timedelta(days=7)
+                        for symbol, day in action_keys)
+        reason = "near_zero_denominator" if abs(row.entry_adjusted_close) <= near_zero else \
+            ("corporate_action_proximity" if proximity else "unresolved_extreme_return")
+        samples.append({"qualified_symbol": str(row.qualified_symbol),
+                        "vintage_date": pd.Timestamp(row.vintage_date).date().isoformat(),
+                        "label_date": pd.Timestamp(row.label_date).date().isoformat(),
+                        "reason": reason, "corporate_action_within_7_days": proximity})
+
+    group_sizes = valid.groupby("vintage_date").size()
+    eligible_groups = group_sizes[group_sizes.ge(minimum_group)].index
+    correlations, insufficient = [], []
+    for vintage, group in valid.groupby("vintage_date"):
+        if len(group) < minimum_group or group["score"].nunique() < 2 or group["forward_return"].nunique() < 2:
+            insufficient.append(pd.Timestamp(vintage).date().isoformat())
+            continue
+        correlations.append(float(group["score"].rank(pct=True).corr(
+            group["forward_return"].rank(pct=True))))
+    valid["score_rank"] = valid.groupby("vintage_date")["score"].rank(pct=True)
+    valid["return_rank"] = valid.groupby("vintage_date")["forward_return"].rank(pct=True)
+    top = valid.loc[valid.groupby("vintage_date")["score"].rank(method="first", ascending=False).le(3)]
     top_period = top.groupby("vintage_date")["forward_return"].mean()
-    baseline = predictions.groupby("vintage_date")["forward_return"].mean()
+    baseline = valid.groupby("vintage_date")["forward_return"].mean()
     excess = top_period - baseline
-    backtest_input = predictions.rename(columns={
-        "qualified_symbol": "ticker", "vintage_date": "as_of_date",
-        "label_date": "exit_date", "score": "composite_score",
-    }).copy()
-    backtest_input["entry_date"] = backtest_input["as_of_date"] + pd.Timedelta(days=1)
-    backtest_input["eligible"] = True
-    backtest = multifactor_score_backtest(
-        backtest_input, top_k=3, transaction_cost_bps_per_side=0
-    )
-    regions = predictions.groupby("region").apply(
-        lambda x: x.nlargest(max(1, len(x) // max(1, x["vintage_date"].nunique()) * 3), "score")["forward_return"].mean()
-        - x["forward_return"].mean(), include_groups=False
-    )
+    region_period = []
+    for (region, vintage), group in valid.groupby(["region", "vintage_date"]):
+        selected = group.nlargest(min(3, len(group)), "score")
+        region_period.append((region, vintage, selected.forward_return.mean() - group.forward_return.mean()))
+    region_frame = pd.DataFrame(region_period, columns=["region", "vintage_date", "excess"])
+    regions = region_frame.groupby("region")["excess"].mean() if len(region_frame) else pd.Series(dtype=float)
+    abs_contribution = valid["forward_return"].abs().sort_values(ascending=False)
+    total_abs = float(abs_contribution.sum())
+    concentration = {f"top_{count}": (float(abs_contribution.head(count).sum() / total_abs)
+                                      if total_abs else 0.0) for count in (1, 5, 10)}
+    per_region = {str(region): _summary(group["forward_return"])
+                  for region, group in valid.groupby("region")}
+    diagnostics["label_integrity"] = {
+        "units": "decimal_return", "forward_returns": _summary(labels["forward_return"]),
+        "excess_returns": _summary(excess), "invalid_denominators": int(invalid_denominator.sum()),
+        "nonfinite_labels": int((~finite).sum()),
+        "near_zero_denominators": int(near_zero_denominator.sum()),
+        "duplicate_labels": int(duplicate_labels.sum()), "unresolved_extreme_returns": int(extreme_mask.sum()),
+        "thresholds": {"near_zero_adjusted_close": near_zero, "extreme_absolute_return": extreme},
+        "observations_beyond_threshold": int(extreme_mask.sum()), "per_region": per_region,
+        "largest_absolute_contributors": samples, "absolute_contribution_concentration": concentration,
+        "vintage_security_count": _summary(group_sizes),
+        "correlation_groups": {"eligible": int(len(eligible_groups)),
+                               "insufficient_group_size": insufficient[:10],
+                               "insufficient_count": int(len(insufficient))},
+        "corporate_action_proximity_count": int(sum(x["corporate_action_within_7_days"] for x in samples)),
+    }
+    integrity_ok = not ((~finite).any() or invalid_denominator.any() or near_zero_denominator.any()
+                        or duplicate_labels.any() or extreme_mask.any()
+                        or diagnostics.get("duplicate_price_keys", 0))
+    calibration = []
+    if len(valid):
+        # score_rank is already a bounded percentile. Direct binning avoids
+        # qcut's small-sample variance path and its NumPy underflow warning.
+        quintile = np.minimum((valid["score_rank"] * 5).apply(np.ceil).astype(int) - 1, 4)
+        calibrated = valid.assign(quintile=quintile)
+        calibration = [{"quintile": int(key), "mean_return": float(group.mean()),
+                        "median_return": float(group.median())}
+                       for key, group in calibrated.groupby("quintile")["forward_return"]]
     metrics = {
-        "valid": bool((predictions["label_date"] > predictions["vintage_date"]).all()),
+        "valid": bool((labels["label_date"] > labels["vintage_date"]).all()) and integrity_ok,
         "vintages": int(predictions["vintage_date"].nunique()),
         "predictions": int(len(predictions)),
-        "mean_excess_return": backtest.summary["top_k_mean_excess_return"],
+        "mean_excess_return": float(excess.mean()) if len(excess) else None,
+        "median_excess_return": float(excess.median()) if len(excess) else None,
+        "trimmed_mean_excess_return": _trimmed_mean(excess),
+        "equal_weight_per_vintage_mean_excess_return": float(excess.mean()) if len(excess) else None,
         "excess_return_95_ci": bootstrap_mean_ci(excess, seed=16),
-        "positive_period_rate": float((excess > 0).mean()),
-        "rank_correlation": float(correlations.mean()) if len(correlations) else None,
-        "calibration": {"method": "score_quintile_observed_return", "bins": [
-            {"quintile": int(key), "mean_return": float(value)}
-            for key, value in predictions.assign(quintile=pd.qcut(
-                predictions["score_rank"], 5, labels=False, duplicates="drop"
-            )).groupby("quintile")["forward_return"].mean().items()
-        ]},
+        "positive_period_rate": float((excess > 0).mean()) if len(excess) else None,
+        "rank_correlation": float(np.mean(correlations)) if correlations else None,
+        "rank_correlation_state": "valid" if correlations else "insufficient_group_size",
+        "calibration": {"method": "score_rank_quintile_pooled_observed_decimal_return",
+                        "bins": calibration},
         "regional_excess_return": {str(k): float(v) for k, v in regions.items()},
         "regional_vintages": {
-            str(k): int(v) for k, v in predictions.groupby("region")["vintage_date"].nunique().items()
+            str(k): int(v) for k, v in valid.groupby("region")["vintage_date"].nunique().items()
         },
         "diagnostics": diagnostics,
     }
-    return predictions, metrics
+    return metrics
 
 
 def evaluate_evidence(
@@ -332,15 +440,30 @@ def evaluate_evidence(
     coverage = len(eligible) / len(observations) if len(observations) else 0
     region_counts = eligible["region"].value_counts()
     correlation = evaluation.get("rank_correlation")
+    label_diagnostics = evaluation.get("diagnostics", {}).get("label_integrity", {})
+    concentration = label_diagnostics.get("absolute_contribution_concentration", {})
+    mean_excess = evaluation.get("mean_excess_return")
+    positive_rate = evaluation.get("positive_period_rate")
     checks = {
         "eligible_universe_coverage": coverage >= policy.minimum_coverage
             and len(eligible) >= policy.minimum_eligible,
         "historical_sample_size": evaluation.get("vintages", 0) >= policy.minimum_vintages
             and evaluation.get("predictions", 0) >= policy.minimum_predictions,
         "valid_walk_forward": bool(evaluation.get("valid")),
-        "baseline_performance": evaluation.get("mean_excess_return", -np.inf) > policy.minimum_excess_return,
+        "baseline_performance": mean_excess is not None and np.isfinite(mean_excess)
+            and mean_excess > policy.minimum_excess_return,
         "discrimination": correlation is not None and correlation > policy.minimum_rank_correlation,
-        "temporal_stability": evaluation.get("positive_period_rate", 0) >= policy.minimum_positive_period_rate,
+        "label_integrity": label_diagnostics.get("nonfinite_labels", 0) == 0
+            and label_diagnostics.get("invalid_denominators", 0) == 0
+            and label_diagnostics.get("near_zero_denominators", 0) == 0
+            and label_diagnostics.get("duplicate_labels", 0) == 0
+            and label_diagnostics.get("unresolved_extreme_returns", 0) == 0,
+        "contribution_concentration": concentration.get("top_1", 1) <=
+            policy.maximum_top_observation_contribution,
+        "correlation_group_size": evaluation.get("rank_correlation_state") !=
+            "insufficient_group_size",
+        "temporal_stability": positive_rate is not None and np.isfinite(positive_rate)
+            and positive_rate >= policy.minimum_positive_period_rate,
         "regional_stability": len(region_counts) >= policy.minimum_regions
             and all(value > policy.minimum_excess_return for value in evaluation.get("regional_excess_return", {}).values())
             and len(evaluation.get("regional_excess_return", {})) >= policy.minimum_regions
@@ -354,6 +477,9 @@ def evaluate_evidence(
         "valid_walk_forward": "invalid_walk_forward", "baseline_performance": "baseline_underperformance",
         "discrimination": "insufficient_discrimination", "temporal_stability": "temporal_instability",
         "regional_stability": "regional_instability", "integrity": "integrity_failure",
+        "label_integrity": "label_integrity_failure",
+        "contribution_concentration": "return_concentration",
+        "correlation_group_size": "insufficient_group_size",
     }
     failed = [reason_map[name] for name, passed in checks.items() if not passed]
     return {"passed": not failed, "checks": checks, "reasons": failed,
@@ -416,7 +542,12 @@ def assess_research_scoring(*, research_db: Path, production_db: Path,
     dataset = build_model_ready_observations(catalogue=catalogue, prices=prices, fx=fx,
         actions=actions, failures=failures, decision_at=captured, policy=ObservationPolicy())
     scores = prepare_cross_section(dataset.observations, prices, decision_at=captured)
-    _, evaluation = walk_forward_evidence(dataset.observations, prices, decision_at=captured)
+    _, evaluation = walk_forward_evidence(
+        dataset.observations, prices, decision_at=captured, actions=actions,
+        near_zero_adjusted_close=policy.near_zero_adjusted_close,
+        extreme_absolute_return=policy.extreme_absolute_return,
+        minimum_correlation_group_size=policy.minimum_correlation_group_size,
+    )
     after = {"research": fingerprint(research_db), "production": fingerprint(production_db)}
     unchanged = all(before[key] == after[key] for key in before)
     if not unchanged:

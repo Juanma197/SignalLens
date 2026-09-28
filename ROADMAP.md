@@ -221,6 +221,13 @@ Each milestone must end with passing tests, a production frontend build, an upda
   historical feature boundary; ranking was correctly withheld and files unchanged
 - [x] Separate current scoring from a bounded calendar-month-end historical panel,
   retain strict effective-date/label cutoffs, and add bounded stage diagnostics
+- [x] Diagnose the 41,609-label extreme-return result; correct regional
+  region-by-vintage weighting and add derived-label, denominator, nonfinite,
+  duplicate, extreme, concentration, corporate-action-proximity and group-size
+  diagnostics/gates without capping or hiding observations
+- [x] Report mean/median/10% trimmed and equal-vintage excess with a vintage
+  bootstrap, per-region distributions, bounded contributors and warning-free
+  correlation handling; cover all failure modes with deterministic fixtures
 - [ ] Retry the repaired gates against the operator database after merge; the
   prior 492 model-ready and synthetic results are not scoring-gate passes
 - [ ] Acquire point-in-time fundamentals and survivorship-aware membership;

@@ -13,7 +13,7 @@ import pytest
 from app.eodhd_ingestion_cli import build_parser, execute
 from app.research_scoring import (
     EvidencePolicy, assess_research_scoring, build_research_ranking,
-    evaluate_evidence, prepare_cross_section, walk_forward_evidence,
+    _evaluate_predictions, evaluate_evidence, prepare_cross_section, walk_forward_evidence,
 )
 from tests.model_readiness_fixture import DECISION, create_research_fixture
 
@@ -222,3 +222,86 @@ def test_scaled_historical_panel_runtime_is_bounded():
     elapsed = time.perf_counter() - started
     assert metrics["vintages"] >= 12 and len(predictions) >= 6_000
     assert elapsed < 45, f"scaled historical evaluation took {elapsed:.2f}s"
+
+
+def label_fixture(*, regions=REGIONS, vintages=4, per_region=4):
+    rows = []
+    for month in range(vintages):
+        vintage = pd.Timestamp("2025-01-31") + pd.offsets.MonthEnd(month)
+        for region_index, (region, _) in enumerate(regions):
+            for security in range(per_region):
+                value = .01 + security * .01 + month * .001
+                rows.append({"qualified_symbol": f"{region}{security}", "region": region,
+                    "vintage_date": vintage, "label_date": vintage + pd.Timedelta(days=30),
+                    "score": float(security), "entry_adjusted_close": 10.0,
+                    "exit_adjusted_close": 10 * (1 + value), "forward_return": value})
+    return pd.DataFrame(rows)
+
+
+def evaluate_fixture(frame, actions=None):
+    diagnostics = {"duplicate_price_keys": 0}
+    return _evaluate_predictions(frame, diagnostics, actions=actions), diagnostics
+
+
+def test_split_like_discontinuity_is_reported_and_fail_closed():
+    frame = label_fixture()
+    frame.loc[0, ["exit_adjusted_close", "forward_return"]] = [1000.0, 99.0]
+    actions = pd.DataFrame([{"qualified_symbol": frame.loc[0, "qualified_symbol"],
+                             "ex_date": frame.loc[0, "label_date"], "action_type": "split"}])
+    metrics, diagnostics = evaluate_fixture(frame, actions)
+    assert not metrics["valid"]
+    integrity = diagnostics["label_integrity"]
+    assert integrity["unresolved_extreme_returns"] == 1
+    assert integrity["corporate_action_proximity_count"] == 1
+    assert integrity["largest_absolute_contributors"][0]["reason"] == "corporate_action_proximity"
+
+
+def test_near_zero_and_nonfinite_labels_fail_integrity_without_runtime_warnings():
+    frame = label_fixture()
+    frame.loc[0, ["entry_adjusted_close", "forward_return"]] = [.001, 999.0]
+    frame.loc[1, "forward_return"] = np.inf
+    with np.errstate(all="raise"):
+        metrics, diagnostics = evaluate_fixture(frame)
+    integrity = diagnostics["label_integrity"]
+    assert not metrics["valid"] and integrity["near_zero_denominators"] == 1
+    assert integrity["nonfinite_labels"] == 1
+
+
+def test_enormous_us_return_and_concentration_cannot_create_gate_pass():
+    frame = label_fixture()
+    target = frame.index[(frame.region.eq("US")) & frame.score.eq(3)][0]
+    frame.loc[target, ["exit_adjusted_close", "forward_return"]] = [10_010.0, 1000.0]
+    metrics, diagnostics = evaluate_fixture(frame)
+    observations, _, _ = synthetic_frames()
+    gates = evaluate_evidence(observations=observations, evaluation=metrics,
+                              integrity_ok=True, policy=permissive())
+    assert diagnostics["label_integrity"]["absolute_contribution_concentration"]["top_1"] > .9
+    assert {"label_integrity_failure", "return_concentration"} <= set(gates["reasons"])
+
+
+def test_single_observation_groups_have_explicit_state_without_correlation_warning():
+    frame = label_fixture(regions=(REGIONS[0],), vintages=3, per_region=1)
+    with np.errstate(all="raise"):
+        metrics, diagnostics = evaluate_fixture(frame)
+    assert metrics["rank_correlation"] is None
+    assert metrics["rank_correlation_state"] == "insufficient_group_size"
+    assert diagnostics["label_integrity"]["correlation_groups"]["insufficient_count"] == 3
+
+
+def test_legitimate_high_return_remains_visible_but_cannot_silently_pass():
+    frame = label_fixture()
+    frame.loc[0, ["exit_adjusted_close", "forward_return"]] = [130.0, 12.0]
+    metrics, diagnostics = evaluate_fixture(frame)
+    assert diagnostics["label_integrity"]["forward_returns"]["maximum"] == 12.0
+    assert metrics["trimmed_mean_excess_return"] is not None
+    assert not metrics["valid"]
+
+
+def test_realistic_five_region_panel_has_stable_decimal_metrics_and_no_warnings():
+    frame = label_fixture(vintages=18, per_region=8)
+    with np.errstate(all="raise"):
+        metrics, diagnostics = evaluate_fixture(frame)
+    assert metrics["valid"] and metrics["vintages"] == 18
+    assert set(metrics["regional_excess_return"]) == {region for region, _ in REGIONS}
+    assert abs(metrics["mean_excess_return"]) < 1
+    assert diagnostics["label_integrity"]["forward_returns"]["nonfinite"] == 0
