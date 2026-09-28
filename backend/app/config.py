@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     sec_user_agent: str = ""
     fred_api_key: str = ""
     api_token: SecretStr | None = None
+    refresh_authorization_token: SecretStr | None = None
+    shadow_authorization_token: SecretStr | None = None
+    eodhd_api_token: SecretStr | None = None
+    scheduler_enabled: bool = False
 
     model_config = SettingsConfigDict(
         env_file="../.env",

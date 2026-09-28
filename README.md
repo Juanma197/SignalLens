@@ -1,5 +1,16 @@
 # SignalLens
 
+## Milestone 20 research operations
+
+The Next.js application now provides a mobile-friendly `/operations` dashboard for
+read-only status and deliberately authorized research workflows. Shadow plan responses
+are bounded by default, month-end creation requires explicit regional session dates and
+FX readiness, and production publishing remains unavailable. See the
+[operator/deployment-readiness runbook](docs/milestone-20-operations-runbook.md).
+
+**RESEARCH ONLY — NOT INVESTMENT ADVICE.** Current catalogue membership is not
+survivorship-free and fundamentals remain unavailable under the current EODHD entitlement.
+
 SignalLens is a research dashboard for periodically ranking public companies and tracking each ranking against what happened afterward. It is decision support, not financial advice.
 
 ## Current milestone

@@ -2,6 +2,17 @@
 
 Last updated: 2026-09-28
 
+## Milestone 20 — implemented locally (not deployed)
+
+- Added the standalone research operations dashboard, authenticated-ready bounded API,
+  distinct write authorizations, explicit month-end readiness gates, and disabled-by-default
+  offline scheduling abstraction.
+- September 2026's shadow vintage has **not** been created.
+- No live EODHD request, Railway access, production publication, deployment, or external
+  scheduler configuration occurred.
+- The model remains research-only; catalogue membership is not survivorship-free and
+  fundamentals remain unavailable under the current EODHD entitlement.
+
 ## Current milestone
 
 ## Milestone 19 — Prospective locked shadow portfolios (implementation complete)
