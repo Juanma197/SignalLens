@@ -256,7 +256,7 @@ def test_split_like_discontinuity_is_reported_and_fail_closed():
     assert integrity["largest_absolute_contributors"][0]["reason"] == "corporate_action_proximity"
 
 
-def test_near_zero_and_nonfinite_labels_fail_integrity_without_runtime_warnings():
+def test_near_zero_alone_is_diagnostic_but_nonfinite_labels_fail_integrity():
     frame = label_fixture()
     frame.loc[0, ["entry_adjusted_close", "forward_return"]] = [.001, 999.0]
     frame.loc[1, "forward_return"] = np.inf

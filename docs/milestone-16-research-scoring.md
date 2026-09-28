@@ -169,3 +169,38 @@ Optionally add `--decision-at "2026-09-28T20:00:00+00:00"`. Confirm every
 fingerprint is unchanged. Retain the JSON for review without sending database
 files or provider payloads; do not treat a classification as an established
 provider cause and do not alter observations until that review is complete.
+
+## Historical segmentation and label-integrity repair
+
+Milestone 16 now derives deterministic boundaries from material adjacent-session
+raw and adjusted price ratios. Boundaries retain source/retrieval provenance and
+explicit evidence codes for raw or adjusted discontinuity, raw/adjusted
+disagreement, zero-volume discontinuity, and absence of a nearby recorded
+action. They are classifications of unresolved evidence, not invented actions,
+and no provider observation is edited or deleted.
+
+Validation is window-aware: a 126-session feature window or 21-session label
+interval crossing an unresolved boundary is withheld, while a boundary wholly
+before both windows has no effect. Nonfinite/nonpositive denominators and
+unresolved returns beyond the existing 1,000% threshold are also withheld.
+Near-zero price is reported but is not independently disqualifying; continuous
+low-price histories remain eligible unless amplification, policy, or other
+integrity evidence applies. Evidence metrics are recomputed only from retained
+labels without capping, replacement, winsorization, or silent deletion, with
+original/retained counts and exclusions reported separately.
+
+`plan-label-repair` is strictly read-only. It reports boundary aggregates by
+reason and region, affected feature/label rows, original/retained/withheld label
+counts, bounded provenance samples, and before/after database SHA-256 and byte
+counts. It proposes classifications only and always confirms that ranking was
+withheld and not generated. The weak prior robust live results (trimmed mean
+about -0.0030, median about -0.0017, positive-period rate about 0.4779) remain
+weak; removing corrupt evidence is not evidence of strategy success.
+
+```powershell
+Push-Location backend
+& ..\.venv\Scripts\python.exe -m app.eodhd_ingestion_cli plan-label-repair `
+  --research-db "C:\SignalLensData\global-research.duckdb" `
+  --production-db "C:\SignalLensData\signallens.duckdb"
+Pop-Location
+```

@@ -89,6 +89,21 @@ def test_cli_is_read_only_and_refuses_unsafe_paths(tmp_path: Path):
         execute(identical)
 
 
+def test_label_repair_plan_is_read_only_and_never_generates_ranking(tmp_path: Path):
+    research, production = tmp_path / "research.duckdb", tmp_path / "production.duckdb"
+    create_research_fixture(research, periods=310)
+    production.write_bytes(b"production sentinel")
+    before = research.read_bytes(), production.read_bytes()
+    args = build_parser().parse_args(["plan-label-repair", "--research-db", str(research),
+        "--production-db", str(production), "--decision-at", "2026-09-27T00:00:00+00:00"])
+    report = execute(args)
+    assert report["proposal_only"] and report["mode"] == "strictly_read_only"
+    assert report["ranking"] == {"status": "withheld", "generated": False}
+    assert set(report["labels"]) >= {"original", "retained", "withheld", "exclusions_by_reason"}
+    assert all(value["unchanged"] for value in report["database_fingerprints"].values())
+    assert before == (research.read_bytes(), production.read_bytes())
+
+
 def test_bounded_output_and_aggregate_counts():
     all_predictions, all_prices = [], []
     for index in range(3):

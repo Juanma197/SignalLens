@@ -329,6 +329,16 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 
 ### Milestone 16 research scoring and evidence gates
 
+**Historical-price segmentation repair implemented (offline; operator rerun pending).**
+Deterministic raw/adjusted adjacent-session boundaries now withhold only feature
+or label windows that cross unresolved evidence. Clean later segments and
+continuous low-price securities remain eligible. The read-only
+`plan-label-repair` command reports bounded proposed classifications, retained
+versus withheld counts, reason/region aggregates, unchanged fingerprints, and
+never generates a ranking. Stored observations are not rewritten or deleted;
+no corporate action is inferred. Existing weak robust live metrics remain weak
+and no strategy-success claim is made.
+
 - The operator completed Milestone 15 with 492 of 500 securities model-ready;
   eight were withheld. That result establishes input readiness only and is not a
   claim that the live data passes scoring or ranking gates.

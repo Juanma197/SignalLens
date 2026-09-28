@@ -19,6 +19,7 @@ from .model_readiness import ReadinessError, _frame, _same_file, _validate_schem
 from .multifactor import FACTOR_WEIGHTS, MOMENTUM_DAYS, RISK_DAYS, TREND_DAYS
 from .research_evaluation import bootstrap_mean_ci
 from .research_observations import EXPECTED_REGIONS, ObservationPolicy, build_model_ready_observations
+from .price_segments import crosses_boundary, detect_price_segments
 
 REASON_CODES = frozenset({
     "inadequate_coverage", "inadequate_history", "invalid_walk_forward",
@@ -77,7 +78,7 @@ def _rank(values: pd.Series, *, higher: bool = True) -> pd.Series:
 
 def prepare_cross_section(
     observations: pd.DataFrame, prices: pd.DataFrame, *, decision_at: datetime,
-    knowledge_cutoff: datetime | None = None,
+    knowledge_cutoff: datetime | None = None, segment_boundaries: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Prepare region-neutral factors for explicitly model-ready observations.
 
@@ -121,6 +122,11 @@ def prepare_cross_section(
     for symbol, group in frame.groupby("qualified_symbol", sort=True):
         closes = pd.to_numeric(group["adjusted_close"], errors="coerce").dropna()
         if len(closes) <= MOMENTUM_DAYS:
+            continue
+        feature_start = pd.Timestamp(group.iloc[-(MOMENTUM_DAYS + 1)]["trading_date"])
+        if segment_boundaries is not None and crosses_boundary(
+                segment_boundaries, str(symbol), feature_start,
+                pd.Timestamp(group.iloc[-1]["trading_date"])):
             continue
         returns = closes.pct_change().dropna().iloc[-RISK_DAYS:]
         recent = closes.iloc[-(MOMENTUM_DAYS + 1):]
@@ -210,11 +216,18 @@ def walk_forward_evidence(
     vintage_indexes = [index for index in possible if index + horizon_sessions < len(dates)]
     identity = observations.set_index("qualified_symbol")
     duplicate_prices = frame.duplicated(["qualified_symbol", "trading_date"], keep=False)
+    segment_boundaries = detect_price_segments(frame, actions)
+    price_dates_by_symbol = {str(symbol): group["trading_date"].reset_index(drop=True)
+                             for symbol, group in frame.groupby("qualified_symbol", sort=False)}
+    boundary_dates_by_symbol = {str(symbol): group["boundary_date"].sort_values().tolist()
+                                for symbol, group in segment_boundaries.groupby("qualified_symbol", sort=False)}
     close_lookup = frame.loc[~duplicate_prices].set_index(
         ["qualified_symbol", "trading_date"]
     )["adjusted_close"]
     rows = []
     feature_rows = label_rows = 0
+    segment_feature_withheld = segment_label_withheld = 0
+    exclusion_reasons: dict[str, int] = {}
     removed_missing_feature = removed_missing_label = 0
     for index in vintage_indexes:
         vintage_date, label_date = pd.Timestamp(dates[index]), pd.Timestamp(dates[index + horizon_sessions])
@@ -224,10 +237,23 @@ def walk_forward_evidence(
         vintage_obs["decision_at"] = vintage_at
         scores = prepare_cross_section(
             vintage_obs, frame, decision_at=vintage_at.to_pydatetime(),
-            knowledge_cutoff=boundary.to_pydatetime(),
+            knowledge_cutoff=boundary.to_pydatetime(), segment_boundaries=segment_boundaries,
         )
         feature_rows += len(scores)
         removed_missing_feature += max(0, len(eligible) - len(scores))
+        # Separately account for rows that had sufficient history but crossed a boundary.
+        for symbol in eligible:
+            dates_for_symbol = price_dates_by_symbol.get(str(symbol), pd.Series(dtype="datetime64[ns]"))
+            visible_count = int(dates_for_symbol.searchsorted(vintage_date, side="right"))
+            if visible_count > MOMENTUM_DAYS:
+                start = dates_for_symbol.iloc[visible_count - MOMENTUM_DAYS - 1]
+                crossing_dates = [date for date in boundary_dates_by_symbol.get(str(symbol), ())
+                                  if start < date <= vintage_date]
+                if crossing_dates:
+                    segment_feature_withheld += 1
+                    reasons = crosses_boundary(segment_boundaries, symbol, start, vintage_date)
+                    for reason in reasons:
+                        exclusion_reasons[f"feature:{reason}"] = exclusion_reasons.get(f"feature:{reason}", 0) + 1
         for score in scores.itertuples(index=False):
             try:
                 entry = float(close_lookup.loc[(score.qualified_symbol, vintage_date)])
@@ -236,8 +262,21 @@ def walk_forward_evidence(
                 removed_missing_label += 1
                 continue
             label_rows += 1
+            reasons = crosses_boundary(segment_boundaries, score.qualified_symbol,
+                                       vintage_date, label_date)
+            if reasons:
+                segment_label_withheld += 1
+                for reason in reasons:
+                    exclusion_reasons[f"label:{reason}"] = exclusion_reasons.get(f"label:{reason}", 0) + 1
+                continue
             with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
                 forward_return = exit_value / entry - 1
+            if not np.isfinite(entry) or entry <= 0:
+                exclusion_reasons["label:invalid_denominator"] = exclusion_reasons.get("label:invalid_denominator", 0) + 1
+                continue
+            if not np.isfinite(forward_return) or abs(forward_return) > extreme_absolute_return:
+                exclusion_reasons["label:unresolved_extreme_return"] = exclusion_reasons.get("label:unresolved_extreme_return", 0) + 1
+                continue
             rows.append({
                 "qualified_symbol": score.qualified_symbol,
                 "region": identity.loc[score.qualified_symbol, "region"],
@@ -276,6 +315,11 @@ def walk_forward_evidence(
         "generated_decision_vintages": int(len(vintage_indexes)),
         "feature_eligible_rows": int(feature_rows),
         "label_eligible_rows": int(label_rows),
+        "retained_label_rows": int(len(rows)),
+        "segment_boundaries": int(len(segment_boundaries)),
+        "segment_feature_rows_withheld": int(segment_feature_withheld),
+        "segment_label_rows_withheld": int(segment_label_withheld),
+        "label_exclusions_by_reason": dict(sorted(exclusion_reasons.items())),
         "rows_removed": {
             "not_model_ready_at_final_cutoff": int(len(observations) - len(eligible)),
             "missing_feature_history": int(removed_missing_feature),
@@ -335,7 +379,9 @@ def _evaluate_predictions(predictions: pd.DataFrame, diagnostics: dict[str, Any]
     near_zero_denominator = labels["entry_adjusted_close"].abs().le(near_zero)
     duplicate_labels = labels.duplicated(["qualified_symbol", "vintage_date"], keep=False)
     extreme_mask = labels["forward_return"].abs().gt(extreme) & np.isfinite(labels["forward_return"])
-    valid_mask = finite & ~invalid_denominator & ~near_zero_denominator & ~duplicate_labels
+    # Low price is diagnostic, not independently corrupt. Amplification and
+    # segment validation are enforced before this retained panel is evaluated.
+    valid_mask = finite & ~invalid_denominator & ~duplicate_labels
     valid = labels.loc[valid_mask].copy()
 
     action_keys: set[tuple[str, pd.Timestamp]] = set()
@@ -397,7 +443,7 @@ def _evaluate_predictions(predictions: pd.DataFrame, diagnostics: dict[str, Any]
                                "insufficient_count": int(len(insufficient))},
         "corporate_action_proximity_count": int(sum(x["corporate_action_within_7_days"] for x in samples)),
     }
-    integrity_ok = not ((~finite).any() or invalid_denominator.any() or near_zero_denominator.any()
+    integrity_ok = not ((~finite).any() or invalid_denominator.any()
                         or duplicate_labels.any() or extreme_mask.any()
                         or diagnostics.get("duplicate_price_keys", 0))
     calibration = []
@@ -455,7 +501,6 @@ def evaluate_evidence(
         "discrimination": correlation is not None and correlation > policy.minimum_rank_correlation,
         "label_integrity": label_diagnostics.get("nonfinite_labels", 0) == 0
             and label_diagnostics.get("invalid_denominators", 0) == 0
-            and label_diagnostics.get("near_zero_denominators", 0) == 0
             and label_diagnostics.get("duplicate_labels", 0) == 0
             and label_diagnostics.get("unresolved_extreme_returns", 0) == 0,
         "contribution_concentration": concentration.get("top_1", 1) <=
@@ -541,7 +586,11 @@ def assess_research_scoring(*, research_db: Path, production_db: Path,
             WHERE status='failed' AND error_code IS NOT NULL""")
     dataset = build_model_ready_observations(catalogue=catalogue, prices=prices, fx=fx,
         actions=actions, failures=failures, decision_at=captured, policy=ObservationPolicy())
-    scores = prepare_cross_section(dataset.observations, prices, decision_at=captured)
+    visible_prices = prices.loc[pd.to_datetime(prices["retrieved_at"], utc=True).le(
+        pd.Timestamp(captured).tz_convert("UTC"))]
+    current_boundaries = detect_price_segments(visible_prices, actions)
+    scores = prepare_cross_section(dataset.observations, prices, decision_at=captured,
+                                   segment_boundaries=current_boundaries)
     _, evaluation = walk_forward_evidence(
         dataset.observations, prices, decision_at=captured, actions=actions,
         near_zero_adjusted_close=policy.near_zero_adjusted_close,
