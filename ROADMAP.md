@@ -228,7 +228,13 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Report mean/median/10% trimmed and equal-vintage excess with a vintage
   bootstrap, per-region distributions, bounded contributors and warning-free
   correlation handling; cover all failure modes with deterministic fixtures
-- [ ] Retry the repaired gates against the operator database after merge; the
-  prior 492 model-ready and synthetic results are not scoring-gate passes
+- [x] Record the live 41,609-label retry: three unresolved extremes, 29
+  near-zero denominators, 83.708% top-one concentration, negative robust excess
+  summaries, ranking withheld, and unchanged database bytes
+- [x] Add a bounded, strictly read-only extreme-label provenance command that
+  reuses the scoring panel, reports neighbouring sessions/action proximity and
+  tentative classifications, fingerprints both databases, and generates no rank
+- [ ] Run the provenance diagnostic locally against the operator database after
+  merge; do not exclude, repair, cap, winsorize, or reinterpret observations yet
 - [ ] Acquire point-in-time fundamentals and survivorship-aware membership;
   production promotion and publisher changes remain prohibited
