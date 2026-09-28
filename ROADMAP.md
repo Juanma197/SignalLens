@@ -147,3 +147,14 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Diagnose first 500-security partial run and correct pending checkpoints, run accounting, representative deterministic selection, estimates and coverage
 - [ ] Corrected 500-security operator rebuild (requires explicit archive/rebuild review; not run here)
 - [ ] Historical-membership backtest or production promotion (prohibited)
+
+## Milestone 13 — Audit and incremental refresh (implementation complete)
+
+- [x] Mutation-free catalogue/price/FX/history/freshness/OHLCV/key/action quality audit
+- [x] Bounded-overlap incremental planner for price, dividend and historical FX endpoints
+- [x] Idempotent correction upserts, revision counts and resumable budget/runtime stops
+- [x] Retryable/pending-only recovery and deliberately authorized periodic reconciliation
+- [x] Offline regression coverage and Windows PowerShell operations runbook
+- [ ] Run audit and refresh against the operator-held database (not available in cloud)
+- [ ] Obtain survivorship-free membership before any historical-membership assertion
+- [ ] Production promotion, Railway changes and official `momentum_126d` changes (prohibited)

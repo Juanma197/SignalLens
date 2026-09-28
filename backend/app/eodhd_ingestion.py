@@ -52,6 +52,9 @@ EXCLUDED_TYPES = {"etf": "excluded_etf", "fund": "excluded_fund", "index": "excl
                   "preferred": "excluded_preferred_share", "warrant": "excluded_warrant",
                   "adr": "excluded_adr", "gdr": "excluded_depositary_receipt"}
 TEN_YEARS_DAYS = 3653
+REFRESH_OVERLAP_DAYS = 7
+SHORT_HISTORY_OBSERVATIONS = 252
+STALE_CALENDAR_DAYS = 7
 
 
 class BudgetStop(RuntimeError):
@@ -399,6 +402,155 @@ class EODHDIngestion:
 
     def status(self) -> dict: return {"command": "status", **self._coverage()}
     def coverage(self) -> dict: return {"command": "coverage", **self._coverage()}
+
+    def audit(self, *, as_of: datetime, affected_limit: int = 25) -> dict:
+        """Read-only, aggregate quality review of the active research selection."""
+        if affected_limit < 0 or affected_limit > 100:
+            raise ValueError("affected limit must be between 0 and 100")
+        if not self.path.exists():
+            return {"command": "audit", "mode": "read_only", "status": "unavailable",
+                    "securities": 0, "classifications": {"unavailable": 0}, "affected": []}
+        before = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        with duckdb.connect(str(self.path), read_only=True) as db:
+            tables = {r[0] for r in db.execute("SHOW TABLES").fetchall()}
+            required = {"security_listings", "security_master_retrievals"}
+            if not required <= tables:
+                result = {"command": "audit", "mode": "read_only", "status": "unavailable",
+                          "securities": 0, "classifications": {"unavailable": 0}, "affected": []}
+            else:
+                rid = db.execute("SELECT retrieval_id FROM security_master_retrievals WHERE status='completed' ORDER BY retrieved_at DESC LIMIT 1").fetchone()
+                listings = [] if rid is None else db.execute(
+                    "SELECT qualified_symbol,primary_exchange,currency FROM security_listings WHERE retrieval_id=? ORDER BY qualified_symbol", [rid[0]]).fetchall()
+                price_stats = {}
+                duplicates = 0
+                if "global_price_observations" in tables:
+                    for row in db.execute("""SELECT qualified_symbol,COUNT(*),MIN(trading_date),MAX(trading_date),
+                        SUM(CASE WHEN adjusted_close IS NULL THEN 1 ELSE 0 END),MIN(currency),MAX(currency),
+                        SUM(CASE WHEN open<=0 OR high<=0 OR low<=0 OR close<=0 OR volume<0 OR low>LEAST(open,close,high) OR high<GREATEST(open,close,low) THEN 1 ELSE 0 END)
+                        FROM global_price_observations GROUP BY 1""").fetchall(): price_stats[row[0]] = row[1:]
+                    duplicates = db.execute("SELECT COUNT(*) FROM (SELECT 1 FROM global_price_observations GROUP BY qualified_symbol,trading_date,source HAVING COUNT(*)>1)").fetchone()[0]
+                fx = set()
+                if "global_fx_observations" in tables:
+                    fx = {r[0] for r in db.execute("SELECT DISTINCT base_currency FROM global_fx_observations WHERE quote_currency='GBP'").fetchall()}
+                actions = {} if "global_corporate_actions" not in tables else dict(db.execute("SELECT qualified_symbol,COUNT(*) FROM global_corporate_actions GROUP BY 1").fetchall())
+                failure = {}
+                if "eodhd_ingestion_checkpoints" in tables:
+                    failure = dict(db.execute("SELECT qualified_symbol,error_code FROM eodhd_ingestion_checkpoints WHERE status='failed'").fetchall())
+                classified, affected, by_region, by_currency = {}, [], {}, {}
+                for symbol, region, currency in listings:
+                    stats = price_stats.get(symbol)
+                    reason = "usable"
+                    if symbol in failure: reason = "provider_failed"
+                    elif not stats: reason = "unavailable"
+                    elif stats[6] or stats[3] or stats[4] != stats[5]: reason = "invalid_data"
+                    elif currency not in {"GBP", "GBX"} and currency not in fx: reason = "missing_fx"
+                    elif stats[0] < SHORT_HISTORY_OBSERVATIONS: reason = "short_history"
+                    elif (as_of.date() - stats[2]).days > STALE_CALENDAR_DAYS: reason = "stale"
+                    classified[reason] = classified.get(reason, 0) + 1
+                    for bucket, key in ((by_region, region), (by_currency, currency)):
+                        entry = bucket.setdefault(key, {"securities": 0, "states": {}}); entry["securities"] += 1
+                        entry["states"][reason] = entry["states"].get(reason, 0) + 1
+                    if reason != "usable" and len(affected) < affected_limit:
+                        affected.append({"symbol": symbol, "state": reason,
+                                         "reason": failure.get(symbol, reason)[:80]})
+                result = {"command": "audit", "mode": "read_only", "status": "completed", "securities": len(listings),
+                    "classifications": dict(sorted(classified.items())), "by_region": by_region, "by_currency": by_currency,
+                    "quality": {"duplicate_natural_keys": duplicates,
+                        "adjusted_close_missing_rows": sum(s[3] for s in price_stats.values()),
+                        "invalid_ohlcv_securities": sum(bool(s[6]) for s in price_stats.values()),
+                        "corporate_actions": sum(actions.values()),
+                        "missing_observations_note": "history depth and weekday gaps require exchange-calendar interpretation"},
+                    "affected": affected, "affected_truncated": max(0, len(listings) - sum(classified.get(x, 0) for x in ("usable",)) - len(affected))}
+        after = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        if before != after: raise RuntimeError("read-only audit mutation detected")
+        result["database_unchanged"] = True
+        return result
+
+    def plan_refresh(self, *, as_of: datetime, reconcile: bool = False) -> dict:
+        """Plan bounded endpoint ranges without opening the database for writes."""
+        listings = self._latest_listings(as_of) if self.path.exists() else []
+        latest: dict[str, date] = {}
+        fx_latest: dict[str, date] = {}
+        if self.path.exists():
+            with duckdb.connect(str(self.path), read_only=True) as db:
+                tables = {r[0] for r in db.execute("SHOW TABLES").fetchall()}
+                if "global_price_observations" in tables: latest = dict(db.execute("SELECT qualified_symbol,MAX(trading_date) FROM global_price_observations GROUP BY 1").fetchall())
+                if "global_fx_observations" in tables: fx_latest = dict(db.execute("SELECT base_currency,MAX(observed_on) FROM global_fx_observations WHERE quote_currency='GBP' GROUP BY 1").fetchall())
+        requests, estimated = [], 0
+        full = reconcile
+        for item in listings:
+            mode = "periodic_reconciliation" if reconcile else ("incremental_refresh" if item.qualified_symbol in latest else "initial_backfill")
+            start = as_of.date() - timedelta(days=TEN_YEARS_DAYS) if mode != "incremental_refresh" else latest[item.qualified_symbol] - timedelta(days=REFRESH_OVERLAP_DAYS - 1)
+            estimated += max(0, (as_of.date() - start).days * 5 // 7)
+            requests.append({"target": item.qualified_symbol, "endpoints": ["eod", "div"], "from": start, "to": as_of.date(), "mode": mode})
+        for currency in ("USD", "CAD", "EUR"):
+            mode = "periodic_reconciliation" if reconcile else ("incremental_refresh" if currency in fx_latest else "initial_backfill")
+            start = as_of.date() - timedelta(days=TEN_YEARS_DAYS) if mode != "incremental_refresh" else fx_latest[currency] - timedelta(days=REFRESH_OVERLAP_DAYS - 1)
+            requests.append({"target": f"{currency}GBP.FOREX", "endpoints": ["eod"], "from": start, "to": as_of.date(), "mode": mode})
+        return {"command": "plan-refresh", "mode": "read_only", "overlap_days": REFRESH_OVERLAP_DAYS,
+                "planned_requests": requests, "provider_request_estimate": sum(len(r["endpoints"]) for r in requests),
+                "estimated_rows": estimated, "pending_securities": self._pending_count(), "full_reconciliation_required": full,
+                "note": "Incremental refresh reduces response volume and processing time, but generally still needs about one provider request per endpoint/security."}
+
+    def refresh(self, *, retrieved_at: datetime, retry_failures: bool = False, dry_run: bool = False,
+                reconcile: bool = False, authorized: bool = False) -> dict:
+        if reconcile and not authorized: raise ValueError("full reconciliation requires --authorize-full-reconciliation")
+        plan = self.plan_refresh(as_of=retrieved_at, reconcile=reconcile)
+        if dry_run: return {**plan, "command": "reconcile" if reconcile else "refresh", "mode": "dry_run", "database_unchanged": True}
+        self._state_schema()
+        listings = {x.qualified_symbol: x for x in self._latest_listings(retrieved_at)}
+        permanent = {"invalid_provider_payload"}
+        with duckdb.connect(str(self.path), read_only=True) as db:
+            states = {r[0]: (r[1], r[2]) for r in db.execute(
+                "SELECT qualified_symbol,status,error_code FROM eodhd_ingestion_checkpoints WHERE stage='prices'").fetchall()}
+            states.update({r[0]: (r[1], r[2]) for r in db.execute(
+                "SELECT qualified_symbol,status,error_code FROM eodhd_ingestion_checkpoints WHERE stage='refresh'").fetchall()})
+        targets = []
+        for request in plan["planned_requests"]:
+            symbol = request["target"]
+            if symbol.endswith(".FOREX"): continue
+            state = states.get(symbol)
+            if state and state[0] == "pending": targets.append(request)
+            elif retry_failures and state and state[0] == "failed" and state[1] not in permanent: targets.append(request)
+            elif not retry_failures and (not state or state[0] != "failed" or state[1] not in permanent): targets.append(request)
+        for request in targets: self._checkpoint("refresh", request["target"], "pending", None)
+        revisions = completed = 0; failures = []; stop = None
+        for request in targets:
+            symbol, item = request["target"], listings[request["target"]]
+            try:
+                start, end = request["from"], request["to"]
+                payload = self.client.get(f"eod/{symbol}", {"from": start.isoformat(), "to": end.isoformat(), "period": "d"})
+                prices = parse_eod(payload, item, retrieved_at, start, end)
+                actions = _dividends(self.client.get(f"div/{symbol}", {"from": start.isoformat(), "to": end.isoformat()}), item, retrieved_at, start, end)
+                with duckdb.connect(str(self.path), read_only=True) as db:
+                    old = {r[0]: r[1:] for r in db.execute("SELECT trading_date,open,high,low,close,adjusted_close,volume,currency FROM global_price_observations WHERE qualified_symbol=? AND trading_date>=?", [symbol, start]).fetchall()}
+                revisions += sum(p.trading_date in old and old[p.trading_date] !=
+                    (p.open,p.high,p.low,p.close,p.adjusted_close,p.volume,p.currency) for p in prices)
+                self.market.store(prices, actions); self._checkpoint("refresh", symbol, "completed", None); completed += 1
+            except BudgetStop as exc: stop = exc.reason; break
+            except Exception as exc:
+                code = _failure_code(exc); self._checkpoint("refresh", symbol, "failed", code)
+                failures.append({"symbol": symbol, "code": code})
+        fx_observations = []
+        if not stop and not retry_failures:
+            for request in (r for r in plan["planned_requests"] if r["target"].endswith(".FOREX")):
+                try:
+                    currency = request["target"][:3]; start, end = request["from"], request["to"]
+                    listing = ListingObservation(request["target"], request["target"], "FOREX", request["target"], "", "GBP", "common_stock", exchange_symbol=request["target"])
+                    parsed = parse_eod(self.client.get(f"eod/{request['target']}", {"from": start.isoformat(), "to": end.isoformat(), "period": "d"}), listing, retrieved_at, start, end)
+                    with duckdb.connect(str(self.path), read_only=True) as db:
+                        old = dict(db.execute("SELECT observed_on,rate FROM global_fx_observations WHERE base_currency=? AND quote_currency='GBP' AND observed_on>=?", [currency, start]).fetchall())
+                    revisions += sum(p.trading_date in old and Decimal(str(old[p.trading_date])) != p.close for p in parsed)
+                    fx_observations.extend(FXObservation(currency, "GBP", p.trading_date, p.close or Decimal(0), "eodhd", retrieved_at,
+                        datetime.combine(p.trading_date, datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=1)) for p in parsed)
+                except BudgetStop as exc: stop = exc.reason; break
+                except Exception as exc: failures.append({"symbol": request["target"], "code": _failure_code(exc)})
+        if fx_observations: self.market.store(fx=fx_observations)
+        return {"command": "reconcile" if reconcile else ("retry-failures" if retry_failures else "refresh"),
+                "status": "partial_checkpointed" if stop else ("completed_with_failures" if failures else "completed"), "completed": completed,
+                "failed": len(failures), "failures": failures, "pending": len(targets)-completed-len(failures),
+                "revisions": revisions, "stop_reason": stop, "overlap_days": REFRESH_OVERLAP_DAYS,
+                "historical_deletes": 0, "requests": self.client.requests}
 
     def _coverage(self) -> dict:
         result = self.market.coverage()

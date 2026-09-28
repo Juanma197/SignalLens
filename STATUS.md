@@ -1,8 +1,24 @@
 # SignalLens Status
 
-Last updated: 2026-09-26
+Last updated: 2026-09-28
 
 ## Current milestone
+
+## Milestone 13 — Pilot audit and safe incremental refresh
+
+- [x] Read-only aggregate quality audit with bounded sanitized affected-symbol output.
+- [x] Seven-day-overlap incremental price/dividend/FX planning and deterministic,
+  revision-counting execution with resumable safety stops.
+- [x] Pending/retryable-only retry path and separately authorized full reconciliation.
+- [x] PowerShell operator runbook and explicit production-path, token, payload,
+  request, response, pacing, timeout and runtime controls.
+- [x] Operator-reported local state: 500 selected, 499 price histories completed,
+  zero pending, complete three-pair FX, and `AIIA-U.US` retained as
+  `invalid_provider_payload`; approximately 78 MB with a SHA-256-verified backup.
+- [ ] No live audit or incremental refresh was performed in the cloud environment;
+  its ignored local database was not available, inspected, uploaded, or fabricated.
+- [ ] Catalogue membership remains current-only, not survivorship-free, and is
+  unsuitable for production promotion or historical-membership claims.
 
 ## Milestone 12 — Bounded global market-data ingestion (live venue aliases corrected)
 

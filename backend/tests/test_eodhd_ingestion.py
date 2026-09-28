@@ -252,3 +252,65 @@ def test_runtime_stop_is_checkpointed_and_resume_only_processes_pending(tmp_path
     assert coverage["security_progress"] == {"attempted": 5, "completed": 5, "pending": 0, "actual_failed": 0}
     assert coverage["catalogue_selections"] and len(coverage["price_history"]) == 5
     assert production.read_bytes() == production_before
+
+
+def test_incremental_plan_uses_bounded_overlap_not_ten_years(tmp_path: Path) -> None:
+    path = tmp_path / "research.duckdb"
+    operation = EODHDIngestion(path, tmp_path / "prod.duckdb", client(per_region=1, total=5))
+    operation.catalogue(retrieved_at=NOW)
+    operation.prices(retrieved_at=NOW)
+    operation.fx(retrieved_at=NOW)
+    plan = operation.plan_refresh(as_of=NOW)
+    price = next(x for x in plan["planned_requests"] if not x["target"].endswith(".FOREX"))
+    assert price["mode"] == "incremental_refresh"
+    assert price["from"] == date(2026, 9, 19)  # latest stored date minus six days
+    assert (price["to"] - price["from"]).days < 10
+    assert plan["overlap_days"] == 7
+
+
+def test_refresh_is_idempotent_and_reports_provider_corrections(tmp_path: Path) -> None:
+    path = tmp_path / "research.duckdb"
+    operation = EODHDIngestion(path, tmp_path / "prod.duckdb", client(per_region=1, total=5))
+    operation.catalogue(retrieved_at=NOW); operation.prices(retrieved_at=NOW); operation.fx(retrieved_at=NOW)
+    first = operation.refresh(retrieved_at=NOW)
+    assert first["revisions"] == 0 and first["historical_deletes"] == 0
+    with duckdb.connect(str(path), read_only=True) as db:
+        count = db.execute("SELECT COUNT(*) FROM global_price_observations").fetchone()[0]
+    second = EODHDIngestion(path, tmp_path / "prod.duckdb", client()).refresh(retrieved_at=NOW)
+    assert second["revisions"] == 0
+    with duckdb.connect(str(path), read_only=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM global_price_observations").fetchone()[0] == count
+
+    def corrected(request: httpx.Request) -> httpx.Response:
+        response = transport(request)
+        if "/eod/" in request.url.path and not request.url.path.endswith("FOREX"):
+            rows = fixture("prices.json"); rows[-1]["close"] = 12.5; rows[-1]["high"] = 13.5
+            return httpx.Response(200, json=rows)
+        return response
+    corrected_client = EODHDClient("secret", EODHDLimits(requests_per_minute=100000),
+        transport=httpx.MockTransport(corrected), sleep=lambda _: None)
+    revised = EODHDIngestion(path, tmp_path / "prod.duckdb", corrected_client).refresh(retrieved_at=NOW)
+    assert revised["revisions"] == 5
+
+
+def test_audit_is_immutable_and_classifies_short_history_and_missing_fx(tmp_path: Path) -> None:
+    path = tmp_path / "research.duckdb"
+    operation = EODHDIngestion(path, tmp_path / "prod.duckdb", client(per_region=1, total=5))
+    operation.catalogue(retrieved_at=NOW); operation.prices(retrieved_at=NOW)
+    before = path.read_bytes()
+    report = operation.audit(as_of=NOW, affected_limit=2)
+    assert report["classifications"]["missing_fx"] == 4
+    assert report["classifications"]["short_history"] == 1
+    assert len(report["affected"]) == 2 and report["database_unchanged"] is True
+    assert path.read_bytes() == before
+
+
+def test_reconciliation_requires_deliberate_authorization_and_dry_run_is_immutable(tmp_path: Path) -> None:
+    path = tmp_path / "research.duckdb"
+    operation = EODHDIngestion(path, tmp_path / "prod.duckdb", client(per_region=1, total=5))
+    operation.catalogue(retrieved_at=NOW)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="requires"):
+        operation.refresh(retrieved_at=NOW, reconcile=True)
+    dry = operation.refresh(retrieved_at=NOW, reconcile=True, authorized=True, dry_run=True)
+    assert dry["full_reconciliation_required"] is True and path.read_bytes() == before
