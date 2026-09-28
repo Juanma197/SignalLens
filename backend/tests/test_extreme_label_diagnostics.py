@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from app.eodhd_ingestion_cli import build_parser, execute
-from app.extreme_label_diagnostics import diagnose_label_provenance
+from app.extreme_label_diagnostics import _severity_key, _stage_accounting, diagnose_label_provenance
 from app.research_scoring import EvidencePolicy
 from model_readiness_fixture import create_research_fixture
 
@@ -99,7 +99,15 @@ def test_label_repair_plan_is_read_only_and_never_generates_ranking(tmp_path: Pa
     report = execute(args)
     assert report["proposal_only"] and report["mode"] == "strictly_read_only"
     assert report["ranking"] == {"status": "withheld", "generated": False}
-    assert set(report["labels"]) >= {"original", "retained", "withheld", "exclusions_by_reason"}
+    accounting = report["stage_accounting"]
+    assert accounting["raw_panel_labels"] - accounting["feature_withheld_distinct"] == \
+        accounting["labels_after_feature_validation"]
+    assert accounting["labels_after_feature_validation"] - accounting["label_withheld_distinct"] == \
+        accounting["retained_labels"]
+    assert accounting["raw_panel_labels"] - accounting["retained_labels"] == \
+        accounting["total_withheld_distinct"]
+    assert report["affected_rows"]["reason_counts_non_additive"] is True
+    assert set(report["affected_symbols"]) >= {"by_region", "by_reason", "feature_stage", "label_stage"}
     assert all(value["unchanged"] for value in report["database_fingerprints"].values())
     assert before == (research.read_bytes(), production.read_bytes())
 
@@ -118,3 +126,44 @@ def test_bounded_output_and_aggregate_counts():
     assert report["reported"] == 2
     assert report["truncated"] is True
     assert report["region_counts"] == {"US": 2}
+
+
+def test_live_shape_stage_accounting_regression():
+    accounting = _stage_accounting({
+        "raw_panel_labels": 41_609,
+        "feature_boundary_candidates": 325,
+        "segment_feature_rows_withheld": 292,
+        "label_eligible_rows": 41_317,
+        "label_boundary_candidates": 45,
+        "retained_label_rows": 41_271,
+    })
+    assert accounting == {
+        "raw_panel_labels": 41_609,
+        "feature_boundary_candidates": 325,
+        "feature_withheld_distinct": 292,
+        "labels_after_feature_validation": 41_317,
+        "label_boundary_candidates": 45,
+        "label_withheld_distinct": 46,
+        "retained_labels": 41_271,
+        "total_withheld_distinct": 338,
+    }
+    with pytest.raises(ValueError, match="inconsistent feature/label"):
+        _stage_accounting({
+            "raw_panel_labels": 41_609,
+            "segment_feature_rows_withheld": 291,
+            "label_eligible_rows": 41_317,
+            "retained_label_rows": 41_271,
+        })
+
+
+def test_boundary_sample_severity_precedes_symbol_order():
+    rows = pd.DataFrame([
+        {"qualified_symbol": "AAA.US", "boundary_date": "2025-01-02", "raw_ratio": 20,
+         "adjusted_ratio": 20, "reason_codes": ("adjusted_price_discontinuity",)},
+        {"qualified_symbol": "SBET.US", "boundary_date": "2025-01-03", "raw_ratio": 11,
+         "adjusted_ratio": 11, "reason_codes": ("unresolved_extreme_return",)},
+        {"qualified_symbol": "ZZZ.US", "boundary_date": "2025-01-04", "raw_ratio": 100,
+         "adjusted_ratio": 100, "reason_codes": ("zero_volume_discontinuity",)},
+    ])
+    ordered = sorted(rows.itertuples(index=False), key=_severity_key)
+    assert [row.qualified_symbol for row in ordered] == ["SBET.US", "ZZZ.US", "AAA.US"]

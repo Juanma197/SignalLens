@@ -6,6 +6,7 @@ publish a production ranking.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -225,9 +226,14 @@ def walk_forward_evidence(
         ["qualified_symbol", "trading_date"]
     )["adjusted_close"]
     rows = []
-    feature_rows = label_rows = 0
+    feature_rows = label_rows = raw_panel_labels = 0
     segment_feature_withheld = segment_label_withheld = 0
     exclusion_reasons: dict[str, int] = {}
+    affected_by_reason: dict[str, set[str]] = defaultdict(set)
+    affected_by_combined_reason: dict[str, set[str]] = defaultdict(set)
+    affected_feature_symbols: set[str] = set()
+    affected_label_symbols: set[str] = set()
+    feature_boundary_candidates = label_boundary_candidates = 0
     removed_missing_feature = removed_missing_label = 0
     for index in vintage_indexes:
         vintage_date, label_date = pd.Timestamp(dates[index]), pd.Timestamp(dates[index + horizon_sessions])
@@ -250,10 +256,21 @@ def walk_forward_evidence(
                 crossing_dates = [date for date in boundary_dates_by_symbol.get(str(symbol), ())
                                   if start < date <= vintage_date]
                 if crossing_dates:
-                    segment_feature_withheld += 1
+                    feature_boundary_candidates += 1
                     reasons = crosses_boundary(segment_boundaries, symbol, start, vintage_date)
                     for reason in reasons:
                         exclusion_reasons[f"feature:{reason}"] = exclusion_reasons.get(f"feature:{reason}", 0) + 1
+                    # A feature candidate is only an actually withheld label
+                    # row when both label endpoints exist in the raw panel.
+                    if ((str(symbol), vintage_date) in close_lookup.index
+                            and (str(symbol), label_date) in close_lookup.index):
+                        raw_panel_labels += 1
+                        segment_feature_withheld += 1
+                        affected_feature_symbols.add(str(symbol))
+                        for reason in reasons:
+                            affected_by_reason[f"feature:{reason}"].add(str(symbol))
+                            affected_by_combined_reason[reason].add(str(symbol))
+        # Count non-feature-withheld rows after normal label-endpoint checks.
         for score in scores.itertuples(index=False):
             try:
                 entry = float(close_lookup.loc[(score.qualified_symbol, vintage_date)])
@@ -261,21 +278,29 @@ def walk_forward_evidence(
             except KeyError:
                 removed_missing_label += 1
                 continue
+            raw_panel_labels += 1
             label_rows += 1
             reasons = crosses_boundary(segment_boundaries, score.qualified_symbol,
                                        vintage_date, label_date)
             if reasons:
+                label_boundary_candidates += 1
                 segment_label_withheld += 1
                 for reason in reasons:
                     exclusion_reasons[f"label:{reason}"] = exclusion_reasons.get(f"label:{reason}", 0) + 1
-                continue
             with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
                 forward_return = exit_value / entry - 1
+            label_reasons = list(reasons)
             if not np.isfinite(entry) or entry <= 0:
                 exclusion_reasons["label:invalid_denominator"] = exclusion_reasons.get("label:invalid_denominator", 0) + 1
-                continue
+                label_reasons.append("invalid_denominator")
             if not np.isfinite(forward_return) or abs(forward_return) > extreme_absolute_return:
                 exclusion_reasons["label:unresolved_extreme_return"] = exclusion_reasons.get("label:unresolved_extreme_return", 0) + 1
+                label_reasons.append("unresolved_extreme_return")
+            if label_reasons:
+                affected_label_symbols.add(str(score.qualified_symbol))
+                for reason in label_reasons:
+                    affected_by_reason[f"label:{reason}"].add(str(score.qualified_symbol))
+                    affected_by_combined_reason[reason].add(str(score.qualified_symbol))
                 continue
             rows.append({
                 "qualified_symbol": score.qualified_symbol,
@@ -314,11 +339,27 @@ def walk_forward_evidence(
         "possible_decision_dates": int(len(possible)),
         "generated_decision_vintages": int(len(vintage_indexes)),
         "feature_eligible_rows": int(feature_rows),
+        "raw_panel_labels": int(raw_panel_labels),
         "label_eligible_rows": int(label_rows),
         "retained_label_rows": int(len(rows)),
         "segment_boundaries": int(len(segment_boundaries)),
         "segment_feature_rows_withheld": int(segment_feature_withheld),
         "segment_label_rows_withheld": int(segment_label_withheld),
+        "feature_boundary_candidates": int(feature_boundary_candidates),
+        "label_boundary_candidates": int(label_boundary_candidates),
+        "affected_symbols": {
+            "total": int(len(affected_feature_symbols | affected_label_symbols)),
+            "feature_stage": int(len(affected_feature_symbols)),
+            "label_stage": int(len(affected_label_symbols)),
+            "by_region": dict(sorted(pd.Series([
+                str(identity.loc[symbol, "region"])
+                for symbol in affected_feature_symbols | affected_label_symbols
+            ], dtype="object").value_counts().items())),
+            "by_reason": {reason: len(symbols) for reason, symbols in sorted(affected_by_combined_reason.items())},
+            "by_stage_and_reason": {
+                reason: len(symbols) for reason, symbols in sorted(affected_by_reason.items())
+            },
+        },
         "label_exclusions_by_reason": dict(sorted(exclusion_reasons.items())),
         "rows_removed": {
             "not_model_ready_at_final_cutoff": int(len(observations) - len(eligible)),

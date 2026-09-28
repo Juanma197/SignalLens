@@ -207,7 +207,9 @@ Each milestone must end with passing tests, a production frontend build, an upda
 
 - Historical-price segmentation and window-aware label/feature validation are
   implemented with deterministic provenance/reason codes. A strictly read-only
-  `plan-label-repair` workflow is available; operator execution remains pending.
+  `plan-label-repair` workflow is available with enforced stage accounting,
+  affected-symbol aggregates, and severity-prioritized bounded samples; the
+  repaired operator execution remains pending.
   Ranking remains withheld, thresholds are unchanged, and the repair makes no
   claim that the previously weak robust evidence demonstrates success.
 
