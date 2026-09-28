@@ -4,6 +4,22 @@ Last updated: 2026-09-28
 
 ## Current milestone
 
+## Milestone 19 — Prospective locked shadow portfolios (implementation complete)
+
+- [x] Monthly planning is strictly read-only and reports the cutoff, eligible and
+  withheld counts, configuration identity, duplicate state and proposed shadows.
+- [x] Creation requires explicit research authorization, writes only the isolated
+  research database transactionally, and is idempotent by calendar month.
+- [x] Immutable manifests and decision-time score/input snapshots prevent old
+  vintages from silently adopting later strategy logic.
+- [x] Separate 126/252 cohorts mature only on complete session boundaries;
+  incomplete or integrity-excluded outcomes cannot enter evidence summaries.
+- [x] Shadow output is labelled `RESEARCH SHADOW PORTFOLIO — NOT INVESTMENT
+  ADVICE`, is unavailable from production rankings, and has no order/broker path.
+- [ ] No prospective vintage exists merely because this implementation landed.
+  The operator must create the first vintage after merge at a genuine cutoff.
+- [ ] The 126/252 hypotheses remain exploratory and unvalidated.
+
 ## Milestone 17 — Point-in-time fundamentals capability (implementation complete)
 
 - [x] Added a no-network fixture assessment and an explicitly authorized live

@@ -4,6 +4,23 @@ SignalLens is a research dashboard for periodically ranking public companies and
 
 ## Current milestone
 
+Milestone 19 adds prospective, monthly, research-only shadow portfolios for the
+locked 126- and 252-session exploratory hypotheses. Each vintage freezes its
+manifest, complete eligible score universe, zero-to-three deterministic
+selections, entry inputs, and equal-weight baseline. These records are isolated
+from production and are explicitly **not investment advice**. No historical
+vintages may be backfilled. See
+[`docs/milestone-19-shadow-portfolios.md`](docs/milestone-19-shadow-portfolios.md).
+
+```powershell
+Push-Location backend
+& ..\.venv\Scripts\python.exe -m app.eodhd_ingestion_cli plan-shadow-vintage --research-db "C:\data\research.duckdb" --production-db "C:\data\production.duckdb" --decision-at "2026-10-30T21:00:00+00:00"
+& ..\.venv\Scripts\python.exe -m app.eodhd_ingestion_cli create-shadow-vintage --research-db "C:\data\research.duckdb" --production-db "C:\data\production.duckdb" --decision-at "2026-10-30T21:00:00+00:00" --authorize-research-shadow
+Pop-Location
+```
+
+### Prior milestone
+
 Milestone 18 adds a strictly read-only, pre-registered multi-horizon evaluation
 over 21, 63, 126 and 252 trading sessions. It reuses the validated price, FX,
 segmentation and model-ready paths, applies a horizon-aware moving-block
@@ -22,7 +39,7 @@ PYTHONPATH=. python -m app.eodhd_ingestion_cli research-horizon-evaluation \
 The command opens the research database read-only, never contacts a provider,
 and fingerprints both database paths before and after the run.
 
-### Prior milestone
+### Earlier milestone
 
 Milestone 17 adds a bounded `fundamentals-capability` assessment for historical
 EODHD statements. It probes at most one representative security in each of US,

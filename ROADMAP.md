@@ -274,3 +274,18 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Fingerprint both databases before/after and provide deterministic offline tests
 - [ ] Run against operator-held data after merge and review evidence without selecting a horizon
 - [ ] Lock any reviewed horizon in a subsequent milestone before candidate generation
+
+## Milestone 19 — Prospective locked shadow portfolios (implementation complete)
+
+- [x] Freeze the existing scoring, eligibility, segmentation, FX, baselines,
+  deterministic tie-break and the exploratory 126/252-session horizons.
+- [x] Version each immutable vintage with its Git commit, canonical configuration
+  hash, decision timestamp and research-data fingerprint.
+- [x] Add read-only planning, explicitly authorized creation, status and matured
+  evaluation commands with production-path isolation and no broker capability.
+- [x] Preserve complete scores, zero-to-three selections and decision-time inputs;
+  create separate 126/252 cohorts and never rewrite existing vintages.
+- [x] Pre-register a minimum of 12 complete prospective vintages plus positive
+  mean/median/rate, confidence, stability, integrity and unchanged-version gates.
+- [ ] Accumulate genuinely prospective monthly vintages. Neither exploratory
+  horizon is validated, promoted, or suitable for investment recommendations.
