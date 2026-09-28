@@ -9,7 +9,14 @@ Last updated: 2026-09-28
 - [x] Read-only aggregate quality audit with bounded sanitized affected-symbol output.
 - [x] Seven-day-overlap incremental price/dividend/FX planning and deterministic,
   revision-counting execution with resumable safety stops.
-- [x] Pending/retryable-only retry path and separately authorized full reconciliation.
+- [x] Routine refresh excludes permanent and unknown/nonretryable failures; only
+  explicitly retryable failures are automatic. Permanent retries require both
+  the dedicated `retry-failures` operation and a separate authorization flag.
+- [x] Refresh plans report eligible/skipped/pending aggregates and default to a
+  ten-record sanitized request sample. Offline regression coverage confirms the
+  reported 500-security state estimates 1,001 requests after skipping its one
+  permanent failure; the local database itself was not inspected.
+- [x] Separately authorized full reconciliation remains available.
 - [x] PowerShell operator runbook and explicit production-path, token, payload,
   request, response, pacing, timeout and runtime controls.
 - [x] Operator-reported local state: 500 selected, 499 price histories completed,

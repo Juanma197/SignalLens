@@ -31,11 +31,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="plan and validate without mutating the research database")
     parser.add_argument("--authorize-full-reconciliation", action="store_true",
                         help="deliberate authorization required by reconcile")
+    parser.add_argument("--authorize-permanent-failures", action="store_true",
+                        help="deliberate authorization to retry permanent failures (retry-failures only)")
+    parser.add_argument("--verbose-planned-requests", action="store_true",
+                        help="include every planned request instead of the bounded sample")
     return parser
 
 
 def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = None) -> dict:
     settings, captured = get_settings(), now or datetime.now(timezone.utc)
+    if args.authorize_permanent_failures and args.command != "retry-failures":
+        raise ValueError("--authorize-permanent-failures requires retry-failures")
     limits = EODHDLimits(args.per_region, args.total, args.daily_request_budget,
         args.requests_per_minute, args.retries, args.timeout_seconds,
         args.max_response_bytes, args.maximum_runtime_seconds)
@@ -57,9 +63,11 @@ def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = 
     if args.command == "ingest-fx": return operation.fx(retrieved_at=captured)
     if args.command == "status": return operation.status()
     if args.command == "audit": return operation.audit(as_of=captured, affected_limit=args.affected_limit)
-    if args.command == "plan-refresh": return operation.plan_refresh(as_of=captured)
+    if args.command == "plan-refresh": return operation.plan_refresh(
+        as_of=captured, include_request_details=args.verbose_planned_requests)
     if args.command == "refresh": return operation.refresh(retrieved_at=captured, dry_run=args.dry_run)
-    if args.command == "retry-failures": return operation.refresh(retrieved_at=captured, retry_failures=True, dry_run=args.dry_run)
+    if args.command == "retry-failures": return operation.refresh(retrieved_at=captured, retry_failures=True,
+        authorize_permanent_failures=args.authorize_permanent_failures, dry_run=args.dry_run)
     if args.command == "reconcile": return operation.refresh(retrieved_at=captured, reconcile=True,
         authorized=args.authorize_full_reconciliation, dry_run=args.dry_run)
     return operation.coverage()
