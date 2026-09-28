@@ -4,6 +4,23 @@ Last updated: 2026-09-28
 
 ## Current milestone
 
+## Milestone 17 — Point-in-time fundamentals capability (implementation complete)
+
+- [x] Added a no-network fixture assessment and an explicitly authorized live
+  probe capped at five representative securities and five total requests.
+- [x] Added public-availability boundaries, revision-aware as-of selection,
+  annual/quarterly separation, explicit currency/unit evidence, and current-
+  summary leakage prevention.
+- [x] Reports only aggregate field/date/currency/period coverage and feature
+  classifications; raw payloads, company records, URLs, tokens, provider errors,
+  and sensitive values cannot enter output.
+- [x] Fingerprints research and production databases without opening either as a
+  database, and verifies unchanged files after assessment.
+- [ ] Live provider capability is not claimed until the operator runs the bounded
+  command after merge. No bulk ingestion, scoring, gate, publisher, production,
+  Railway or deployment change is included.
+- [ ] Current-catalogue evaluation remains non-survivorship-free.
+
 ## Milestone 14 — Trustworthy model-ready observations
 
 - [x] Added a pure research transformation that accepts caller-provided current
