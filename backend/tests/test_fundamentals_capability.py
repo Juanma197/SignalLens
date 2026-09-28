@@ -42,7 +42,9 @@ def test_current_summary_is_excluded_and_fixture_output_is_sanitized(tmp_path):
     result=FundamentalsCapabilityAssessment().run(database_paths=[tmp_path/'p',tmp_path/'r'],fixtures=fixtures)
     rendered=json.dumps(result)
     assert 'SecretRatio' not in rendered and 'MarketCapitalization' not in rendered and 'REDACTED SYNTHETIC' not in rendered
-    assert result['feature_classifications']['current_summary_ratios']=='latest_only_not_backtestable'
+    assert result['theoretical_schema_classification']['current_summary_ratios']=='latest_only_not_backtestable'
+    assert result['live_entitlement_classification']=='not_assessed'
+    assert result['confirmed_live_feature_classification']['revenue_growth']=='not_assessed'
     assert result['aggregate']['point_in_time_reconstruction'] is True
 
 def test_database_immutability_and_offline_cli(tmp_path):
@@ -60,6 +62,67 @@ def test_strict_request_budget_with_retries(tmp_path):
     result=a.run(database_paths=[tmp_path/'p',tmp_path/'r'])
     assert result['request_count']==3==len(calls)
     assert 'SECRET' not in json.dumps(result) and 'provider token' not in json.dumps(result)
+    assert result['status']=='provider_access_unavailable'
+    assert result['confirmed_live_feature_classification']['revenue_growth']=='unavailable'
+
+@pytest.mark.parametrize(('status','expected'),[(401,'authentication_failed'),(403,'subscription_restricted')])
+def test_authentication_and_subscription_http_statuses_are_distinct(tmp_path,status,expected):
+    def handler(request): return httpx.Response(status, text='token=TOPSECRET provider private detail')
+    assessment=FundamentalsCapabilityAssessment('TOPSECRET',limits=CapabilityLimits(max_attempts=1,pacing_seconds=0),
+        transport=httpx.MockTransport(handler),sleep=lambda _:None)
+    result=assessment.run(database_paths=[tmp_path/'p',tmp_path/'r'])
+    assert all(region['request_diagnostic']['classification']==expected for region in result['regions'])
+    assert result['status']=='provider_access_unavailable'
+    assert 'TOPSECRET' not in json.dumps(result) and 'private detail' not in json.dumps(result)
+
+def test_http_200_subscription_error_is_safely_classified_and_redacted(tmp_path):
+    secret='acct@example.test requires Fundamentals subscription; token=HUSH'
+    def handler(request): return httpx.Response(200,json={'error':secret,'account_identity':'customer-42'})
+    assessment=FundamentalsCapabilityAssessment('HUSH',limits=CapabilityLimits(max_attempts=1,pacing_seconds=0),
+        transport=httpx.MockTransport(handler),sleep=lambda _:None)
+    result=assessment.run(database_paths=[tmp_path/'p',tmp_path/'r'])
+    rendered=json.dumps(result)
+    diagnostic=result['regions'][0]['request_diagnostic']
+    assert diagnostic['classification']=='subscription_restricted'
+    assert diagnostic['top_level_field_names']==['error']
+    assert secret not in rendered and 'customer-42' not in rendered and 'HUSH' not in rendered
+
+@pytest.mark.parametrize(('payload','expected'),[
+    ([], 'empty_payload'),
+    ({'General':{'Code':'AAPL'}}, 'schema_mismatch'),
+])
+def test_empty_and_schema_mismatch_are_distinct(tmp_path,payload,expected):
+    def handler(request): return httpx.Response(200,json=payload,headers={'content-type':'application/json; charset=utf-8'})
+    assessment=FundamentalsCapabilityAssessment('secret',limits=CapabilityLimits(max_requests=1,max_attempts=1,pacing_seconds=0),
+        transport=httpx.MockTransport(handler),sleep=lambda _:None)
+    result=assessment.run(database_paths=[tmp_path/'p',tmp_path/'r'],diagnostic_one_request=True)
+    diagnostic=result['regions'][0]['request_diagnostic']
+    assert diagnostic['classification']==expected
+    assert diagnostic['content_type']=='application/json' and diagnostic['response_bytes'] is not None
+
+def test_valid_fundamentals_payload_is_available(tmp_path):
+    payload=doc({'a':{'date':'2023-12-31','filing_date':'2024-02-15','totalRevenue':'1'}})
+    def handler(request): return httpx.Response(200,json=payload)
+    assessment=FundamentalsCapabilityAssessment('secret',limits=CapabilityLimits(max_requests=1,max_attempts=1,pacing_seconds=0),
+        transport=httpx.MockTransport(handler),sleep=lambda _:None)
+    result=assessment.run(database_paths=[tmp_path/'p',tmp_path/'r'],diagnostic_one_request=True)
+    assert result['request_count']==1 and result['scope']['security_count']==1
+    assert result['regions'][0]['request_diagnostic']['classification']=='available'
+    assert result['confirmed_live_feature_classification']['revenue_growth']=='derivable_with_constraints'
+
+def test_malformed_json_does_not_expose_body(tmp_path):
+    def handler(request): return httpx.Response(200,text='not-json token=BODYSECRET')
+    assessment=FundamentalsCapabilityAssessment('URLSECRET',limits=CapabilityLimits(max_requests=1,max_attempts=1,pacing_seconds=0),
+        transport=httpx.MockTransport(handler),sleep=lambda _:None)
+    result=assessment.run(database_paths=[tmp_path/'p',tmp_path/'r'],diagnostic_one_request=True)
+    rendered=json.dumps(result)
+    assert result['regions'][0]['request_diagnostic']['classification']=='malformed_json'
+    assert 'BODYSECRET' not in rendered and 'URLSECRET' not in rendered
+
+def test_cli_exposes_explicit_one_request_mode(tmp_path):
+    args=parser().parse_args(['fundamentals-capability','--authorize-live','--diagnostic-one-request',
+        '--production-db',str(tmp_path/'p'),'--research-db',str(tmp_path/'r')])
+    assert args.diagnostic_one_request and args.max_requests==5
 
 @pytest.mark.parametrize('value',[0,6])
 def test_request_budget_validation(value):

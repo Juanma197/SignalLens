@@ -45,6 +45,17 @@ ALLOWED_FIELDS = {
     "weightedAverageShsOut", "cash", "cashAndEquivalents", "date", "period", "currency_symbol",
     *DATE_FIELDS,
 }
+SAFE_TOP_LEVEL_FIELDS = {
+    "General", "Highlights", "Valuation", "SharesStats", "Technicals",
+    "SplitsDividends", "AnalystRatings", "Holders", "InsiderTransactions",
+    "ESG_Scores", "outstandingShares", "Earnings", "Financials", "error",
+    "errors", "code", "status", "message",
+}
+INACCESSIBLE_CLASSIFICATIONS = {
+    "subscription_restricted", "authentication_failed", "rate_limited",
+    "endpoint_not_found", "response_too_large", "malformed_json",
+    "transport_error", "unknown_provider_failure",
+}
 
 
 def fingerprint(path: Path) -> dict[str, Any]:
@@ -133,9 +144,59 @@ class FundamentalsCapabilityAssessment:
         self._token, self.limits, self._transport, self._sleep = token, limits, transport, sleep
         self.request_count = 0
 
-    def _fetch(self, symbol: str) -> Any:
+    @staticmethod
+    def _json_type(payload: Any) -> str:
+        if payload is None: return "null"
+        if isinstance(payload, bool): return "boolean"
+        if isinstance(payload, dict): return "object"
+        if isinstance(payload, list): return "array"
+        if isinstance(payload, str): return "string"
+        if isinstance(payload, (int, float)): return "number"
+        return "unknown"
+
+    @staticmethod
+    def _safe_fields(payload: Any) -> list[str]:
+        if not isinstance(payload, dict): return []
+        fields = [key for key in payload if isinstance(key, str) and key in SAFE_TOP_LEVEL_FIELDS]
+        return sorted(fields)[:25]
+
+    @staticmethod
+    def _safe_content_type(value: str) -> str | None:
+        media_type = value.split(";", 1)[0].strip().lower()
+        if media_type in {"application/json", "text/json", "text/plain", "text/html",
+                          "application/octet-stream"}:
+            return media_type
+        return "other" if media_type else None
+
+    @staticmethod
+    def _provider_error_classification(payload: Any) -> str | None:
+        """Classify a provider error internally; no provider value leaves this method."""
+        if not isinstance(payload, dict): return None
+        error_keys = {"error", "errors", "message"}
+        if not error_keys.intersection(payload): return None
+        material = " ".join(str(payload.get(key, "")) for key in error_keys).lower()
+        code = str(payload.get("code", payload.get("status", ""))).lower()
+        if code in {"402", "403", "payment_required", "forbidden"} or any(
+            word in material for word in ("subscription", "entitlement", "not available in your plan", "upgrade")
+        ):
+            return "subscription_restricted"
+        if code in {"401", "unauthorized"} or any(word in material for word in ("invalid api", "api key", "token", "unauthor")):
+            return "authentication_failed"
+        if code == "429" or "rate limit" in material or "too many request" in material:
+            return "rate_limited"
+        if code == "404" or "not found" in material:
+            return "endpoint_not_found"
+        return "unknown_provider_failure"
+
+    def _fetch(self, symbol: str) -> tuple[Any, dict[str, Any]]:
+        retries = 0
+        diagnostic: dict[str, Any] = {"http_status": None, "content_type": None,
+            "response_bytes": None, "top_level_json_type": None, "top_level_field_names": [],
+            "classification": "transport_error", "retry_count": 0}
         for attempt in range(self.limits.max_attempts):
-            if self.request_count >= self.limits.max_requests: return None
+            if self.request_count >= self.limits.max_requests:
+                diagnostic["retry_count"] = retries
+                return None, diagnostic
             if self.request_count: self._sleep(self.limits.pacing_seconds)
             self.request_count += 1
             try:
@@ -143,20 +204,67 @@ class FundamentalsCapabilityAssessment:
                                   headers={"User-Agent": "SignalLens bounded fundamentals assessment"}) as client:
                     response = client.get(f"{self.base_url}/fundamentals/{symbol}",
                                           params={"api_token": self._token, "fmt": "json"})
-                if response.status_code in {429, 500, 502, 503, 504} and attempt + 1 < self.limits.max_attempts: continue
-                if response.status_code != 200 or len(response.content) > self.limits.max_response_bytes: return None
-                return response.json()
-            except (httpx.HTTPError, ValueError):
-                if attempt + 1 == self.limits.max_attempts: return None
-        return None
+                diagnostic.update(http_status=response.status_code,
+                                  content_type=self._safe_content_type(response.headers.get("content-type", "")),
+                                  response_bytes=len(response.content))
+                status_class = {401: "authentication_failed", 402: "subscription_restricted",
+                                403: "subscription_restricted", 404: "endpoint_not_found",
+                                413: "response_too_large", 429: "rate_limited"}.get(response.status_code)
+                if len(response.content) > self.limits.max_response_bytes:
+                    diagnostic["classification"] = "response_too_large"
+                    return None, diagnostic
+                if response.status_code in {429, 500, 502, 503, 504} and attempt + 1 < self.limits.max_attempts:
+                    retries += 1; continue
+                if response.status_code != 200:
+                    diagnostic["classification"] = status_class or "unknown_provider_failure"
+                    diagnostic["retry_count"] = retries
+                    return None, diagnostic
+                try:
+                    payload = response.json()
+                except (json.JSONDecodeError, ValueError):
+                    diagnostic["classification"] = "malformed_json"
+                    return None, diagnostic
+                diagnostic["top_level_json_type"] = self._json_type(payload)
+                diagnostic["top_level_field_names"] = self._safe_fields(payload)
+                provider_failure = self._provider_error_classification(payload)
+                if provider_failure:
+                    diagnostic["classification"] = provider_failure
+                    diagnostic["retry_count"] = retries
+                    return None, diagnostic
+                rows = normalize_document(payload, "probe")
+                if rows: diagnostic["classification"] = "available"
+                elif payload in ({}, []) or payload is None: diagnostic["classification"] = "empty_payload"
+                else: diagnostic["classification"] = "schema_mismatch"
+                diagnostic["retry_count"] = retries
+                return payload, diagnostic
+            except httpx.HTTPError:
+                if attempt + 1 < self.limits.max_attempts:
+                    retries += 1; continue
+                diagnostic["retry_count"] = retries
+                return None, diagnostic
+        diagnostic["retry_count"] = retries
+        return None, diagnostic
 
-    def run(self, *, database_paths: list[Path], fixtures: dict[str, Any] | None = None) -> dict[str, Any]:
+    def run(self, *, database_paths: list[Path], fixtures: dict[str, Any] | None = None,
+            diagnostic_one_request: bool = False) -> dict[str, Any]:
         if fixtures is None and not self._token: raise ValueError("live mode requires an EODHD token")
+        if diagnostic_one_request and fixtures is not None: raise ValueError("one-request diagnostic is live-only")
+        if diagnostic_one_request and (self.limits.max_requests != 1 or self.limits.max_attempts != 1):
+            raise ValueError("one-request diagnostic requires max_requests=1 and max_attempts=1")
         before = {str(path): fingerprint(path) for path in database_paths}
         all_rows: list[dict[str, Any]] = []
         per_region = []
-        for region, symbol in PILOT_SYMBOLS.items():
-            payload = fixtures.get(region) if fixtures is not None else self._fetch(symbol)
+        pilots = [("US", PILOT_SYMBOLS["US"])] if diagnostic_one_request else list(PILOT_SYMBOLS.items())
+        for region, symbol in pilots:
+            if fixtures is not None:
+                payload = fixtures.get(region)
+                rows_for_classification = normalize_document(payload, region)
+                classification = "available" if rows_for_classification else "empty_payload" if payload in ({}, [], None) else "schema_mismatch"
+                diagnostic = {"http_status": None, "content_type": None, "response_bytes": None,
+                    "top_level_json_type": self._json_type(payload), "top_level_field_names": self._safe_fields(payload),
+                    "classification": classification, "retry_count": 0}
+            else:
+                payload, diagnostic = self._fetch(symbol)
             rows = normalize_document(payload, region)
             all_rows.extend(rows)
             periods = sorted({r["fiscal_period_end"] for r in rows if r["fiscal_period_end"]})
@@ -166,15 +274,29 @@ class FundamentalsCapabilityAssessment:
                                "currencies": sorted({str(r["currency"]) for r in rows if r["currency"]}),
                                "earliest_period": periods[0] if periods else None, "latest_period": periods[-1] if periods else None,
                                "field_names": sorted(set().union(*(r["field_names"] for r in rows))) if rows else [],
-                               "point_in_time_reconstruction": bool(rows) and all(r["available_at"] for r in rows)})
+                               "point_in_time_reconstruction": bool(rows) and all(r["available_at"] for r in rows),
+                               "request_diagnostic": diagnostic})
         after = {str(path): fingerprint(path) for path in database_paths}
         availability = sum(bool(r["available_at"]) for r in all_rows)
+        classifications = [item["request_diagnostic"]["classification"] for item in per_region]
+        inaccessible = bool(classifications) and all(item in INACCESSIBLE_CLASSIFICATIONS for item in classifications)
+        live_entitlement = "not_assessed" if fixtures is not None else (
+            "unavailable" if inaccessible else "confirmed" if "available" in classifications else "indeterminate")
+        confirmed_features = {
+            name: ("not_assessed" if fixtures is not None else classification if all_rows else "unavailable")
+            for name, classification in FEATURE_CLASSIFICATIONS.items()
+        }
         return {"command": "fundamentals-capability", "mode": "fixture" if fixtures is not None else "live",
-                "provider": "eodhd", "scope": {"regions": list(PILOT_SYMBOLS), "security_count": 5},
+                "status": "provider_access_unavailable" if inaccessible else "completed",
+                "provider": "eodhd", "scope": {"regions": [region for region, _ in pilots],
+                "security_count": len(pilots), "diagnostic_one_request": diagnostic_one_request},
                 "request_count": self.request_count, "request_limit": self.limits.max_requests,
                 "aggregate": {"records": len(all_rows), "records_with_availability_date": availability,
                               "point_in_time_reconstruction": bool(all_rows) and availability == len(all_rows)},
-                "regions": per_region, "feature_classifications": FEATURE_CLASSIFICATIONS,
+                "regions": per_region,
+                "theoretical_schema_classification": FEATURE_CLASSIFICATIONS,
+                "live_entitlement_classification": live_entitlement,
+                "confirmed_live_feature_classification": confirmed_features,
                 "constraints": ["Fiscal-period end is never an availability timestamp.",
                                 "Missing public-availability dates make records unusable.",
                                 "Current summary ratios are excluded from historical vintages.",

@@ -12,6 +12,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("fundamentals-capability", choices=["fundamentals-capability"])
     p.add_argument("--fixture", type=Path, nargs="?", const=DEFAULT_FIXTURE)
     p.add_argument("--authorize-live", action="store_true")
+    p.add_argument("--diagnostic-one-request", action="store_true",
+                   help="issue exactly one live request for the fixed US representative")
     p.add_argument("--max-requests", type=int, default=5); p.add_argument("--timeout-seconds", type=float, default=10)
     p.add_argument("--pacing-seconds", type=float, default=1); p.add_argument("--max-response-bytes", type=int, default=5_000_000)
     p.add_argument("--production-db", type=Path); p.add_argument("--research-db", type=Path)
@@ -21,11 +23,16 @@ def execute(a: argparse.Namespace) -> dict:
     settings = get_settings()
     if a.fixture is None and not a.authorize_live: raise ValueError("live probe requires --authorize-live")
     fixtures = json.loads(a.fixture.read_text()) if a.fixture else None
+    if a.diagnostic_one_request and fixtures is not None:
+        raise ValueError("--diagnostic-one-request cannot be combined with --fixture")
+    max_requests = 1 if a.diagnostic_one_request else a.max_requests
+    max_attempts = 1 if a.diagnostic_one_request else 2
     assessment = FundamentalsCapabilityAssessment(os.getenv("SIGNALLENS_EODHD_API_TOKEN") if fixtures is None else None,
-        limits=CapabilityLimits(max_requests=a.max_requests, timeout_seconds=a.timeout_seconds,
+        limits=CapabilityLimits(max_requests=max_requests, max_attempts=max_attempts, timeout_seconds=a.timeout_seconds,
                                 pacing_seconds=a.pacing_seconds, max_response_bytes=a.max_response_bytes))
     return assessment.run(database_paths=[a.production_db or settings.database_path,
-        a.research_db or settings.research_database_path], fixtures=fixtures)
+        a.research_db or settings.research_database_path], fixtures=fixtures,
+        diagnostic_one_request=a.diagnostic_one_request)
 
 def main() -> None:
     try: print(json.dumps(execute(parser().parse_args()), sort_keys=True))
