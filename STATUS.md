@@ -326,3 +326,22 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 3. Add a gated research-only monthly Top 3 and highest-conviction selection only
    after coverage, freshness, confidence, robustness and no-recommendation rules
    pass. Production promotion remains separate and prohibited.
+
+### Milestone 16 research scoring and evidence gates
+
+- The operator completed Milestone 15 with 492 of 500 securities model-ready;
+  eight were withheld. That result establishes input readiness only and is not a
+  claim that the live data passes scoring or ranking gates.
+- `research-scoring` reuses model-ready eligibility and existing multifactor and
+  walk-forward concepts. Withheld rows are removed before feature, evaluation,
+  ranking and denominator construction.
+- Available evidence is adjusted-close momentum/trend and price risk, preserving
+  point-in-time retrieval and historical FX validation. Point-in-time
+  fundamentals, valuation, quality, catalyst and sentiment evidence are reported
+  unavailable rather than imputed as evidence.
+- A Top 3 is never forced: coverage, historical sample, walk-forward validity,
+  equal-weight baseline, rank discrimination/calibration, temporal/region
+  stability and integrity must all pass. Failure returns bounded reasons and no
+  candidates; passing fixtures are explicitly synthetic and research-only.
+- Neither database, frontend, Railway, providers, nor the production
+  `momentum_126d` publisher is modified. A live assessment has not been run.
