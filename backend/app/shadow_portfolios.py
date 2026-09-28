@@ -22,6 +22,7 @@ from .research_scoring import EvidencePolicy, prepare_cross_section
 
 LABEL = "RESEARCH SHADOW PORTFOLIO — NOT INVESTMENT ADVICE"
 HORIZONS = (126, 252)
+DIAGNOSTIC_SCORE_LIMIT = 100
 IMPLEMENTED_AT = datetime(2026, 9, 28, tzinfo=timezone.utc)
 PROMOTION_GATES = {
     "minimum_fully_matured_vintages": 12,
@@ -110,7 +111,11 @@ def _load_inputs(path: Path, cutoff: datetime) -> tuple[pd.DataFrame, pd.DataFra
 
 
 def plan_shadow_vintage(*, research_db: Path, production_db: Path, cutoff: datetime,
-                        policy: ShadowPolicy = ShadowPolicy()) -> dict[str, Any]:
+                        policy: ShadowPolicy = ShadowPolicy(),
+                        expected_session_dates: dict[str, str] | None = None,
+                        latest_required_fx_date: str | None = None,
+                        verbose_scores: bool = False,
+                        _include_internal_scores: bool = False) -> dict[str, Any]:
     """Plan a monthly vintage while preserving both database files byte-for-byte."""
     if cutoff.tzinfo is None:
         raise ReadinessError("cutoff must be timezone-aware")
@@ -139,13 +144,47 @@ def plan_shadow_vintage(*, research_db: Path, production_db: Path, cutoff: datet
     score_fields = ["security_id", "qualified_symbol", "region", "currency", "composite_score",
                     "momentum_126d", "trend_21d", "annualized_volatility_63d", "max_drawdown_126d",
                     "reason_codes"]
-    return {"command": "plan-shadow-vintage", "label": LABEL, "mode": "strictly_read_only",
+    ready_observations = dataset.observations.loc[dataset.observations.eligible]
+    effective_dates = (ready_observations.groupby("region")["latest_price_date"].max()
+                       .astype(str).to_dict() if len(ready_observations) else {})
+    expected = {str(k).upper(): str(v) for k, v in (expected_session_dates or {}).items()}
+    region_ready = (bool(expected) and set(expected) == set(effective_dates)
+                    and all(effective_dates.get(region) == session
+                            for region, session in expected.items()))
+    visible_fx = fx.loc[pd.to_datetime(fx["available_at"], utc=True).le(pd.Timestamp(cutoff))]
+    fx_dates = pd.to_datetime(visible_fx["observed_on"], errors="coerce")
+    latest_fx = str(fx_dates.max().date()) if not fx_dates.empty and pd.notna(fx_dates.max()) else None
+    fx_ready = bool(latest_required_fx_date) and latest_fx is not None and latest_fx >= latest_required_fx_date
+    region_counts = scores.groupby("region").size().astype(int).to_dict() if len(scores) else {}
+    result = {"command": "plan-shadow-vintage", "label": LABEL, "mode": "strictly_read_only",
             "cutoff": pd.Timestamp(cutoff).isoformat(), "vintage_month": month,
+            "intended_vintage_month": month, "total_scored_count": len(scores),
             "eligible_count": len(scores), "withheld_count": len(dataset.observations)-len(scores),
             "strategy_version": manifest["strategy_version"], "configuration_hash": manifest["configuration_hash"],
             "already_exists": exists, "proposed_selections": selected[score_fields].to_dict("records"),
-            "scores": scores[score_fields].to_dict("records"), "manifest": manifest,
+            "affected_sample": scores[score_fields].head(25).to_dict("records"),
+            "withheld_sample": dataset.observations.loc[~dataset.observations.eligible,
+                [c for c in ["security_id", "qualified_symbol", "region", "reason_codes"]
+                 if c in dataset.observations]].head(25).to_dict("records"),
+            "aggregates": {"by_region": region_counts,
+                "score": {"minimum": float(scores.composite_score.min()) if len(scores) else None,
+                          "mean": float(scores.composite_score.mean()) if len(scores) else None,
+                          "maximum": float(scores.composite_score.max()) if len(scores) else None}},
+            "month_end_readiness": {"confirmed": region_ready and fx_ready,
+                "effective_price_date_by_region": effective_dates,
+                "expected_session_date_by_region": expected,
+                "latest_available_fx_date": latest_fx,
+                "latest_required_fx_date": latest_required_fx_date,
+                "explicit_session_dates_supplied": bool(expected)},
+            "manifest": manifest,
             "database_unchanged": True, "production_published": False}
+    if verbose_scores:
+        result["diagnostic_scores"] = scores[score_fields].head(DIAGNOSTIC_SCORE_LIMIT).to_dict("records")
+        result["diagnostic_score_limit"] = DIAGNOSTIC_SCORE_LIMIT
+        result["diagnostic_scores_truncated"] = len(scores) > DIAGNOSTIC_SCORE_LIMIT
+    if _include_internal_scores:
+        result["_internal_scores"] = scores[score_fields].to_dict("records")
+    return result
 
 
 def _schema(db: duckdb.DuckDBPyConnection) -> None:
@@ -160,13 +199,21 @@ def _schema(db: duckdb.DuckDBPyConnection) -> None:
 
 
 def create_shadow_vintage(*, research_db: Path, production_db: Path, cutoff: datetime,
-                          authorized: bool, now: datetime | None = None) -> dict[str, Any]:
+                          authorized: bool, now: datetime | None = None,
+                          expected_session_dates: dict[str, str] | None = None,
+                          latest_required_fx_date: str | None = None,
+                          require_month_end_readiness: bool = False) -> dict[str, Any]:
     if not authorized:
         raise PermissionError("explicit --authorize-research-shadow is required")
     now = now or datetime.now(timezone.utc)
     if cutoff > now or cutoff < IMPLEMENTED_AT:
         raise ReadinessError("prospective cutoff must be after implementation and not in the future")
-    plan = plan_shadow_vintage(research_db=research_db, production_db=production_db, cutoff=cutoff)
+    plan = plan_shadow_vintage(research_db=research_db, production_db=production_db, cutoff=cutoff,
+        expected_session_dates=expected_session_dates, latest_required_fx_date=latest_required_fx_date,
+        _include_internal_scores=True)
+    if require_month_end_readiness and not plan["month_end_readiness"]["confirmed"]:
+        raise ReadinessError("explicit month-end price sessions and FX readiness are not confirmed")
+    internal_scores = plan.pop("_internal_scores")
     if plan["already_exists"]:
         return {**plan, "command": "create-shadow-vintage", "status": "already_exists", "mutated": False}
     prices = _load_inputs(research_db, cutoff)[1]
@@ -176,7 +223,7 @@ def create_shadow_vintage(*, research_db: Path, production_db: Path, cutoff: dat
     entries = visible.sort_values("trading_date").groupby("qualified_symbol").tail(1)
     entry = {r.qualified_symbol: {"entry_date": str(r.trading_date.date()),
              "decision_price": float(r.adjusted_close)} for r in entries.itertuples()}
-    scores = [{**row, **entry.get(row["qualified_symbol"], {})} for row in plan.pop("scores")]
+    scores = [{**row, **entry.get(row["qualified_symbol"], {})} for row in internal_scores]
     selections = [{**row, **entry.get(row["qualified_symbol"], {})} for row in plan["proposed_selections"]]
     vintage_id = f"{plan['strategy_version']}:{plan['vintage_month']}"
     with duckdb.connect(str(research_db)) as db:

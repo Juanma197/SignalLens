@@ -4,6 +4,7 @@ from hmac import compare_digest
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from .config import get_settings
 from .evidence import EvidenceRepository, EvidenceType
@@ -45,14 +46,48 @@ from .schemas import (
 )
 from .universe import FORWARD_HORIZON_TRADING_DAYS, UNIVERSE
 from .watchlist import WatchlistRepository
+from .eodhd_ingestion import EODHDClient, EODHDIngestion, EODHDLimits
+from .model_readiness import assess_model_readiness
+from .research_scoring import assess_research_scoring
+from .operations import dashboard_status, safe_error
+from .shadow_portfolios import (create_shadow_vintage, evaluate_matured_shadows,
+                                plan_shadow_vintage, shadow_status)
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True,
-                   allow_methods=["GET", "PUT", "DELETE"], allow_headers=["*"])
+                   allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["*"])
 
 PUBLIC_API_PATHS = {"/api/v1/health"}
 PRIVATE_DOCUMENTATION_PATHS = {"/docs", "/openapi.json", "/redoc"}
+
+
+class OperationRequest(BaseModel):
+    decision_at: datetime
+    confirmation: str = ""
+    expected_session_dates: dict[str, date] = Field(default_factory=dict)
+    latest_required_fx_date: date | None = None
+
+
+def _research_ingestion() -> EODHDIngestion:
+    token = settings.eodhd_api_token
+    return EODHDIngestion(settings.research_database_path, settings.database_path,
+        EODHDClient(token.get_secret_value() if token else "offline-read-only", EODHDLimits()))
+
+
+def _authorize(request: Request, configured, phrase: str) -> None:
+    supplied = request.headers.get("X-SignalLens-Operation-Authorization", "")
+    if configured is None or not supplied or not compare_digest(supplied, configured.get_secret_value()):
+        raise HTTPException(403, detail={"code": "operation_not_authorized", "message": phrase})
+
+
+def _redacted(call):
+    try:
+        return call()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(409, detail=safe_error()) from None
 
 
 @app.middleware("http")
@@ -88,6 +123,85 @@ async def authenticate_private_api(request: Request, call_next):
 @app.get("/api/v1/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", service=settings.app_name, environment=settings.environment)
+
+
+@app.get("/api/v1/operations/health")
+def operations_health() -> dict:
+    return dashboard_status(settings.research_database_path, settings.database_path)
+
+
+@app.get("/api/v1/operations/coverage")
+def operations_coverage() -> dict:
+    return _redacted(lambda: _research_ingestion().coverage())
+
+
+@app.get("/api/v1/operations/model-readiness")
+def operations_model_readiness(decision_at: datetime) -> dict:
+    return _redacted(lambda: assess_model_readiness(research_db=settings.research_database_path,
+        production_db=settings.database_path, decision_at=decision_at, sample_limit=10))
+
+
+@app.get("/api/v1/operations/research-scoring")
+def operations_research_scoring(decision_at: datetime) -> dict:
+    return _redacted(lambda: assess_research_scoring(research_db=settings.research_database_path,
+        production_db=settings.database_path, decision_at=decision_at))
+
+
+@app.get("/api/v1/operations/incremental-refresh/plan")
+def operations_refresh_plan(decision_at: datetime, verbose: bool = False) -> dict:
+    return _redacted(lambda: _research_ingestion().plan_refresh(
+        as_of=decision_at, include_request_details=verbose))
+
+
+@app.post("/api/v1/operations/incremental-refresh/execute")
+def operations_refresh_execute(body: OperationRequest, request: Request) -> dict:
+    _authorize(request, settings.refresh_authorization_token,
+               "Separate incremental-refresh authorization is required.")
+    if body.confirmation != "REFRESH RESEARCH DATA" or settings.eodhd_api_token is None:
+        raise HTTPException(409, detail={"code": "confirmation_failed",
+            "message": "Refresh confirmation and a configured provider entitlement are required."})
+    return _redacted(lambda: _research_ingestion().refresh(retrieved_at=body.decision_at))
+
+
+@app.post("/api/v1/operations/shadow/plan")
+def operations_shadow_plan(body: OperationRequest) -> dict:
+    return _redacted(lambda: plan_shadow_vintage(research_db=settings.research_database_path,
+        production_db=settings.database_path, cutoff=body.decision_at,
+        expected_session_dates={k: str(v) for k, v in body.expected_session_dates.items()},
+        latest_required_fx_date=str(body.latest_required_fx_date) if body.latest_required_fx_date else None))
+
+
+@app.post("/api/v1/operations/shadow/create")
+def operations_shadow_create(body: OperationRequest, request: Request) -> dict:
+    _authorize(request, settings.shadow_authorization_token,
+               "Separate research-shadow authorization is required.")
+    if body.confirmation != "CREATE RESEARCH SHADOW":
+        raise HTTPException(409, detail={"code": "confirmation_failed",
+            "message": "Type CREATE RESEARCH SHADOW to authorize this research write."})
+    if settings.environment.lower() in {"development", "test", "testing"} and body.decision_at.strftime("%Y-%m") == "2026-09":
+        raise HTTPException(409, detail={"code": "protected_vintage",
+            "message": "The September 2026 vintage is protected from development and test creation."})
+    return _redacted(lambda: create_shadow_vintage(research_db=settings.research_database_path,
+        production_db=settings.database_path, cutoff=body.decision_at, authorized=True,
+        expected_session_dates={k: str(v) for k, v in body.expected_session_dates.items()},
+        latest_required_fx_date=str(body.latest_required_fx_date) if body.latest_required_fx_date else None,
+        require_month_end_readiness=True))
+
+
+@app.get("/api/v1/operations/shadow/status")
+def operations_shadow_status() -> dict:
+    return _redacted(lambda: shadow_status(research_db=settings.research_database_path,
+                                           production_db=settings.database_path))
+
+
+@app.post("/api/v1/operations/shadow/evaluate-matured")
+def operations_shadow_evaluate(body: OperationRequest, request: Request) -> dict:
+    _authorize(request, settings.refresh_authorization_token,
+               "Research-write authorization is required for evaluation.")
+    if body.confirmation != "EVALUATE MATURED SHADOWS":
+        raise HTTPException(409, detail={"code": "confirmation_failed", "message": "Deliberate confirmation is required."})
+    return _redacted(lambda: evaluate_matured_shadows(research_db=settings.research_database_path,
+        production_db=settings.database_path, as_of=body.decision_at))
 
 
 @app.post("/api/v1/admin/monthly-cycle")

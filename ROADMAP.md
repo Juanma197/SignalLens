@@ -1,5 +1,13 @@
 # SignalLens Roadmap
 
+## Milestone 20 — standalone research operations and safe scheduling
+
+Implemented: bounded operator APIs and CLI plans, responsive operations UI, separate
+write authorization, explicit exchange-session/FX month-end gates, duplicate prevention,
+redacted errors, and an offline scheduler abstraction that is disabled by default.
+Deployment, durable distributed scheduling, production publishing, provider calls, and
+creation of the September 2026 shadow vintage remain explicitly out of scope.
+
 Each milestone must end with passing tests, a production frontend build, an updated `STATUS.md`, and a Git checkpoint.
 
 ## Milestone 1 — Application foundation (complete)

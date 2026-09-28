@@ -45,6 +45,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="explicit authorization for research-only shadow persistence")
     parser.add_argument("--verbose-planned-requests", action="store_true",
                         help="include every planned request instead of the bounded sample")
+    parser.add_argument("--verbose-scores", action="store_true",
+                        help="include at most 100 diagnostic scores in shadow plan output")
+    parser.add_argument("--expected-session", action="append", default=[], metavar="REGION=YYYY-MM-DD",
+                        help="explicit final session date; repeat for every required region")
+    parser.add_argument("--latest-required-fx-date",
+                        help="explicit YYYY-MM-DD month-end FX requirement")
     return parser
 
 
@@ -54,11 +60,16 @@ def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = 
         if args.research_db is None or args.production_db is None:
             raise ValueError(f"{args.command} requires explicit --research-db and --production-db paths")
         cutoff = args.decision_at or captured
+        sessions = dict(item.split("=", 1) for item in args.expected_session)
         if args.command == "plan-shadow-vintage":
-            return plan_shadow_vintage(research_db=args.research_db, production_db=args.production_db, cutoff=cutoff)
+            return plan_shadow_vintage(research_db=args.research_db, production_db=args.production_db, cutoff=cutoff,
+                expected_session_dates=sessions, latest_required_fx_date=args.latest_required_fx_date,
+                verbose_scores=args.verbose_scores)
         if args.command == "create-shadow-vintage":
             return create_shadow_vintage(research_db=args.research_db, production_db=args.production_db,
-                                         cutoff=cutoff, authorized=args.authorize_research_shadow, now=captured)
+                cutoff=cutoff, authorized=args.authorize_research_shadow, now=captured,
+                expected_session_dates=sessions, latest_required_fx_date=args.latest_required_fx_date,
+                require_month_end_readiness=True)
         if args.command == "shadow-status":
             return shadow_status(research_db=args.research_db, production_db=args.production_db)
         return evaluate_matured_shadows(research_db=args.research_db, production_db=args.production_db, as_of=cutoff)
