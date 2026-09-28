@@ -291,6 +291,16 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 
 ### Milestone 15 read-only readiness assessment
 
+- The first operator attempt against a 78,131,200-byte research DuckDB was
+  safely cancelled with Ctrl+C after approximately 29 minutes (about 1,705 CPU
+  seconds and 645 MB working memory). The database size and modification time
+  did not change and Git remained clean; this was not a completed live run.
+- Diagnosis found a full historical FX-frame filter and sort inside every
+  security/price loop. The transformation now normalizes FX fields and applies
+  the decision-time filter once, indexes sorted arrays by currency pair, and
+  uses vectorized `searchsorted` as-of selection. Prices and actions are likewise filtered,
+  sorted, and grouped once rather than fully rescanned per security. These
+  indexes are invocation-local and retain historical availability semantics.
 - The operator-only `model-readiness` command now opens the existing research
   DuckDB read-only and adapts its active catalogue, prices, historical FX,
   corporate actions, and structured failure state into the Milestone 14 validator.
@@ -302,7 +312,9 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
   fail closed. Before/after size and SHA-256 fingerprints establish immutability.
 - Results remain research-only, current-membership based, not survivorship-free,
   and not investment advice. No ranking, Top 3, or conviction candidate is made.
-- Verification uses synthetic five-region DuckDB fixtures only. No operator
+- Verification includes existing equivalence cases and a synthetic 500-security,
+  ten-year daily-price/three-pair FX regression that asserts one vectorized FX
+  lookup per non-GBP security. No operator
   database, live provider, Railway service, or deployment was accessed.
 
 ## Next action
