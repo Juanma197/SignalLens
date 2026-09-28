@@ -205,6 +205,12 @@ Each milestone must end with passing tests, a production frontend build, an upda
 
 ## Milestone 16 — Research scoring and evidence gates (implementation complete)
 
+- Historical-price segmentation and window-aware label/feature validation are
+  implemented with deterministic provenance/reason codes. A strictly read-only
+  `plan-label-repair` workflow is available; operator execution remains pending.
+  Ranking remains withheld, thresholds are unchanged, and the repair makes no
+  claim that the previously weak robust evidence demonstrates success.
+
 - [x] Score only explicit Milestone 14/15 model-ready observations with the
   existing momentum, trend and risk factor definitions
 - [x] Availability-aware decision boundaries, labels strictly after vintages,

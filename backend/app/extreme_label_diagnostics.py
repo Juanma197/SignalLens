@@ -19,7 +19,8 @@ import pandas as pd
 
 from .model_readiness import ReadinessError, _frame, _same_file, _validate_schema, fingerprint
 from .research_observations import ObservationPolicy, build_model_ready_observations
-from .research_scoring import EvidencePolicy, walk_forward_evidence
+from .research_scoring import EvidencePolicy, assess_research_scoring, walk_forward_evidence
+from .price_segments import boundary_aggregates, detect_price_segments
 
 NEIGHBOUR_RADIUS = 2
 MAX_AFFECTED = 25
@@ -273,3 +274,56 @@ def diagnose_extreme_labels(*, research_db: Path, production_db: Path,
             "after": asdict(after[key]), "unchanged": before[key] == after[key]} for key in before},
         "ranking": {"status": "withheld", "generated": False},
     }
+
+
+def plan_label_repair(*, research_db: Path, production_db: Path,
+                      decision_at: datetime | None = None,
+                      affected_limit: int = MAX_AFFECTED) -> dict[str, Any]:
+    """Propose segment classifications without writing data or generating ranks."""
+    if not 1 <= affected_limit <= MAX_AFFECTED:
+        raise ValueError(f"affected_limit must be between 1 and {MAX_AFFECTED}")
+    research_db, production_db = Path(research_db), Path(production_db)
+    before = {"research": fingerprint(research_db), "production": fingerprint(production_db)}
+    if any(not item.exists for item in before.values()):
+        raise ReadinessError("database path does not exist")
+    if _same_file(research_db, production_db):
+        raise ReadinessError("research and production database paths are identical or aliased")
+    captured = decision_at or datetime.now(timezone.utc)
+    if captured.tzinfo is None:
+        raise ReadinessError("decision_at must be timezone-aware")
+    cutoff = pd.Timestamp(captured).tz_convert("UTC")
+    with duckdb.connect(str(research_db), read_only=True) as connection:
+        prices = _frame(connection, "SELECT * FROM global_price_observations")
+        actions = _frame(connection, "SELECT * FROM global_corporate_actions")
+        listings = _frame(connection, "SELECT qualified_symbol, UPPER(primary_exchange) region FROM security_listings")
+    prices = prices.loc[pd.to_datetime(prices["retrieved_at"], utc=True).le(cutoff)]
+    boundaries = detect_price_segments(prices, actions)
+    regions = listings.drop_duplicates("qualified_symbol", keep="last").set_index(
+        "qualified_symbol")["region"].to_dict()
+    samples = [{"qualified_symbol": row.qualified_symbol,
+        "region": regions.get(row.qualified_symbol, "UNKNOWN"),
+        "boundary_date": row.boundary_date.date().isoformat(),
+        "reason_codes": list(row.reason_codes), "raw_ratio": row.raw_ratio,
+        "adjusted_ratio": row.adjusted_ratio, "provenance": row.provenance}
+        for row in boundaries.head(affected_limit).itertuples(index=False)]
+    # Use the production scoring path to obtain exact retained/withheld window counts.
+    scoring = assess_research_scoring(research_db=research_db, production_db=production_db,
+                                      decision_at=captured)
+    diag = scoring["evaluation"]["diagnostics"]
+    after = {"research": fingerprint(research_db), "production": fingerprint(production_db)}
+    if before != after:
+        raise ReadinessError("database fingerprint changed during read-only repair planning")
+    return {"command": "plan-label-repair", "mode": "strictly_read_only",
+        "proposal_only": True, "segment_boundaries": {"total": len(boundaries),
+            **boundary_aggregates(boundaries, regions)},
+        "affected_rows": {"features": diag.get("segment_feature_rows_withheld", 0),
+            "labels": diag.get("segment_label_rows_withheld", 0)},
+        "labels": {"original": diag.get("label_eligible_rows", 0),
+            "retained": diag.get("retained_label_rows", 0),
+            "withheld": diag.get("label_eligible_rows", 0) - diag.get("retained_label_rows", 0),
+            "exclusions_by_reason": diag.get("label_exclusions_by_reason", {})},
+        "samples": samples, "sample_limit": affected_limit,
+        "database_fingerprints": {name: {"before": asdict(before[name]),
+            "after": asdict(after[name]), "unchanged": before[name] == after[name]}
+            for name in before},
+        "ranking": {"status": "withheld", "generated": False}}
