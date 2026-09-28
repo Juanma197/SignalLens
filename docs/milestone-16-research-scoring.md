@@ -29,9 +29,14 @@ inputs as unavailable. Raw momentum alone is not represented as sufficient.
 
 ## Leakage controls and gates
 
-Every historical vintage rebuilds features from prices whose trading and
-retrieval timestamps are visible at that vintage. Labels begin after the
-vintage and are never used for normalization. Ranking requires all of:
+Every historical vintage rebuilds features from prices retrieved by the final
+evaluation cutoff and effectively dated by that vintage. The effective
+trading-date boundary—not the database ingestion audit timestamp—determines
+what enters each vintage. This distinction matters because the research adapter
+loads historical provider rows in a recent batch: requiring that batch timestamp
+to precede a years-old vintage produced no rows. Historical as-of FX validation
+still resolves the latest observation on or before each price date. Labels begin
+after the vintage and are never used for normalization. Ranking requires all of:
 
 1. eligible coverage and count;
 2. historical vintages and prediction count;
@@ -45,6 +50,29 @@ Any failure returns `ranking_withheld`, bounded reason codes and an empty
 candidate list. Passing permits zero to three candidates above the score floor,
 with a highest-conviction field only when a candidate exists. Synthetic fixture
 passes are labelled synthetic/research-only and say nothing about live data.
+
+## Zero-vintage incident and repair
+
+The first operator Milestone 16 run selected 500 catalogue securities and found
+492 model-ready (98.4% coverage), but returned zero predictions, zero vintages,
+and an invalid evaluation. Integrity and coverage correctly passed and ranking
+was correctly withheld; both database fingerprints remained unchanged.
+
+The adapter had passed the one latest model-ready cross-section to the evaluator.
+For each old decision date the evaluator changed only `decision_at`, then asked
+feature preparation to require `retrieved_at <= old decision_at`. Since the ten
+years of historical prices were batch-ingested recently, every historical row
+was removed despite its old effective `trading_date`. The repair builds a distinct
+calendar-month-end historical panel, bounds ingestion at the final evaluation
+cutoff, bounds features at each effective decision date, and requires a complete
+21-session forward label. It reports selected/loaded/model-ready counts, price
+range, possible/generated vintages, feature/label rows, removals, feature/label
+date bounds, and bounded explicit zero-vintage reason codes.
+
+The current scoring cross-section remains separate from the historical evidence
+panel. Both use the **current catalogue**, so this pilot is not survivorship-free;
+historical output must not be described as a survivorship-free backtest or as a
+live strategy pass.
 
 ## Post-merge PowerShell command
 

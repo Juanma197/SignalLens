@@ -216,7 +216,12 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Bounded explainable components/reason codes and deterministic zero-to-three
   research-only candidates; every failure yields no candidates
 - [x] Read-only CLI with before/after fingerprints and sanitized five-region tests
-- [ ] Run the gates against the operator database after merge; the prior 492
-  model-ready result is readiness evidence only, not a scoring-gate pass
+- [x] Diagnose the first operator result (500 selected, 492 model-ready, zero
+  vintages): a recent batch-ingestion timestamp was incorrectly applied as every
+  historical feature boundary; ranking was correctly withheld and files unchanged
+- [x] Separate current scoring from a bounded calendar-month-end historical panel,
+  retain strict effective-date/label cutoffs, and add bounded stage diagnostics
+- [ ] Retry the repaired gates against the operator database after merge; the
+  prior 492 model-ready and synthetic results are not scoring-gate passes
 - [ ] Acquire point-in-time fundamentals and survivorship-aware membership;
   production promotion and publisher changes remain prohibited

@@ -17,9 +17,13 @@ LISTINGS = (
 )
 
 
-def create_research_fixture(path: Path) -> None:
+def create_research_fixture(path: Path, *, periods: int = 130, per_region: int = 1) -> None:
     """Create synthetic schema-compatible data; no provider payloads are included."""
-    days = pd.bdate_range(end="2026-09-25", periods=130)
+    days = pd.bdate_range(end="2026-09-25", periods=periods)
+    listings = LISTINGS if per_region == 1 else tuple(
+        (f"{security}-{index}", f"{symbol.split('.')[0]}{index}.{region}", region, currency)
+        for security, symbol, region, currency in LISTINGS for index in range(per_region)
+    )
     with duckdb.connect(str(path)) as db:
         db.execute("""CREATE TABLE security_master_retrievals
             (retrieval_id VARCHAR, retrieved_at TIMESTAMP, status VARCHAR)""")
@@ -45,9 +49,9 @@ def create_research_fixture(path: Path) -> None:
         db.execute("INSERT INTO eodhd_catalogue_validations VALUES (?, 'validated', 5, '[]')",
                    [datetime(2026, 9, 26, 8)])
         db.executemany("INSERT INTO security_listings VALUES ('fixture-r1',?,?,?,?,'common_stock',true)",
-                       LISTINGS)
+                       listings)
         prices = []
-        for offset, (_, symbol, _, currency) in enumerate(LISTINGS):
+        for offset, (_, symbol, _, currency) in enumerate(listings):
             for index, day in enumerate(days):
                 close = 50 + offset + index / 10
                 prices.append((symbol, day.date(), currency, close - .1, close + .2,
@@ -59,8 +63,8 @@ def create_research_fixture(path: Path) -> None:
             (currency, "GBP", day.date(), rate, (day + pd.Timedelta(days=1)).to_pydatetime())
             for currency, rate in rates.items() for day in days
         ])
-        db.execute("INSERT INTO global_corporate_actions VALUES ('ALPHA.US', ?, 'cash_distribution', .25)",
-                   [days[-30].date()])
+        db.execute("INSERT INTO global_corporate_actions VALUES (?, ?, 'cash_distribution', .25)",
+                   [listings[0][1], days[-30].date()])
 
 
 def mutate(path: Path, sql: str, parameters: list | None = None) -> None:
