@@ -256,8 +256,8 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 
 ## Verification
 
-- All 201 backend tests and Python compilation pass in the Milestone 14
-  verification environment; 10 tests are offline observation regressions.
+- All 216 backend tests and Python compilation pass in the Milestone 15
+  verification environment; readiness tests use only synthetic DuckDB fixtures.
 - GitHub Actions passes, including a clean frontend `npm ci`, ESLint, and the optimized production build under Node 24 and npm 11.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
 - The immutable September 2026 production vintage is
@@ -289,11 +289,26 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
   regional coverage, representative walk-forward validation, and production promotion
   remain explicitly incomplete.
 
+### Milestone 15 read-only readiness assessment
+
+- The operator-only `model-readiness` command now opens the existing research
+  DuckDB read-only and adapts its active catalogue, prices, historical FX,
+  corporate actions, and structured failure state into the Milestone 14 validator.
+- It returns aggregate selection/load/readiness, region/currency, history,
+  freshness, FX, failure, observation-key, and action diagnostics with at most ten
+  sanitized affected symbols.
+- Explicit research and production paths are mandatory. Missing, identical,
+  symlinked/hard-linked, incomplete, incompatible, or region-incomplete inputs
+  fail closed. Before/after size and SHA-256 fingerprints establish immutability.
+- Results remain research-only, current-membership based, not survivorship-free,
+  and not investment advice. No ranking, Top 3, or conviction candidate is made.
+- Verification uses synthetic five-region DuckDB fixtures only. No operator
+  database, live provider, Railway service, or deployment was accessed.
+
 ## Next action
 
-1. Review an aggregate-only observation plan, then explicitly authorize a future
-   read-only adapter against an operator-controlled copy; never require or mutate
-   the original pilot database.
+1. Run the aggregate-only readiness assessment locally against the operator-held
+   research database and retain its JSON report; do not send or commit the database.
 2. Acquire point-in-time fundamentals and survivorship-aware membership/delisting
    evidence before using historical periods in the controlled walk-forward pipeline.
 3. Add a gated research-only monthly Top 3 and highest-conviction selection only

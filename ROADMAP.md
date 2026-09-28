@@ -181,3 +181,20 @@ Each milestone must end with passing tests, a production frontend build, an upda
   only when evidence thresholds pass
 - [ ] Production promotion, Railway changes and official `momentum_126d` changes
   (prohibited)
+
+## Milestone 15 — Read-only research-database readiness (implementation complete)
+
+- [x] Strictly read-only adapter for the active catalogue, prices, historical FX,
+  corporate actions and structured provider-failure state
+- [x] Reuse Milestone 14 eligibility and validation without a second rule set
+- [x] Explicit research/production paths with missing, identical, symlink and
+  hard-link refusal plus compatible-schema and five-region fail-closed checks
+- [x] Before/after existence, byte-count and SHA-256 fingerprints for both paths
+- [x] Aggregate region/currency, freshness/history, point-in-time FX, provider
+  failure, natural-key, OHLCV/adjusted-close and action reporting
+- [x] Bounded sanitized affected-symbol samples and explicit no-ranking/no-Top-3/
+  no-highest-conviction statements
+- [x] Sanitized five-region DuckDB fixture and mutation/path/quality regressions
+- [x] PowerShell operator runbook; no provider, production, Railway, or publisher changes
+- [ ] Run locally against the operator-held database (no live result claimed here)
+- [ ] Add point-in-time fundamentals and survivorship-aware membership before evaluation

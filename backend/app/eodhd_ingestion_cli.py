@@ -10,11 +10,12 @@ from pathlib import Path
 
 from .config import get_settings
 from .eodhd_ingestion import EODHDClient, EODHDIngestion, EODHDLimits
+from .model_readiness import assess_model_readiness
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bounded EODHD global research ingestion")
-    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage"])
+    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage", "model-readiness"])
     parser.add_argument("--catalogue-fixture", type=Path,
                         help="local sanitized JSON object keyed by region (diagnose-catalogue only)")
     parser.add_argument("--research-db", type=Path)
@@ -28,6 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-response-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--maximum-runtime-seconds", type=float, default=1800)
     parser.add_argument("--affected-limit", type=int, default=25)
+    parser.add_argument("--decision-at", type=datetime.fromisoformat,
+                        help="timezone-aware point-in-time assessment boundary (defaults to now)")
     parser.add_argument("--dry-run", action="store_true", help="plan and validate without mutating the research database")
     parser.add_argument("--authorize-full-reconciliation", action="store_true",
                         help="deliberate authorization required by reconcile")
@@ -40,6 +43,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = None) -> dict:
     settings, captured = get_settings(), now or datetime.now(timezone.utc)
+    if args.command == "model-readiness":
+        if args.research_db is None or args.production_db is None:
+            raise ValueError("model-readiness requires explicit --research-db and --production-db paths")
+        return assess_model_readiness(
+            research_db=args.research_db, production_db=args.production_db,
+            decision_at=args.decision_at or captured,
+            sample_limit=min(args.affected_limit, 25),
+        )
     if args.authorize_permanent_failures and args.command != "retry-failures":
         raise ValueError("--authorize-permanent-failures requires retry-failures")
     limits = EODHDLimits(args.per_region, args.total, args.daily_request_budget,
