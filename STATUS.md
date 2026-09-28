@@ -4,6 +4,33 @@ Last updated: 2026-09-28
 
 ## Current milestone
 
+## Milestone 14 — Trustworthy model-ready observations
+
+- [x] Added a pure research transformation that accepts caller-provided current
+  catalogue, adjusted OHLCV, corporate-action, point-in-time FX and structured
+  failure frames. It does not open DuckDB or make network requests.
+- [x] Enforced exact five-region coverage and venue currencies for US, LSE, TO,
+  XETRA and PA, unique identities and natural keys, timezone-aware retrieval
+  boundaries and explicit current-catalogue provenance.
+- [x] Invalid prices/actions, missing or stale FX, stale prices, fewer than 127
+  sessions and permanent provider failures are withheld with explicit reasons.
+  Dataset-wide duplicate/identity defects reject the build entirely.
+- [x] Reused the existing global research momentum feature implementation,
+  provider-adjusted close semantics and GBP/GBX conversion rules instead of
+  introducing a parallel model or publisher.
+- [x] The readiness report is labelled `RESEARCH ONLY — NOT INVESTMENT ADVICE`,
+  publishes no ranking, and leaves highest conviction unavailable. A future Top
+  3 remains conditional on sufficient eligible evidence and evaluation gates.
+- [x] Sanitized deterministic fixtures cover every pilot region and exercise
+  valid data plus missing FX, insufficient history, invalid/stale prices, stale
+  FX, duplicate observations, invalid actions and permanent provider failures.
+- [ ] The operator-held 499-security DuckDB and its backup were not accessed,
+  inspected, modified or required. No claim is made about its actual model-ready
+  row count.
+- [ ] Current catalogues are not survivorship-free. Historical membership,
+  delistings, point-in-time fundamentals and representative walk-forward evidence
+  remain prerequisites for any ranked output or promotion.
+
 ## Milestone 13 — Pilot audit and safe incremental refresh
 
 - [x] Read-only aggregate quality audit with bounded sanitized affected-symbol output.
@@ -229,7 +256,8 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 
 ## Verification
 
-- All 168 backend tests and Python compilation pass in the Milestone 11 verification environment.
+- All 201 backend tests and Python compilation pass in the Milestone 14
+  verification environment; 10 tests are offline observation regressions.
 - GitHub Actions passes, including a clean frontend `npm ci`, ESLint, and the optimized production build under Node 24 and npm 11.
 - The only backend warning is a third-party Starlette/AnyIO deprecation warning.
 - The immutable September 2026 production vintage is
@@ -263,10 +291,11 @@ Older vintages are never rewritten. New evidence cannot silently alter the histo
 
 ## Next action
 
-1. After each monthly invocation, verify the cron exit, API result, completed ledger
-   entry, single deterministic vintage, dashboard evidence, and fresh valid backup.
-2. Add automated off-platform backup replication and alerting for failed cron
-   deployments or cycle-ledger entries.
-3. Configure licensed regional reference/price feeds and approved point-in-time FX,
-   then complete fundamentals, multifactor scoring, and walk-forward validation before
-   considering any production-universe change.
+1. Review an aggregate-only observation plan, then explicitly authorize a future
+   read-only adapter against an operator-controlled copy; never require or mutate
+   the original pilot database.
+2. Acquire point-in-time fundamentals and survivorship-aware membership/delisting
+   evidence before using historical periods in the controlled walk-forward pipeline.
+3. Add a gated research-only monthly Top 3 and highest-conviction selection only
+   after coverage, freshness, confidence, robustness and no-recommendation rules
+   pass. Production promotion remains separate and prohibited.
