@@ -74,6 +74,53 @@ panel. Both use the **current catalogue**, so this pilot is not survivorship-fre
 historical output must not be described as a survivorship-free backtest or as a
 live strategy pass.
 
+## Extreme-return incident and repair
+
+The next read-only operator run produced 41,609 labels over 113 vintages.  Its
+58.578998 mean excess return and 90.095465 US regional excess were not credible:
+the interval `[-0.013274, 175.754111]`, while very wide, exposed a small number of
+enormous adjusted-close ratios rather than stable model evidence. The calculation
+had two trust gaps. OHLCV validation checked an entire security at the final
+cutoff, but each later-derived entry/exit pair had no denominator, finiteness,
+duplicate, discontinuity or concentration validation. In addition, regional
+evidence selected approximately three times the average vintage size across the
+whole region, rather than selecting three securities inside each vintage. Thus
+an unresolved US adjusted-price discontinuity could dominate pooled means. This
+is an adjusted-series label-integrity/concentration failure, not percent-versus-
+decimal or FX conversion: every return is `exit_adjusted_close /
+entry_adjusted_close - 1` in local-price decimal units, so the currency cancels.
+The operator database was not inspected during this repair, and the precise live
+symbol/corporate-action cause remains for the bounded retry to identify.
+
+Evaluation now validates every label before evidence is calculated. It reports
+finite/nonfinite, invalid and near-zero (`<= 0.01` local adjusted-price units)
+denominators, duplicate symbol/vintage labels, and unresolved absolute returns
+over `10.0` (1,000%). These are conservative investigation thresholds, not
+winsorization: observations remain in the diagnostic distribution and bounded
+symbol/date/reason sample, while the result fails closed. Corporate actions
+within seven calendar days of the label interval are reported as proximity, not
+assumed to resolve the discontinuity. The report also includes decimal-return
+minima, maxima, medians, 1/5/95/99 percentiles, regional distributions, top
+1/5/10 absolute-contribution concentration, and vintage-size distribution.
+
+All aggregate evidence uses one level: top-three and equal-weight baseline means
+are first calculated within a vintage, their difference is the vintage excess,
+and temporal rate, conventional mean/median, 10% trimmed mean, and deterministic
+95% bootstrap interval are calculated across those equally weighted vintages.
+Regional top-three excess is likewise formed region-by-vintage before averaging.
+Calibration pools score-rank quintiles and reports both mean and median decimal
+returns. Rank correlation is calculated only for vintages having at least two
+finite, nonconstant observations; other groups report
+`insufficient_group_size` without calling a correlation routine. Robust results
+are comparative diagnostics only: they cannot override nonfinite, denominator,
+extreme-return, duplicate, concentration, or group-size gates.
+
+Deterministic regressions cover a split-like discontinuity, near-zero price,
+nonfinite label, single-observation group, dominant US observation,
+concentration-created false pass, a legitimate but unresolved high return, and
+a warning-free five-region panel. These fixtures demonstrate the repair; they do
+not claim that the live model passes.
+
 ## Post-merge PowerShell command
 
 Run from the repository root with distinct real paths:
