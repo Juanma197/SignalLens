@@ -110,6 +110,106 @@ def test_failed_validation_never_changes_live_or_publishes_backup(
     assert not list(directory.iterdir())
 
 
+def test_windows_publication_skips_only_unsupported_directory_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source database" / "research database.duckdb"
+    source.parent.mkdir()
+    provider_shaped_research_database(source)
+    directory = tmp_path / "managed backups with spaces"
+    real_open = backup_module.os.open
+    opened: list[Path] = []
+
+    def windows_open(path, flags, *args, **kwargs):
+        opened_path = Path(path)
+        opened.append(opened_path)
+        if opened_path == directory.resolve():
+            raise PermissionError(13, "Windows does not permit os.open on directories")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(backup_module, "_IS_WINDOWS", True)
+    monkeypatch.setattr(backup_module.os, "open", windows_open)
+
+    result = create_backup(source, directory, profile=BackupProfile.RESEARCH)
+
+    assert result.is_file()
+    assert directory.resolve() not in opened
+    assert any(path.suffix == ".tmp" for path in opened)
+    assert result in opened
+    assert verify_backup(result, profile=BackupProfile.RESEARCH).path == result
+
+
+def test_posix_publication_fsyncs_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "live.duckdb"
+    database_with_vintage(source)
+    directory = tmp_path / "backups"
+    real_open = backup_module.os.open
+    opened: list[Path] = []
+
+    def recording_open(path, flags, *args, **kwargs):
+        opened.append(Path(path))
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(backup_module, "_IS_WINDOWS", False)
+    monkeypatch.setattr(backup_module.os, "open", recording_open)
+
+    create_backup(source, directory)
+
+    assert directory.resolve() in opened
+
+
+def test_post_publication_failure_removes_only_managed_artifact_and_temporary_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "research.duckdb"
+    provider_shaped_research_database(source)
+    directory = tmp_path / "backups"
+    directory.mkdir()
+    manual = directory / "manual backup.duckdb"
+    manual.write_bytes(b"operator-owned")
+    real_verify = backup_module.verify_backup
+    verification_count = 0
+
+    def fail_published_verification(path: Path, **kwargs):
+        nonlocal verification_count
+        verification_count += 1
+        if verification_count == 2:
+            raise OSError("published-file read failed")
+        return real_verify(path, **kwargs)
+
+    monkeypatch.setattr(backup_module, "verify_backup", fail_published_verification)
+
+    with pytest.raises(OSError, match="published-file read failed"):
+        create_backup(source, directory, profile=BackupProfile.RESEARCH)
+
+    assert manual.read_bytes() == b"operator-owned"
+    assert list(directory.iterdir()) == [manual]
+
+
+def test_file_permission_failure_is_not_treated_as_windows_directory_limitation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "live.duckdb"
+    database_with_vintage(source)
+    directory = tmp_path / "backups"
+    real_open = backup_module.os.open
+
+    def deny_temporary_file(path, flags, *args, **kwargs):
+        if Path(path).suffix == ".tmp":
+            raise PermissionError(13, "temporary file denied", str(path))
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(backup_module, "_IS_WINDOWS", True)
+    monkeypatch.setattr(backup_module.os, "open", deny_temporary_file)
+
+    with pytest.raises(PermissionError, match="temporary file denied"):
+        create_backup(source, directory)
+
+    assert list(directory.iterdir()) == []
+
+
 def test_failed_backup_blocks_monthly_mutation(tmp_path: Path, monkeypatch) -> None:
     repository = database_with_vintage(tmp_path / "live.duckdb")
     settings = production_settings(repository.path, tmp_path / "backups")

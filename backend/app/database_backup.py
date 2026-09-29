@@ -43,10 +43,36 @@ PROFILE_REQUIRED_TABLES = {
     }),
 }
 BACKUP_PREFIX = "signallens-backup-"
+_IS_WINDOWS = os.name == "nt"
 
 
 def _sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+def _fsync_file(path: Path) -> None:
+    """Flush a closed file through the operating system to durable storage."""
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_parent_directory(directory: Path) -> None:
+    """Persist directory metadata on POSIX; Windows exposes no Python equivalent.
+
+    Standard Python on Windows cannot open a directory with ``os.open`` for the
+    POSIX directory-fsync sequence. Windows durability therefore relies on the
+    flushed files and atomic ``os.replace`` in the publication sequence.
+    """
+    if _IS_WINDOWS:
+        return
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 @dataclass(frozen=True)
@@ -125,6 +151,7 @@ def create_backup(
     export_directory = destination_dir / f".{BACKUP_PREFIX}{stamp}-{uuid4().hex}.export"
 
     connection = None
+    published = False
     try:
         # EXPORT observes one consistent snapshot; IMPORT builds a wholly new
         # database. The live source connection is explicitly read-only.
@@ -137,26 +164,23 @@ def create_backup(
         connection.close()
         connection = None
         temporary_verification = verify_backup(temporary, profile=profile)
+        _fsync_file(temporary)
         os.replace(temporary, final)
-        try:
-            published_verification = verify_backup(final, profile=profile)
-        except BaseException:
-            final.unlink(missing_ok=True)
-            raise
+        published = True
+        # Reopen and flush the published file before hashing and validating it.
+        # Parent-directory durability is additionally available on POSIX.
+        _fsync_file(final)
+        _fsync_parent_directory(destination_dir)
+        published_verification = verify_backup(final, profile=profile)
         if (published_verification.sha256 != temporary_verification.sha256 or
                 published_verification.byte_count != temporary_verification.byte_count):
-            final.unlink(missing_ok=True)
             raise OSError("published backup failed SHA-256 or byte-count verification")
-        # Directory durability matters for the atomic rename on abrupt restart.
-        directory_fd = os.open(destination_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
     except BaseException:
         if connection is not None:
             connection.close()
         temporary.unlink(missing_ok=True)
+        if published:
+            final.unlink(missing_ok=True)
         raise
     finally:
         shutil.rmtree(export_directory, ignore_errors=True)

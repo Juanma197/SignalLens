@@ -74,6 +74,27 @@ validation failures still remove export/temporary artifacts and publish nothing.
 Manual files are neither adopted nor pruned, and a second managed initial backup is
 still refused.
 
+The repaired research-profile backup subsequently reached atomic publication on
+Windows, then failed with `PermissionError: [Errno 13] Permission denied` when the
+POSIX durability path attempted `os.open` on
+`C:\Users\Juan Estrada\Projects\SignalLens\backend\data\research\managed-backups`.
+This was an unsupported parent-directory-open operation, not evidence that the
+operator needed administrator rights or weaker directory permissions. The backup
+path now flushes and fsyncs the temporary file, atomically replaces the destination,
+then reopens and fsyncs the published file before its SHA-256, byte-count, and
+research-profile validation. POSIX additionally fsyncs the parent directory.
+Standard Python provides no corresponding POSIX-style parent-directory fsync on
+Windows, so only that directory operation is explicitly omitted there; all ordinary
+file, publication, hashing, and validation errors remain fatal and remove the newly
+published managed artifact. Operator-owned manual backups remain outside cleanup.
+
+The operator's before/after evidence for this failed publication reported both the
+isolated research database and the production database as byte-for-byte unchanged.
+The failure occurred in backup-destination durability handling after the read-only
+source workflow; it did not authorize or perform a provider request, ingestion,
+scheduler enablement, deployment, production publication, or other production
+operation.
+
 The operator reported current SHA-256
 `1E8A44E2F07207863151D53259F62D93F12C2282CD516EB6568A80CA33860244`, versus the
 earlier read-only assessment's
