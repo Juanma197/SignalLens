@@ -51,7 +51,8 @@ from .watchlist import WatchlistRepository
 from .eodhd_ingestion import EODHDClient, EODHDIngestion, EODHDLimits
 from .model_readiness import assess_model_readiness
 from .research_scoring import assess_research_scoring
-from .operations import AssessmentJobs, research_health, safe_error
+from .operations import AssessmentJobs, OperationHistory, research_health, safe_error
+from .database_backup import backup_status
 from .shadow_portfolios import (create_shadow_vintage, evaluate_matured_shadows,
                                 plan_shadow_vintage, shadow_status)
 
@@ -71,8 +72,17 @@ class OperationRequest(BaseModel):
     latest_required_fx_date: date | None = None
     plan_id: str | None = None
 
-assessment_jobs = AssessmentJobs()
+assessment_jobs: AssessmentJobs | None = None
 _shadow_plans: dict[str, tuple[float, OperationRequest]] = {}
+
+
+def _assessment_jobs() -> AssessmentJobs:
+    """Initialize persistence only when an operator explicitly starts/reads a job."""
+    global assessment_jobs
+    if assessment_jobs is None:
+        history = OperationHistory(settings.research_database_path, settings.database_path)
+        assessment_jobs = AssessmentJobs(history=history)
+    return assessment_jobs
 
 
 def _validate_sessions(body: OperationRequest) -> None:
@@ -129,6 +139,9 @@ async def authenticate_private_api(request: Request, call_next):
                 content={"detail": "Invalid or missing bearer token"},
                 headers={"WWW-Authenticate": "Bearer"},
             )
+    if settings.staging_mode and request.method not in {"GET", "HEAD", "OPTIONS"}:
+        return JSONResponse(status_code=409, content={"detail": {
+            "code": "staging_read_only", "message": "Staging mode prohibits all writes."}})
     return await call_next(request)
 
 
@@ -142,6 +155,36 @@ def operations_health() -> dict:
     return research_health(settings.research_database_path, settings.database_path,
                            scheduler_enabled=settings.scheduler_enabled,
                            configured=bool(settings.app_name and settings.environment))
+
+
+@app.get("/api/v1/operations/backups/status")
+def operations_backup_status() -> dict:
+    return _redacted(lambda: backup_status(settings.backup_path))
+
+
+@app.get("/api/v1/operations/summary")
+def operations_summary() -> dict:
+    """Bounded operator-first summary; diagnostics remain separate endpoints."""
+    health = research_health(settings.research_database_path, settings.database_path,
+                             scheduler_enabled=settings.scheduler_enabled)
+    backup = backup_status(settings.backup_path)
+    history: list[dict] = []
+    if settings.research_database_path.is_file():
+        try:
+            history = OperationHistory(settings.research_database_path, settings.database_path).recent(
+                settings.operations_history_limit)
+        except Exception:
+            history = []
+    running = any(item["state"] in {"queued", "running"} for item in history)
+    attention = not health["database_isolation_confirmed"] or backup["status"] != "healthy"
+    return {"label": "RESEARCH ONLY — NOT INVESTMENT ADVICE",
+            "overall": "Running" if running else "Attention required" if attention else "Healthy",
+            "latest_successful_refresh": None, "latest_price_date": None, "latest_fx_date": None,
+            "counts": {"selected": 0, "model_ready": 0, "withheld": 0},
+            "next_scheduled_operation": None, "backup": backup,
+            "month_end_plan": {"state": "not_confirmed", "proposed_selections": []},
+            "shadow_cohorts": [], "recent_operations": history[:20],
+            "production_publishing_available": False}
 
 
 @app.get("/api/v1/operations/coverage")
@@ -159,12 +202,12 @@ def operations_start_assessment(kind: str, decision_at: datetime) -> dict:
             production_db=settings.database_path, decision_at=decision_at)
     else:
         raise HTTPException(404, detail=safe_error("assessment_not_found", "Assessment type is unavailable."))
-    return assessment_jobs.start(kind, work)
+    return _assessment_jobs().start(kind, work)
 
 
 @app.get("/api/v1/operations/assessments/jobs/{job_id}")
 def operations_assessment_job(job_id: str) -> dict:
-    result = assessment_jobs.get(job_id)
+    result = _assessment_jobs().get(job_id)
     if result is None:
         raise HTTPException(404, detail=safe_error("job_not_found", "Assessment job was not found."))
     return result
@@ -172,7 +215,7 @@ def operations_assessment_job(job_id: str) -> dict:
 
 @app.delete("/api/v1/operations/assessments/jobs/{job_id}")
 def operations_cancel_assessment(job_id: str) -> dict:
-    result = assessment_jobs.cancel(job_id)
+    result = _assessment_jobs().cancel(job_id)
     if result is None:
         raise HTTPException(404, detail=safe_error("job_not_found", "Assessment job was not found."))
     return result

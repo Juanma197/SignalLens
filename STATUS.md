@@ -2,6 +2,18 @@
 
 Last updated: 2026-09-29
 
+## Milestone 21 — implementation prepared (not deployed)
+
+- Persistent sanitized job history and restart recovery, fail-closed orchestration,
+  disabled-by-default UTC scheduling, verified backups, bounded notifications and
+  an operator summary are implemented.
+- Railway backend/frontend configuration is documented; staging disables schedules
+  and every write. No Railway access or deployment occurred.
+- The model remains research-only. Current catalogue membership is not survivorship-free,
+  and fundamentals remain unavailable under the current EODHD entitlement.
+- No live provider request, production publication, real investment, broker action,
+  or September 2026 shadow-vintage creation occurred.
+
 ## Milestone 20 live-defect repair prepared (operator retry pending)
 
 - The merged operations health request was observed hanging because it synchronously

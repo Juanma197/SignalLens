@@ -1,5 +1,17 @@
 # SignalLens
 
+## Milestone 21 autonomous research operations
+
+SignalLens now includes persistent sanitized operation history, deterministic
+fail-closed research orchestration, explicit UTC schedules, verified research
+database backups, safe notification adapters, and an operator-first summary.
+Scheduling is disabled by default and staging is entirely read-only. Railway uses
+separate backend and frontend services and a backend volume mounted at `/data`.
+See the [Milestone 21 runbook](docs/milestone-21-operations-deployment.md).
+
+No workflow can publish production rankings, contact a broker, or create a shadow
+vintage without separate human authorization.
+
 ## Milestone 20 research operations
 
 The Next.js application now provides a mobile-friendly `/operations` dashboard for
