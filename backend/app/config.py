@@ -40,9 +40,24 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
+        environment = self.environment.strip().lower()
+        if environment == "staging":
+            self.staging_mode = True
+        if self.staging_mode and environment not in {"staging", "development"}:
+            raise ValueError("staging mode requires SIGNALLENS_ENVIRONMENT=staging")
         if self.staging_mode and self.scheduler_enabled:
             raise ValueError("staging mode prohibits scheduler enablement")
-        if self.environment.strip().lower() != "production":
+        research = self.research_database_path.expanduser().resolve()
+        production = self.database_path.expanduser().resolve()
+        if research == production:
+            raise ValueError("research and production database paths must be distinct")
+        if environment == "staging":
+            volume = (self.persistent_volume_path or Path("/data")).expanduser().resolve()
+            if not research.is_relative_to(volume) or not production.is_relative_to(volume):
+                raise ValueError("staging database paths must be beneath the persistent volume")
+            if self.api_token is None or len(self.api_token.get_secret_value()) < 32:
+                raise ValueError("SIGNALLENS_API_TOKEN must contain at least 32 characters in staging")
+        if environment != "production":
             return self
         if self.api_token is None:
             raise ValueError(
