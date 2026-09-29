@@ -161,8 +161,12 @@ python -m app.monthly_cycle
 
 Production readiness and a mutation-free rehearsal are available with
 `python -m app.monthly_cycle --preflight` and `python -m app.monthly_cycle --dry-run`.
-Create and verify the initial application-managed backup with
-`python -m app.database_backup create` and
+Create the first application-managed **research** backup only with the deliberate
+authorization command
+`python -m app.database_backup create-initial --authorize "CREATE INITIAL RESEARCH BACKUP"`.
+It opens the research database read-only, rejects the production database, refuses
+to run when a managed backup already exists, and leaves unrelated manual backups
+untouched. Verify a managed backup with
 `python -m app.database_backup verify /data/backups/<backup>.duckdb`. Production
 monthly runs then create a validated backup before any cycle mutation and retain
 three by default (`SIGNALLENS_BACKUP_RETENTION_COUNT`). Same-volume backups cover

@@ -9,7 +9,9 @@ import pytest
 import app.database_backup as backup_module
 import app.monthly_cycle as monthly_cycle
 from app.config import Settings
-from app.database_backup import create_backup, restore_backup, verify_backup
+from app.database_backup import (backup_status, create_backup,
+                                 create_initial_research_backup, restore_backup,
+                                 verify_backup)
 from app.market_data import MarketDataRepository
 from app.monthly_cycle import CycleStages, run_production_monthly_cycle
 from app.prediction_store import PredictionVintageStore
@@ -180,3 +182,43 @@ def test_restore_recreates_database_without_overwriting(tmp_path: Path) -> None:
         assert connection.execute("SELECT ticker FROM prediction_records").fetchone() == ("RESTORED",)
     with pytest.raises(FileExistsError):
         restore_backup(backup, restored)
+
+
+def test_backup_status_distinguishes_configuration_and_validation(tmp_path: Path) -> None:
+    directory = tmp_path / "backups"
+    assert backup_status(None, configured=False)["status"] == "not_configured"
+    assert backup_status(directory)["status"] == "missing"
+    directory.mkdir()
+    with duckdb.connect(str(directory / "signallens-backup-manual.duckdb")) as connection:
+        connection.execute("CREATE TABLE unrelated(value INTEGER)")
+    assert backup_status(directory)["status"] == "unvalidated"
+    source = tmp_path / "research.duckdb"
+    database_with_vintage(source)
+    create_backup(source, directory)
+    assert backup_status(directory)["status"] == "validated"
+
+
+def test_initial_research_backup_requires_authorization_and_preserves_manual_files(tmp_path: Path) -> None:
+    research = tmp_path / "research.duckdb"
+    production = tmp_path / "production.duckdb"
+    directory = tmp_path / "backups"
+    database_with_vintage(research)
+    database_with_vintage(production, "PRODUCTION")
+    directory.mkdir()
+    manual = directory / "manual-backup.duckdb"
+    manual.write_bytes(b"operator-owned")
+    research_before, production_before = research.read_bytes(), production.read_bytes()
+
+    with pytest.raises(PermissionError):
+        create_initial_research_backup(research, production, directory)
+    result = create_initial_research_backup(
+        research, production, directory, authorized=True
+    )
+
+    assert manual.read_bytes() == b"operator-owned"
+    assert research.read_bytes() == research_before
+    assert production.read_bytes() == production_before
+    with duckdb.connect(str(result), read_only=True) as connection:
+        assert connection.execute("SELECT ticker FROM prediction_records").fetchone() == ("AAA",)
+    with pytest.raises(FileExistsError):
+        create_initial_research_backup(research, production, directory, authorized=True)
