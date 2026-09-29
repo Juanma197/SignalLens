@@ -17,6 +17,11 @@ Last updated: 2026-09-29
   non-interchangeable production/research schema profiles. The failed attempt left
   the managed directory empty; research validation now covers the initialized EODHD
   storage contract without requiring production prediction tables.
+- The subsequent Windows `_commit()` bad-descriptor defect is repaired by using a
+  binary, write-capable descriptor only for application-created backup artifacts;
+  an actual `windows-latest` focused CI job gates the operator retry. The operator
+  recorded both source databases as byte-for-byte unchanged, and the independently
+  validated orphan (`9C11CBC4…EFE20B`) remains preserved in quarantine.
 - The reported research digest changed from `9811DF2F…E611DB4` to
   `1E8A44E2…860244`. The only known intervening structural delta is empty
   `research_operations` journal initialization. The two operator-held database

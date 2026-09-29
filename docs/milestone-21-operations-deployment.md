@@ -88,6 +88,20 @@ Windows, so only that directory operation is explicitly omitted there; all ordin
 file, publication, hashing, and validation errors remain fatal and remove the newly
 published managed artifact. Operator-owned manual backups remain outside cleanup.
 
+A second Windows durability defect was then reproduced: Windows `_commit()` rejects
+the read-only descriptor that POSIX accepts for file `fsync`, producing
+`OSError: [Errno 9] Bad file descriptor`. Backup artifacts are now reopened with a
+binary, read/write descriptor on Windows only; the research and production sources
+remain strictly read-only. The focused backup suite must pass on GitHub Actions'
+actual `windows-latest` runner, including its path-with-spaces end-to-end case,
+before the operator is asked to retry.
+
+The operator recorded that both source databases remained byte-for-byte unchanged.
+The previously published orphan was independently verified as a valid research
+backup with SHA-256
+`9C11CBC4C2B0D71B0266EC7351BE808B00907944C9B38E2607F9501029EFE20B` and was
+preserved in quarantine rather than adopted, overwritten, or removed.
+
 The operator's before/after evidence for this failed publication reported both the
 isolated research database and the production database as byte-for-byte unchanged.
 The failure occurred in backup-destination durability handling after the read-only

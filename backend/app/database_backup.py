@@ -51,8 +51,16 @@ def _sql_string(value: str) -> str:
 
 
 def _fsync_file(path: Path) -> None:
-    """Flush a closed file through the operating system to durable storage."""
-    descriptor = os.open(path, os.O_RDONLY)
+    """Flush an application-created artifact with platform-correct flags.
+
+    Windows implements :func:`os.fsync` with ``_commit``, which rejects a
+    read-only descriptor.  These paths are backup artifacts owned by this
+    workflow, never either source database; POSIX supports the narrower mode.
+    """
+    flags = os.O_RDONLY
+    if _IS_WINDOWS:
+        flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags)
     try:
         os.fsync(descriptor)
     finally:

@@ -118,11 +118,11 @@ def test_windows_publication_skips_only_unsupported_directory_open(
     provider_shaped_research_database(source)
     directory = tmp_path / "managed backups with spaces"
     real_open = backup_module.os.open
-    opened: list[Path] = []
+    opened: list[tuple[Path, int]] = []
 
     def windows_open(path, flags, *args, **kwargs):
         opened_path = Path(path)
-        opened.append(opened_path)
+        opened.append((opened_path, flags))
         if opened_path == directory.resolve():
             raise PermissionError(13, "Windows does not permit os.open on directories")
         return real_open(path, flags, *args, **kwargs)
@@ -133,9 +133,12 @@ def test_windows_publication_skips_only_unsupported_directory_open(
     result = create_backup(source, directory, profile=BackupProfile.RESEARCH)
 
     assert result.is_file()
-    assert directory.resolve() not in opened
-    assert any(path.suffix == ".tmp" for path in opened)
-    assert result in opened
+    expected_flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
+    assert all(path != directory.resolve() for path, _flags in opened)
+    artifact_opens = [(path, flags) for path, flags in opened
+                      if path.suffix == ".tmp" or path == result]
+    assert len(artifact_opens) == 2
+    assert [flags for _path, flags in artifact_opens] == [expected_flags, expected_flags]
     assert verify_backup(result, profile=BackupProfile.RESEARCH).path == result
 
 
@@ -158,6 +161,39 @@ def test_posix_publication_fsyncs_parent_directory(
     create_backup(source, directory)
 
     assert directory.resolve() in opened
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires the real Windows _commit implementation")
+def test_real_windows_initial_research_backup_complete_workflow(tmp_path: Path) -> None:
+    research = tmp_path / "operator sources with spaces" / "research only.duckdb"
+    production = tmp_path / "operator sources with spaces" / "production.duckdb"
+    backups = tmp_path / "managed backups with spaces"
+    research.parent.mkdir()
+    provider_shaped_research_database(research)
+    database_with_vintage(production, "PRODUCTION")
+    research_before = research.read_bytes()
+    production_before = production.read_bytes()
+
+    result = create_initial_research_backup(
+        research, production, backups, authorized=True
+    )
+
+    verification = verify_backup(result, profile=BackupProfile.RESEARCH)
+    assert verification.sha256 == backup_module.hashlib.sha256(result.read_bytes()).hexdigest()
+    assert verification.byte_count == len(result.read_bytes())
+    assert backup_status(backups) == {
+        "status": "validated",
+        "validated_count": 1,
+        "latest_at": backup_status(backups)["latest_at"],
+        "sha256": verification.sha256,
+        "byte_count": verification.byte_count,
+        "profile": "research",
+    }
+    with pytest.raises(FileExistsError):
+        create_initial_research_backup(research, production, backups, authorized=True)
+    assert research.read_bytes() == research_before
+    assert production.read_bytes() == production_before
+    assert list(backups.glob(".*")) == []
 
 
 def test_post_publication_failure_removes_only_managed_artifact_and_temporary_files(
@@ -208,6 +244,42 @@ def test_file_permission_failure_is_not_treated_as_windows_directory_limitation(
         create_backup(source, directory)
 
     assert list(directory.iterdir()) == []
+
+
+@pytest.mark.parametrize("failing_flush", [1, 2])
+def test_windows_bad_descriptor_is_propagated_closed_and_cleaned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing_flush: int
+) -> None:
+    source = tmp_path / "research.duckdb"
+    directory = tmp_path / "backups"
+    provider_shaped_research_database(source)
+    directory.mkdir()
+    quarantined = directory / "verified orphan.quarantine"
+    quarantined.write_bytes(b"preserve independently verified backup")
+    real_close = backup_module.os.close
+    real_fsync = backup_module.os.fsync
+    flushed: list[int] = []
+    closed: list[int] = []
+
+    def failing_fsync(descriptor: int) -> None:
+        flushed.append(descriptor)
+        if len(flushed) == failing_flush:
+            raise OSError(9, "Bad file descriptor")
+        real_fsync(descriptor)
+
+    def recording_close(descriptor: int) -> None:
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(backup_module, "_IS_WINDOWS", True)
+    monkeypatch.setattr(backup_module.os, "fsync", failing_fsync)
+    monkeypatch.setattr(backup_module.os, "close", recording_close)
+
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        create_backup(source, directory, profile=BackupProfile.RESEARCH)
+
+    assert flushed[-1] in closed
+    assert list(directory.iterdir()) == [quarantined]
 
 
 def test_failed_backup_blocks_monthly_mutation(tmp_path: Path, monkeypatch) -> None:
