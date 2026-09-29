@@ -62,7 +62,7 @@ app = FastAPI(title=settings.app_name, version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True,
                    allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["*"])
 
-PUBLIC_API_PATHS = {"/api/v1/health"}
+PUBLIC_API_PATHS = {"/api/v1/health", "/api/v1/ready"}
 PRIVATE_DOCUMENTATION_PATHS = {"/docs", "/openapi.json", "/redoc"}
 
 
@@ -151,6 +151,24 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok", service=settings.app_name, environment=settings.environment)
 
 
+@app.get("/api/v1/ready")
+def ready() -> JSONResponse:
+    """Bounded filesystem readiness: never opens, reads, or hashes a database."""
+    research = settings.research_database_path.expanduser().resolve()
+    production = settings.database_path.expanduser().resolve()
+    volume = (settings.persistent_volume_path or research.parent).expanduser().resolve()
+    distinct = research != production
+    volume_present = volume.is_dir()
+    initialized = research.is_file()
+    ready_now = distinct and volume_present and initialized
+    state = "ready" if ready_now else "not_initialized" if not initialized else "not_ready"
+    return JSONResponse(status_code=200 if ready_now else 503, content={
+        "status": state, "configuration_valid": True, "paths_distinct": distinct,
+        "volume_mounted": volume_present, "research_database_exists": initialized,
+        "provider_requests": False,
+    })
+
+
 @app.get("/api/v1/operations/health")
 def operations_health() -> dict:
     return research_health(settings.research_database_path, settings.database_path,
@@ -191,6 +209,13 @@ def operations_summary() -> dict:
                              scheduler_enabled=settings.scheduler_enabled)
     backup = backup_status(settings.backup_path,
                            configured="backup_path" in settings.model_fields_set)
+    if not settings.research_database_path.is_file():
+        return {"label": "STAGING / RESEARCH ONLY", "overall": "not_initialized",
+                "api_available": True, "research_database_exists": False,
+                "scheduler_enabled": False, "production_publishing_available": False,
+                "backup": backup, "counts": "not_initialized",
+                "readiness": "not_initialized", "scoring": "not_initialized",
+                "recent_operations": []}
     coverage = _research_ingestion().coverage()
     history: list[dict] = []
     if settings.research_database_path.is_file():

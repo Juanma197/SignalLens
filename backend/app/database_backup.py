@@ -222,12 +222,19 @@ def create_initial_research_backup(
     )
 
 
-def restore_plan(source: Path, destination: Path) -> dict[str, object]:
+def restore_plan(source: Path, destination: Path, *, production_database_path: Path | None = None,
+                 profile: BackupProfile = BackupProfile.RESEARCH) -> dict[str, object]:
     """Read-only verification and plan. Deliberately performs no restore."""
-    verified = verify_backup(source)
+    source_resolved = source.expanduser().resolve()
     target = destination.expanduser().resolve()
+    if production_database_path is not None:
+        production = production_database_path.expanduser().resolve()
+        if source_resolved == production or target == production:
+            raise ValueError("production database cannot be a restore source or destination")
+    verified = verify_backup(source_resolved, profile=profile)
     return {"status": "verified", "sha256": verified.sha256,
-            "required_tables": sorted(PROFILE_REQUIRED_TABLES[BackupProfile.PRODUCTION]),
+            "byte_count": verified.byte_count, "profile": verified.profile.value,
+            "required_tables": sorted(PROFILE_REQUIRED_TABLES[profile]),
             "destination_exists": target.exists(), "automatic_restore": False}
 
 
@@ -255,33 +262,43 @@ def backup_status(directory: Path | None, *, configured: bool = True,
             "profile": profile.value}
 
 
-def restore_backup(source: Path, destination: Path) -> Path:
+def restore_backup(source: Path, destination: Path, *, authorized: bool = False,
+                   expected_sha256: str | None = None, expected_byte_count: int | None = None,
+                   production_database_path: Path | None = None,
+                   profile: BackupProfile = BackupProfile.PRODUCTION) -> Path:
     """Restore into an absent path; never overwrite a live database."""
-    verified = verify_backup(source)
+    if profile is BackupProfile.RESEARCH and not authorized:
+        raise PermissionError("explicit restore authorization is required")
+    source = source.expanduser().resolve()
     destination = destination.expanduser().resolve()
+    if production_database_path is not None:
+        production = production_database_path.expanduser().resolve()
+        if source == production or destination == production:
+            raise ValueError("production database cannot be a restore source or destination")
     if destination.exists():
-        raise FileExistsError(f"Restore destination already exists: {destination}")
+        raise FileExistsError("restore destination already exists; no files were changed")
+    verified = verify_backup(source, profile=profile)
+    if profile is BackupProfile.RESEARCH and (expected_sha256 is None or expected_byte_count is None):
+        raise ValueError("expected SHA-256 and byte count are required")
+    if expected_sha256 is not None and expected_byte_count is not None and (verified.sha256.lower() != expected_sha256.lower() or verified.byte_count != expected_byte_count):
+        raise ValueError("uploaded artifact does not match expected SHA-256 and byte count")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.restore")
-    export_directory = destination.with_name(f".{destination.name}.{uuid4().hex}.export")
-    connection = duckdb.connect(str(verified.path), read_only=True)
     try:
-        connection.execute(f"EXPORT DATABASE {_sql_string(str(export_directory))}")
-    finally:
-        connection.close()
-    try:
-        connection = duckdb.connect(str(temporary))
-        try:
-            connection.execute(f"IMPORT DATABASE {_sql_string(str(export_directory))}")
-        finally:
-            connection.close()
-        verify_backup(temporary)
+        # The input is an immutable, application-created backup which has just
+        # been opened read-only and validated; it is not a live DuckDB file.
+        shutil.copyfile(verified.path, temporary)
+        temporary_verification = verify_backup(temporary, profile=profile)
+        if (temporary_verification.sha256 != verified.sha256 or
+                temporary_verification.byte_count != verified.byte_count):
+            raise ValueError("restored artifact does not match validated source")
+        _fsync_file(temporary)
         os.replace(temporary, destination)
+        _fsync_file(destination)
+        _fsync_parent_directory(destination.parent)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
-    finally:
-        shutil.rmtree(export_directory, ignore_errors=True)
     return destination
 
 
@@ -306,9 +323,13 @@ def main() -> None:
     verify = subparsers.add_parser("verify", help="verify a backup read-only")
     verify.add_argument("backup", type=Path)
     verify.add_argument("--profile", choices=[item.value for item in BackupProfile], required=True)
-    restore = subparsers.add_parser("restore", help="restore into a path which does not exist")
+    plan = subparsers.add_parser("restore-plan", help="verify and print a read-only research restore plan")
+    plan.add_argument("backup", type=Path)
+    restore = subparsers.add_parser("restore", help="explicitly restore research data into an absent path")
     restore.add_argument("backup", type=Path)
-    restore.add_argument("destination", type=Path)
+    restore.add_argument("--authorize", required=True)
+    restore.add_argument("--expected-sha256", required=True)
+    restore.add_argument("--expected-byte-count", type=int, required=True)
     args = parser.parse_args()
     settings = get_settings()
     if args.command == "create":
@@ -337,9 +358,17 @@ def main() -> None:
         print(json.dumps({"status": "validated", "backup": str(result.path),
                           "profile": result.profile.value, "sha256": result.sha256,
                           "byte_count": result.byte_count, "tables": sorted(result.tables)}))
+    elif args.command == "restore-plan":
+        result = restore_plan(args.backup, settings.research_database_path,
+                              production_database_path=settings.database_path)
+        print(json.dumps(result))
     else:
-        result = restore_backup(args.backup, args.destination)
-        print(json.dumps({"status": "restored", "database": str(result)}))
+        if args.authorize != "RESTORE VALIDATED RESEARCH BACKUP":
+            parser.error("explicit authorization phrase is required")
+        result = restore_backup(args.backup, settings.research_database_path, authorized=True,
+            expected_sha256=args.expected_sha256, expected_byte_count=args.expected_byte_count,
+            production_database_path=settings.database_path, profile=BackupProfile.RESEARCH)
+        print(json.dumps({"status": "restored", "profile": "research"}))
 
 
 if __name__ == "__main__":
