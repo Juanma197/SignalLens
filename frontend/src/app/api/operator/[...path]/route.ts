@@ -12,7 +12,8 @@ async function forward(request: NextRequest, context: {params: Promise<{path: st
   if (operationToken) headers["X-SignalLens-Operation-Authorization"] = operationToken;
   try {
     const response = await fetch(target, {method: request.method, headers,
-      body: request.method === "GET" ? undefined : await request.text(), cache: "no-store"});
+      body: ["GET", "DELETE"].includes(request.method) ? undefined : await request.text(), cache: "no-store",
+      signal: AbortSignal.timeout(15000)});
     return new NextResponse(await response.text(), {status: response.status,
       headers: {"Content-Type": "application/json", "Cache-Control": "no-store"}});
   } catch {
@@ -23,3 +24,4 @@ async function forward(request: NextRequest, context: {params: Promise<{path: st
 
 export const GET = forward;
 export const POST = forward;
+export const DELETE = forward;

@@ -1,87 +1,135 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import Link from "next/link";
 
 const API = "/api/operator";
 const LABEL = "RESEARCH ONLY — NOT INVESTMENT ADVICE";
+const REGIONS = ["US", "LSE", "TO", "XETRA", "PA"];
 type Result = Record<string, unknown>;
+type Section = {state: "idle"|"loading"|"success"|"error"; data?: Result; error?: Result};
+const idle: Section = {state: "idle"};
+
+function parseSessions(text: string): Record<string, string> | null {
+  const entries = text.split(",").map(value => value.trim());
+  if (entries.length !== REGIONS.length) return null;
+  const result: Record<string, string> = {};
+  for (const entry of entries) {
+    const match = /^(US|LSE|TO|XETRA|PA)=(\d{4}-\d{2}-\d{2})$/.exec(entry);
+    if (!match || result[match[1]] || Number.isNaN(Date.parse(`${match[2]}T00:00:00Z`))) return null;
+    result[match[1]] = match[2];
+  }
+  return REGIONS.every(region => result[region]) ? result : null;
+}
+
+async function api(path: string, options: RequestInit = {}, timeout = 8000): Promise<Result> {
+  try {
+    const response = await fetch(`${API}${path}`, {...options, cache: "no-store", signal: AbortSignal.timeout(timeout)});
+    const value = await response.json();
+    if (!response.ok) throw value.detail ?? {code: "request_failed", message: "The request failed safely."};
+    return value;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError")
+      throw {code: "request_timeout", message: "The operator request reached its time limit."};
+    if (typeof error === "object" && error && "code" in error) throw error;
+    throw {code: "service_unavailable", message: "The operator API is unavailable."};
+  }
+}
+
+function Status({section, retry}: {section: Section; retry: () => void}) {
+  return <div className="section-status" data-state={section.state}>
+    <strong>{section.state}</strong>
+    {section.state === "error" && <><pre>{JSON.stringify(section.error, null, 2)}</pre><button onClick={retry}>Retry</button></>}
+    {section.state === "success" && <pre>{JSON.stringify(section.data, null, 2)}</pre>}
+  </div>;
+}
 
 export default function OperationsPage() {
-  const [status, setStatus] = useState<Result | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<Result | null>(null);
-  const [confirmation, setConfirmation] = useState("");
-  const [authorization, setAuthorization] = useState("");
+  const [health, setHealth] = useState<Section>(idle);
+  const [coverage, setCoverage] = useState<Section>(idle);
+  const [shadow, setShadow] = useState<Section>(idle);
+  const [readiness, setReadiness] = useState<Section>(idle);
+  const [scoring, setScoring] = useState<Section>(idle);
+  const [writeResult, setWriteResult] = useState<Section>(idle);
   const [decisionAt, setDecisionAt] = useState("");
   const [sessions, setSessions] = useState("");
   const [fxDate, setFxDate] = useState("");
+  const [authorization, setAuthorization] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [approvedPlan, setApprovedPlan] = useState<Result | null>(null);
 
-  async function request(path: string, method = "GET", body?: Result) {
-    setBusy(true); setResult(null);
+  const load = useCallback(async (path: string, setter: Dispatch<SetStateAction<Section>>) => {
+    setter(previous => ({...previous, state: "loading"}));
+    try { setter({state: "success", data: await api(path)}); }
+    catch (error) { setter(previous => ({...previous, state: "error", error: error as Result})); }
+  }, []);
+  useEffect(() => {
+    load("/health", setHealth); load("/coverage", setCoverage); load("/shadow/status", setShadow);
+    return () => { setAuthorization(""); setConfirmation(""); setSessions(""); };
+  }, [load]);
+
+  async function assessment(kind: "model-readiness"|"research-scoring", setter: (value: Section) => void) {
+    setter({state: "loading"});
     try {
-      const response = await fetch(`${API}${path.replace("/api/v1/operations", "")}`, {
-        method, headers: {"Content-Type": "application/json",
-          ...(authorization ? {"X-SignalLens-Operation-Authorization": authorization} : {})},
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      const value = await response.json();
-      setResult(response.ok ? value : {status: "failed", error: value.detail ?? {code: "request_failed"}});
-    } catch { setResult({status: "failed", error: {code: "service_unavailable", message: "The operator API is unavailable."}}); }
-    finally { setBusy(false); }
+      let job = await api(`/assessments/${kind}?decision_at=${encodeURIComponent(decisionAt)}`, {method: "POST"});
+      const deadline = Date.now() + 125000;
+      while (["queued", "running"].includes(String(job.state)) && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 750));
+        job = await api(`/assessments/jobs/${job.job_id}`, {}, 5000);
+      }
+      if (job.state !== "success") throw (job.error ?? {code: "assessment_timeout", message: "Assessment did not complete."});
+      setter({state: "success", data: job.result as Result});
+    } catch (error) { setter({state: "error", error: error as Result}); }
   }
 
-  useEffect(() => { fetch(`${API}/health`).then(r => r.json()).then(setStatus)
-    .catch(() => setStatus({status: "unavailable"})); }, []);
-  const explicitSessions = Object.fromEntries(sessions.split(",").map(x => x.trim()).filter(Boolean)
-    .map(x => x.split("=").map(y => y.trim())).filter(x => x.length === 2));
-  const payload = {decision_at: decisionAt, confirmation,
-    expected_session_dates: explicitSessions, latest_required_fx_date: fxDate || null};
-  const isolated = status?.database_isolation_confirmed === true;
-  const monthReady = (result?.month_end_readiness as {confirmed?: boolean} | undefined)?.confirmed === true;
-  const summary = (status?.summary ?? {}) as Record<string, unknown>;
+  function clearSensitive() { setAuthorization(""); setConfirmation(""); setSessions(""); }
+  async function plan() {
+    const parsed = parseSessions(sessions);
+    if (!parsed) { setWriteResult({state: "error", error: {code: "invalid_explicit_sessions", message: "Provide exactly US, LSE, TO, XETRA and PA dates."}}); clearSensitive(); return; }
+    const payload = {decision_at: decisionAt, confirmation: "", expected_session_dates: parsed, latest_required_fx_date: fxDate || null};
+    setWriteResult({state: "loading"});
+    try { const result = await api("/shadow/plan", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)}, 30000);
+      setApprovedPlan({...payload, plan_id: result.plan_id}); setWriteResult({state: "success", data: result});
+    } catch (error) { setApprovedPlan(null); setWriteResult({state: "error", error: error as Result}); }
+    finally { clearSensitive(); }
+  }
+  async function createShadow() {
+    if (!approvedPlan || confirmation !== "CREATE RESEARCH SHADOW" || !authorization) return;
+    setWriteResult({state: "loading"});
+    try { setWriteResult({state: "success", data: await api("/shadow/create", {method: "POST", headers: {"Content-Type": "application/json", "X-SignalLens-Operation-Authorization": authorization}, body: JSON.stringify({...approvedPlan, confirmation})}, 30000)}); setApprovedPlan(null); }
+    catch (error) { setWriteResult({state: "error", error: error as Result}); }
+    finally { clearSensitive(); }
+  }
+  const isolated = health.data?.database_isolation_confirmed === true;
 
   return <main className="operations">
     <nav><span className="mark">SL</span><strong>Research operations</strong><Link href="/">Research view</Link></nav>
-    <section className="hero compact"><p className="eyebrow">{LABEL}</p><h1>Operate safely.<br/><span>Fail closed.</span></h1>
-      <p className="lede">Read-only diagnostics, bounded planning, and deliberately authorized research writes. Proposed and shadow securities are never recommendations.</p></section>
+    <section className="hero compact"><p className="eyebrow">{LABEL}</p><h1>Operate safely.<br/><span>Fail closed.</span></h1></section>
     <section className="ops-grid">
-      <div className="panel ops-card"><h2>System status</h2>
-        <dl><dt>Research database</dt><dd>{status?.research_database_available ? "Available" : "Unavailable"}</dd>
-          <dt>Database isolation</dt><dd>{isolated ? "Confirmed" : "Not confirmed"}</dd>
-          <dt>Production publishing</dt><dd>Unavailable</dd>
-          <dt>Latest catalogue retrieval</dt><dd>{String(summary.latest_catalogue_retrieval ?? "Unavailable")}</dd>
-          <dt>Price / FX freshness</dt><dd>{summary.price_freshness ? "Reported below" : "Unavailable"} / {summary.fx_freshness ? "Reported below" : "Unavailable"}</dd>
-          <dt>Selected / ready / withheld / failed</dt><dd>{[summary.selected_count, summary.model_ready_count, summary.withheld_count, summary.permanently_failed_count].map(x => String(x ?? "—")).join(" / ")}</dd>
-          <dt>Latest ingestion / refresh</dt><dd>{String(summary.latest_ingestion_result ?? "Unavailable")}</dd>
-          <dt>Shadow vintage status</dt><dd>{String(summary.shadow_vintage_count ?? 0)} vintages</dd>
-          <dt>Strategy version</dt><dd>{String(summary.strategy_version ?? "No vintage")}</dd>
-          <dt>Configuration hash</dt><dd>{String(summary.configuration_hash ?? "No vintage")}</dd>
-          <dt>Evidence gate state</dt><dd>{summary.evidence_gates ? "Reported below" : "Unavailable"}</dd>
-          <dt>Upcoming maturity</dt><dd>126 / 252 explicit sessions</dd></dl>
-        <button disabled={busy} onClick={() => request("/api/v1/operations/health")}>Refresh status</button>
+      <div className="panel ops-card"><h2>Process health</h2><Status section={health} retry={() => load("/health", setHealth)}/></div>
+      <div className="panel ops-card"><h2>Coverage</h2><Status section={coverage} retry={() => load("/coverage", setCoverage)}/></div>
+      <div className="panel ops-card"><h2>Shadow status</h2><Status section={shadow} retry={() => load("/shadow/status", setShadow)}/></div>
+      <div className="panel ops-card"><h2>Long-running assessments</h2>
+        <label>Decision time (UTC)<input name="ops_decision_clock" autoComplete="off" type="datetime-local" value={decisionAt} onChange={e => setDecisionAt(e.target.value ? `${e.target.value}:00Z` : "")}/></label>
+        <button disabled={!decisionAt || readiness.state === "loading"} onClick={() => assessment("model-readiness", setReadiness)}>Model readiness</button>
+        <Status section={readiness} retry={() => assessment("model-readiness", setReadiness)}/>
+        <button disabled={!decisionAt || scoring.state === "loading"} onClick={() => assessment("research-scoring", setScoring)}>Research scoring</button>
+        <Status section={scoring} retry={() => assessment("research-scoring", setScoring)}/>
       </div>
-      <div className="panel ops-card"><h2>Read-only checks</h2><p>Fingerprint-protected; writes neither database.</p>
-        <label>Decision time (UTC)<input type="datetime-local" value={decisionAt} onChange={e => setDecisionAt(e.target.value ? `${e.target.value}:00Z` : "")}/></label>
-        <div className="button-row"><button disabled={busy || !decisionAt} onClick={() => request(`/api/v1/operations/model-readiness?decision_at=${encodeURIComponent(decisionAt)}`)}>Model readiness</button>
-          <button disabled={busy || !decisionAt} onClick={() => request(`/api/v1/operations/research-scoring?decision_at=${encodeURIComponent(decisionAt)}`)}>Evidence gates</button></div>
-      </div>
-      <div className="panel ops-card"><h2>Month-end shadow plan</h2><p>Expected requests: 0. Target: research database. Write: no.</p>
-        <label>Explicit sessions (REGION=YYYY-MM-DD, …)<input value={sessions} onChange={e => setSessions(e.target.value)} placeholder="US=2026-10-30,LSE=2026-10-30"/></label>
-        <label>Required FX date<input type="date" value={fxDate} onChange={e => setFxDate(e.target.value)}/></label>
-        <button disabled={busy || !decisionAt || !isolated} onClick={() => request("/api/v1/operations/shadow/plan", "POST", payload)}>Plan (read only)</button>
+      <div className="panel ops-card"><h2>Month-end shadow plan</h2>
+        <label>Explicit sessions<input name="ops_region_calendar" autoComplete="off" data-lpignore="true" value={sessions} onChange={e => setSessions(e.target.value)} placeholder="US=2026-09-30,LSE=2026-09-30,TO=2026-09-30,XETRA=2026-09-30,PA=2026-09-30"/></label>
+        <label>Required FX date<input name="ops_fx_calendar" autoComplete="off" type="date" value={fxDate} onChange={e => setFxDate(e.target.value)}/></label>
+        <button disabled={!decisionAt || !isolated || !parseSessions(sessions)} onClick={plan}>Plan (read only)</button>
       </div>
       <div className="panel ops-card danger"><h2>Create research shadow</h2>
-        <p>Operation: persist full internal scores transactionally. Target: research database only. Production publishing: unavailable. Strategy version is fixed by the plan.</p>
-        <label>Separate authorization<input type="password" autoComplete="off" value={authorization} onChange={e => setAuthorization(e.target.value)}/></label>
-        <label>Type CREATE RESEARCH SHADOW<input value={confirmation} onChange={e => setConfirmation(e.target.value)}/></label>
-        <button disabled={busy || !isolated || !monthReady || confirmation !== "CREATE RESEARCH SHADOW" || !authorization}
-          onClick={() => request("/api/v1/operations/shadow/create", "POST", payload)}>Create shadow vintage</button>
-        {!monthReady && <small>Disabled until an immediately preceding plan confirms explicit month-end price and FX readiness.</small>}
+        <label>Separate authorization<input name="ops_deliberate_key" type="password" autoComplete="new-password" data-lpignore="true" value={authorization} onChange={e => setAuthorization(e.target.value)}/></label>
+        <label>Type CREATE RESEARCH SHADOW<input name="ops_deliberate_phrase" autoComplete="off" data-lpignore="true" value={confirmation} onChange={e => setConfirmation(e.target.value)}/></label>
+        <button disabled={!isolated || !approvedPlan || confirmation !== "CREATE RESEARCH SHADOW" || !authorization} onClick={createShadow}>Create shadow vintage</button>
+        {!approvedPlan && <small>Disabled until an immediately preceding plan succeeds.</small>}
       </div>
     </section>
-    <section className="panel result"><header><div><p className="eyebrow">STRUCTURED RESULT</p><h2>{busy ? "Operation in progress…" : "Latest operation"}</h2></div></header>
-      <pre aria-live="polite">{JSON.stringify(result ?? status ?? {status: "loading"}, null, 2)}</pre></section>
-    <footer>{LABEL}. Current catalogue membership is not survivorship-free. Fundamentals are unavailable under the current EODHD entitlement.</footer>
+    <section className="panel result"><h2>Latest write operation</h2><Status section={writeResult} retry={plan}/></section>
+    <footer>{LABEL}. Production publishing remains unavailable.</footer>
   </main>;
 }
