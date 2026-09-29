@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import shutil
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ def _sql_string(value: str) -> str:
 class BackupVerification:
     path: Path
     tables: frozenset[str]
+    sha256: str
 
 
 def verify_backup(path: Path) -> BackupVerification:
@@ -50,7 +52,7 @@ def verify_backup(path: Path) -> BackupVerification:
             connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()
     finally:
         connection.close()
-    return BackupVerification(path=path, tables=tables)
+    return BackupVerification(path=path, tables=tables, sha256=hashlib.sha256(path.read_bytes()).hexdigest())
 
 
 def validated_backups(directory: Path) -> list[Path]:
@@ -79,11 +81,14 @@ def create_backup(
     *,
     retention_count: int = 3,
     now: datetime | None = None,
+    production_database_path: Path | None = None,
 ) -> Path:
     """Create, validate, atomically publish, and prune a DuckDB backup."""
     if retention_count < 1:
         raise ValueError("retention_count must be at least one")
     source = database_path.expanduser().resolve()
+    if production_database_path is not None and source == production_database_path.expanduser().resolve():
+        raise ValueError("production database backup is prohibited by research backup workflow")
     if not source.is_file():
         raise FileNotFoundError(f"Live database does not exist: {source}")
     destination_dir = backup_directory.expanduser().resolve()
@@ -125,6 +130,26 @@ def create_backup(
     for stale in validated_backups(destination_dir)[retention_count:]:
         stale.unlink()
     return final
+
+
+def restore_plan(source: Path, destination: Path) -> dict[str, object]:
+    """Read-only verification and plan. Deliberately performs no restore."""
+    verified = verify_backup(source)
+    target = destination.expanduser().resolve()
+    return {"status": "verified", "sha256": verified.sha256, "required_tables": sorted(REQUIRED_TABLES),
+            "destination_exists": target.exists(), "automatic_restore": False}
+
+
+def backup_status(directory: Path) -> dict[str, object]:
+    """Bounded status without disclosing filesystem paths."""
+    backups = validated_backups(directory)
+    if not backups:
+        return {"status": "missing", "validated_count": 0, "latest_at": None}
+    latest = backups[0]
+    verification = verify_backup(latest)
+    return {"status": "healthy", "validated_count": min(len(backups), 100),
+            "latest_at": datetime.fromtimestamp(latest.stat().st_mtime, timezone.utc).isoformat(),
+            "sha256": verification.sha256}
 
 
 def restore_backup(source: Path, destination: Path) -> Path:

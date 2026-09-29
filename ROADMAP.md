@@ -306,3 +306,14 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Fail closed on malformed five-region sessions, autofill and missing preceding plans.
 - [x] Detect unrelated occupied ports and bound backend/frontend startup readiness.
 - [ ] Complete the safe local operator verification after merge; no live success is claimed.
+
+## Milestone 21 — Autonomous research operations and deployment readiness
+
+- [x] Persist only sanitized, bounded operation lifecycle records and recover interrupted work.
+- [x] Add deterministic fail-closed research stages without automatic shadow creation or publishing.
+- [x] Define explicit UTC schedules, retry/timeout/budget/idempotency controls and missed-run recovery.
+- [x] Add atomic SHA-256-verified research backups, retention, restore planning and status.
+- [x] Add bounded provider-neutral notifications and an offline sink.
+- [x] Make the bounded operator summary primary and keep diagnostics explicitly collapsed.
+- [x] Document separate Railway services, persistent research volume and read-only staging.
+- [ ] Deploy only after human review; deployment and September 2026 vintage creation are out of scope.

@@ -12,5 +12,6 @@ COPY app ./app
 RUN mkdir -p /data
 
 EXPOSE 8000
+STOPSIGNAL SIGTERM
 
 CMD ["sh", "-c", "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

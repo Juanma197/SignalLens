@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     shadow_authorization_token: SecretStr | None = None
     eodhd_api_token: SecretStr | None = None
     scheduler_enabled: bool = False
+    scheduler_instance_id: str = ""
+    staging_mode: bool = False
+    operations_history_limit: int = 20
 
     model_config = SettingsConfigDict(
         env_file="../.env",
@@ -37,6 +40,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
+        if self.staging_mode and self.scheduler_enabled:
+            raise ValueError("staging mode prohibits scheduler enablement")
         if self.environment.strip().lower() != "production":
             return self
         if self.api_token is None:

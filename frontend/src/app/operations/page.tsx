@@ -45,7 +45,28 @@ function Status({section, retry}: {section: Section; retry: () => void}) {
   </div>;
 }
 
+function Summary({section, retry}: {section: Section; retry: () => void}) {
+  if (section.state !== "success") return <Status section={section} retry={retry}/>;
+  const data = section.data ?? {};
+  const counts = (data.counts ?? {}) as Result;
+  const backup = (data.backup ?? {}) as Result;
+  const plan = (data.month_end_plan ?? {}) as Result;
+  const selections = Array.isArray(plan.proposed_selections) ? plan.proposed_selections.slice(0, 3) : [];
+  return <>
+    <div className="ops-grid summary-grid">
+      <div className="panel ops-card"><p className="eyebrow">System</p><h2>{String(data.overall)}</h2><p>Latest refresh: {String(data.latest_successful_refresh ?? "Not recorded")}</p></div>
+      <div className="panel ops-card"><h2>Market data</h2><p>Price: {String(data.latest_price_date ?? "Missing")}</p><p>FX: {String(data.latest_fx_date ?? "Missing")}</p></div>
+      <div className="panel ops-card"><h2>Research funnel</h2><p>{String(counts.selected ?? 0)} selected · {String(counts.model_ready ?? 0)} model-ready · {String(counts.withheld ?? 0)} withheld</p></div>
+      <div className="panel ops-card"><h2>Next operation</h2><p>{String(data.next_scheduled_operation ?? "Scheduler disabled")}</p></div>
+      <div className="panel ops-card"><h2>Backup</h2><p>{String(backup.status ?? "Unknown")}</p><p>{String(backup.latest_at ?? "No validated backup")}</p></div>
+      <div className="panel ops-card"><h2>Month-end plan</h2><p>{String(plan.state ?? "Not confirmed")}</p>{plan.state === "confirmed" && <ul>{selections.map((item, i) => <li key={i}>{String(item)}</li>)}</ul>}</div>
+    </div>
+    <details className="panel result"><summary>Diagnostic details</summary><pre>{JSON.stringify(data, null, 2)}</pre></details>
+  </>;
+}
+
 export default function OperationsPage() {
+  const [summary, setSummary] = useState<Section>(idle);
   const [health, setHealth] = useState<Section>(idle);
   const [coverage, setCoverage] = useState<Section>(idle);
   const [shadow, setShadow] = useState<Section>(idle);
@@ -65,7 +86,7 @@ export default function OperationsPage() {
     catch (error) { setter(previous => ({...previous, state: "error", error: error as Result})); }
   }, []);
   useEffect(() => {
-    load("/health", setHealth); load("/coverage", setCoverage); load("/shadow/status", setShadow);
+    load("/summary", setSummary); load("/health", setHealth); load("/coverage", setCoverage); load("/shadow/status", setShadow);
     return () => { setAuthorization(""); setConfirmation(""); setSessions(""); };
   }, [load]);
 
@@ -106,6 +127,8 @@ export default function OperationsPage() {
   return <main className="operations">
     <nav><span className="mark">SL</span><strong>Research operations</strong><Link href="/">Research view</Link></nav>
     <section className="hero compact"><p className="eyebrow">{LABEL}</p><h1>Operate safely.<br/><span>Fail closed.</span></h1></section>
+    <Summary section={summary} retry={() => load("/summary", setSummary)}/>
+    <details><summary>Advanced research operations</summary>
     <section className="ops-grid">
       <div className="panel ops-card"><h2>Process health</h2><Status section={health} retry={() => load("/health", setHealth)}/></div>
       <div className="panel ops-card"><h2>Coverage</h2><Status section={coverage} retry={() => load("/coverage", setCoverage)}/></div>
@@ -130,6 +153,7 @@ export default function OperationsPage() {
       </div>
     </section>
     <section className="panel result"><h2>Latest write operation</h2><Status section={writeResult} retry={plan}/></section>
+    </details>
     <footer>{LABEL}. Production publishing remains unavailable.</footer>
   </main>;
 }
