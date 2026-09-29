@@ -1,5 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 from hmac import compare_digest
+import time
+import uuid
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,7 +51,7 @@ from .watchlist import WatchlistRepository
 from .eodhd_ingestion import EODHDClient, EODHDIngestion, EODHDLimits
 from .model_readiness import assess_model_readiness
 from .research_scoring import assess_research_scoring
-from .operations import dashboard_status, safe_error
+from .operations import AssessmentJobs, research_health, safe_error
 from .shadow_portfolios import (create_shadow_vintage, evaluate_matured_shadows,
                                 plan_shadow_vintage, shadow_status)
 
@@ -67,6 +69,16 @@ class OperationRequest(BaseModel):
     confirmation: str = ""
     expected_session_dates: dict[str, date] = Field(default_factory=dict)
     latest_required_fx_date: date | None = None
+    plan_id: str | None = None
+
+assessment_jobs = AssessmentJobs()
+_shadow_plans: dict[str, tuple[float, OperationRequest]] = {}
+
+
+def _validate_sessions(body: OperationRequest) -> None:
+    if set(body.expected_session_dates) != {"US", "LSE", "TO", "XETRA", "PA"}:
+        raise HTTPException(422, detail={"code": "invalid_explicit_sessions",
+            "message": "Provide one valid date for each documented region: US, LSE, TO, XETRA and PA."})
 
 
 def _research_ingestion() -> EODHDIngestion:
@@ -127,7 +139,9 @@ def health() -> HealthResponse:
 
 @app.get("/api/v1/operations/health")
 def operations_health() -> dict:
-    return dashboard_status(settings.research_database_path, settings.database_path)
+    return research_health(settings.research_database_path, settings.database_path,
+                           scheduler_enabled=settings.scheduler_enabled,
+                           configured=bool(settings.app_name and settings.environment))
 
 
 @app.get("/api/v1/operations/coverage")
@@ -135,16 +149,33 @@ def operations_coverage() -> dict:
     return _redacted(lambda: _research_ingestion().coverage())
 
 
-@app.get("/api/v1/operations/model-readiness")
-def operations_model_readiness(decision_at: datetime) -> dict:
-    return _redacted(lambda: assess_model_readiness(research_db=settings.research_database_path,
-        production_db=settings.database_path, decision_at=decision_at, sample_limit=10))
+@app.post("/api/v1/operations/assessments/{kind}", status_code=202)
+def operations_start_assessment(kind: str, decision_at: datetime) -> dict:
+    if kind == "model-readiness":
+        work = lambda: assess_model_readiness(research_db=settings.research_database_path,
+            production_db=settings.database_path, decision_at=decision_at, sample_limit=10)
+    elif kind == "research-scoring":
+        work = lambda: assess_research_scoring(research_db=settings.research_database_path,
+            production_db=settings.database_path, decision_at=decision_at)
+    else:
+        raise HTTPException(404, detail=safe_error("assessment_not_found", "Assessment type is unavailable."))
+    return assessment_jobs.start(kind, work)
 
 
-@app.get("/api/v1/operations/research-scoring")
-def operations_research_scoring(decision_at: datetime) -> dict:
-    return _redacted(lambda: assess_research_scoring(research_db=settings.research_database_path,
-        production_db=settings.database_path, decision_at=decision_at))
+@app.get("/api/v1/operations/assessments/jobs/{job_id}")
+def operations_assessment_job(job_id: str) -> dict:
+    result = assessment_jobs.get(job_id)
+    if result is None:
+        raise HTTPException(404, detail=safe_error("job_not_found", "Assessment job was not found."))
+    return result
+
+
+@app.delete("/api/v1/operations/assessments/jobs/{job_id}")
+def operations_cancel_assessment(job_id: str) -> dict:
+    result = assessment_jobs.cancel(job_id)
+    if result is None:
+        raise HTTPException(404, detail=safe_error("job_not_found", "Assessment job was not found."))
+    return result
 
 
 @app.get("/api/v1/operations/incremental-refresh/plan")
@@ -165,19 +196,36 @@ def operations_refresh_execute(body: OperationRequest, request: Request) -> dict
 
 @app.post("/api/v1/operations/shadow/plan")
 def operations_shadow_plan(body: OperationRequest) -> dict:
-    return _redacted(lambda: plan_shadow_vintage(research_db=settings.research_database_path,
+    _validate_sessions(body)
+    result = _redacted(lambda: plan_shadow_vintage(research_db=settings.research_database_path,
         production_db=settings.database_path, cutoff=body.decision_at,
         expected_session_dates={k: str(v) for k, v in body.expected_session_dates.items()},
         latest_required_fx_date=str(body.latest_required_fx_date) if body.latest_required_fx_date else None))
+    if not result.get("month_end_readiness", {}).get("confirmed"):
+        return result
+    plan_id = uuid.uuid4().hex
+    _shadow_plans.clear()
+    _shadow_plans[plan_id] = (time.monotonic(), body)
+    return {**result, "plan_id": plan_id}
 
 
 @app.post("/api/v1/operations/shadow/create")
 def operations_shadow_create(body: OperationRequest, request: Request) -> dict:
+    _validate_sessions(body)
     _authorize(request, settings.shadow_authorization_token,
                "Separate research-shadow authorization is required.")
     if body.confirmation != "CREATE RESEARCH SHADOW":
         raise HTTPException(409, detail={"code": "confirmation_failed",
             "message": "Type CREATE RESEARCH SHADOW to authorize this research write."})
+    prior = _shadow_plans.pop(body.plan_id, None) if body.plan_id else None
+    same_plan = prior is not None and (
+        prior[1].decision_at == body.decision_at
+        and prior[1].expected_session_dates == body.expected_session_dates
+        and prior[1].latest_required_fx_date == body.latest_required_fx_date
+    )
+    if prior is None or time.monotonic() - prior[0] > 600 or not same_plan:
+        raise HTTPException(409, detail={"code": "preceding_plan_required",
+            "message": "A successful immediately preceding month-end plan is required."})
     if settings.environment.lower() in {"development", "test", "testing"} and body.decision_at.strftime("%Y-%m") == "2026-09":
         raise HTTPException(409, detail={"code": "protected_vintage",
             "message": "The September 2026 vintage is protected from development and test creation."})

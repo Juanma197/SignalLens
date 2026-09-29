@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import threading
+import time
 from datetime import datetime, timezone
 
 import duckdb
 import pytest
 
 from app.model_readiness import ReadinessError
-from app.operations import safe_error
+from app.operations import AssessmentJobs, research_health, safe_error
 from app.research_scheduler import SchedulerService
 from app.shadow_portfolios import create_shadow_vintage, plan_shadow_vintage
 from tests.model_readiness_fixture import create_research_fixture
@@ -73,3 +74,44 @@ def test_scheduler_disabled_idempotent_and_locked():
 def test_public_errors_are_redacted():
     error = safe_error()
     assert "path" not in str(error).lower() and "token" not in str(error).lower()
+
+
+def test_lightweight_health_never_opens_or_hashes_databases(tmp_path, monkeypatch):
+    research, production = tmp_path / "missing-research.duckdb", tmp_path / "missing-production.duckdb"
+    monkeypatch.setattr("pathlib.Path.open", lambda *args, **kwargs: pytest.fail("health opened a database"))
+    started = time.monotonic()
+    result = research_health(research, production)
+    assert time.monotonic() - started < .1
+    assert result["status"] == "available" and not result["research_database_exists"]
+    assert result["database_isolation_confirmed"]
+
+
+def test_assessment_jobs_single_flight_success_and_redacted_error():
+    gate = threading.Event()
+    jobs = AssessmentJobs(timeout_seconds=1)
+    first = jobs.start("readiness", lambda: (gate.wait(), {"ok": True})[1])
+    assert jobs.start("readiness", lambda: {"wrong": True})["job_id"] == first["job_id"]
+    gate.set()
+    for _ in range(50):
+        status = jobs.get(first["job_id"])
+        if status["state"] == "success": break
+        time.sleep(.01)
+    assert status["result"] == {"ok": True}
+    failed = jobs.start("scoring", lambda: (_ for _ in ()).throw(RuntimeError("/secret token")))
+    for _ in range(50):
+        failed_status = jobs.get(failed["job_id"])
+        if failed_status["state"] == "error": break
+        time.sleep(.01)
+    assert "/secret" not in str(failed_status) and "token" not in str(failed_status)
+
+
+def test_assessment_jobs_timeout_and_cancellation():
+    now = [0.0]
+    gate = threading.Event()
+    jobs = AssessmentJobs(timeout_seconds=2, clock=lambda: now[0])
+    timed = jobs.start("readiness", lambda: gate.wait())
+    now[0] = 3
+    assert jobs.get(timed["job_id"])["error"]["code"] == "assessment_timeout"
+    cancelled = jobs.start("scoring", lambda: gate.wait())
+    assert jobs.cancel(cancelled["job_id"])["state"] == "cancelled"
+    gate.set()

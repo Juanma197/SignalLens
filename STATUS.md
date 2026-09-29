@@ -1,6 +1,16 @@
 # SignalLens Status
 
-Last updated: 2026-09-28
+Last updated: 2026-09-29
+
+## Milestone 20 live-defect repair prepared (operator retry pending)
+
+- The merged operations health request was observed hanging because it synchronously
+  ran expensive readiness/scoring/shadow aggregation; status sections stayed unconfirmed.
+- Health is now metadata-only, status sections load independently, expensive assessments
+  use bounded background jobs, and all timeout/error output is structured and redacted.
+- Browser credential autofill and launcher port/lifecycle defects are repaired with
+  purpose-specific cleared inputs and explicit listener/readiness handling.
+- The live operator verification has **not** succeeded yet; it remains pending after merge.
 
 ## Milestone 20 — implemented locally (not deployed)
 

@@ -297,3 +297,12 @@ Each milestone must end with passing tests, a production frontend build, an upda
   mean/median/rate, confidence, stability, integrity and unchanged-version gates.
 - [ ] Accumulate genuinely prospective monthly vintages. Neither exploratory
   horizon is validated, promoted, or suitable for investment recommendations.
+
+## Milestone 20 — Operations dashboard live-defect repair
+
+- [x] Make health metadata-only without database opens, large-file hashes or assessments.
+- [x] Isolate health, coverage, shadow, readiness and scoring UI request state.
+- [x] Add bounded single-flight readiness/scoring jobs with polling, timeout and cancellation.
+- [x] Fail closed on malformed five-region sessions, autofill and missing preceding plans.
+- [x] Detect unrelated occupied ports and bound backend/frontend startup readiness.
+- [ ] Complete the safe local operator verification after merge; no live success is claimed.
