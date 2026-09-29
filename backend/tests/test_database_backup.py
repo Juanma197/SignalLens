@@ -11,7 +11,7 @@ import app.monthly_cycle as monthly_cycle
 from app.config import Settings
 from app.database_backup import (backup_status, create_backup,
                                  create_initial_research_backup, restore_backup,
-                                 verify_backup)
+                                 verify_backup, BackupProfile)
 from app.market_data import MarketDataRepository
 from app.monthly_cycle import CycleStages, run_production_monthly_cycle
 from app.prediction_store import PredictionVintageStore
@@ -38,6 +38,25 @@ def production_settings(path: Path, backups: Path, **overrides) -> Settings:
     }
     values.update(overrides)
     return Settings(**values)
+
+
+def provider_shaped_research_database(path: Path) -> None:
+    """Minimal initialized EODHD research contract, deliberately no production tables."""
+    tables = {
+        "security_master_retrievals": "retrieval_id VARCHAR",
+        "security_listings": "retrieval_id VARCHAR, qualified_symbol VARCHAR",
+        "global_price_observations": "qualified_symbol VARCHAR, trading_date DATE",
+        "global_fx_observations": "base_currency VARCHAR, observed_on DATE",
+        "global_corporate_actions": "qualified_symbol VARCHAR, ex_date DATE",
+        "global_ingestion_runs": "run_id VARCHAR, status VARCHAR",
+        "global_ingestion_failures": "run_id VARCHAR, error_code VARCHAR",
+        "eodhd_ingestion_checkpoints": "stage VARCHAR, qualified_symbol VARCHAR",
+        "eodhd_catalogue_validations": "validated_at TIMESTAMP, status VARCHAR",
+        "research_operations": "operation_id VARCHAR, state VARCHAR",
+    }
+    with duckdb.connect(str(path)) as connection:
+        for table, columns in tables.items():
+            connection.execute(f'CREATE TABLE "{table}" ({columns})')
 
 
 def test_successful_backup_is_read_only_validated(tmp_path: Path) -> None:
@@ -83,7 +102,7 @@ def test_failed_validation_never_changes_live_or_publishes_backup(
     directory = tmp_path / "backups"
 
     monkeypatch.setattr(backup_module, "verify_backup",
-                        lambda _path: (_ for _ in ()).throw(ValueError("invalid")))
+                        lambda _path, **_kwargs: (_ for _ in ()).throw(ValueError("invalid")))
     with pytest.raises(ValueError, match="invalid"):
         create_backup(source, directory)
 
@@ -189,12 +208,15 @@ def test_backup_status_distinguishes_configuration_and_validation(tmp_path: Path
     assert backup_status(None, configured=False)["status"] == "not_configured"
     assert backup_status(directory)["status"] == "missing"
     directory.mkdir()
-    with duckdb.connect(str(directory / "signallens-backup-manual.duckdb")) as connection:
+    invalid_managed = directory / "signallens-backup-manual.duckdb"
+    with duckdb.connect(str(invalid_managed)) as connection:
         connection.execute("CREATE TABLE unrelated(value INTEGER)")
     assert backup_status(directory)["status"] == "unvalidated"
+    invalid_managed.unlink()
     source = tmp_path / "research.duckdb"
-    database_with_vintage(source)
-    create_backup(source, directory)
+    provider_shaped_research_database(source)
+    create_initial_research_backup(source, tmp_path / "production.duckdb", directory,
+                                   authorized=True)
     assert backup_status(directory)["status"] == "validated"
 
 
@@ -202,7 +224,7 @@ def test_initial_research_backup_requires_authorization_and_preserves_manual_fil
     research = tmp_path / "research.duckdb"
     production = tmp_path / "production.duckdb"
     directory = tmp_path / "backups"
-    database_with_vintage(research)
+    provider_shaped_research_database(research)
     database_with_vintage(production, "PRODUCTION")
     directory.mkdir()
     manual = directory / "manual-backup.duckdb"
@@ -218,7 +240,29 @@ def test_initial_research_backup_requires_authorization_and_preserves_manual_fil
     assert manual.read_bytes() == b"operator-owned"
     assert research.read_bytes() == research_before
     assert production.read_bytes() == production_before
+    verification = verify_backup(result, profile=BackupProfile.RESEARCH)
+    assert verification.byte_count == result.stat().st_size
+    assert verification.sha256 == backup_module.hashlib.sha256(result.read_bytes()).hexdigest()
+    assert backup_status(directory)["status"] == "validated"
     with duckdb.connect(str(result), read_only=True) as connection:
-        assert connection.execute("SELECT ticker FROM prediction_records").fetchone() == ("AAA",)
+        assert "prediction_records" not in {
+            row[0] for row in connection.execute("SHOW TABLES").fetchall()
+        }
     with pytest.raises(FileExistsError):
         create_initial_research_backup(research, production, directory, authorized=True)
+
+
+def test_invalid_research_database_fails_closed_without_artifacts(tmp_path: Path) -> None:
+    research = tmp_path / "corrupt-research.duckdb"
+    production = tmp_path / "production.duckdb"
+    backups = tmp_path / "backups"
+    research.write_bytes(b"not a duckdb database")
+    database_with_vintage(production, "PRODUCTION")
+    before_research, before_production = research.read_bytes(), production.read_bytes()
+
+    with pytest.raises(duckdb.Error):
+        create_initial_research_backup(research, production, backups, authorized=True)
+
+    assert research.read_bytes() == before_research
+    assert production.read_bytes() == before_production
+    assert list(backups.iterdir()) == []

@@ -14,6 +14,7 @@ import shutil
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,7 +23,25 @@ import duckdb
 from .config import get_settings
 
 
-REQUIRED_TABLES = frozenset({"price_bars", "prediction_vintages", "prediction_records"})
+class BackupProfile(str, Enum):
+    """Non-interchangeable database contracts understood by the backup tool."""
+
+    PRODUCTION = "production"
+    RESEARCH = "research"
+
+
+PROFILE_REQUIRED_TABLES = {
+    BackupProfile.PRODUCTION: frozenset(
+        {"price_bars", "prediction_vintages", "prediction_records"}
+    ),
+    BackupProfile.RESEARCH: frozenset({
+        "security_master_retrievals", "security_listings",
+        "global_price_observations", "global_fx_observations",
+        "global_corporate_actions", "global_ingestion_runs",
+        "global_ingestion_failures", "eodhd_ingestion_checkpoints",
+        "eodhd_catalogue_validations", "research_operations",
+    }),
+}
 BACKUP_PREFIX = "signallens-backup-"
 
 
@@ -35,9 +54,11 @@ class BackupVerification:
     path: Path
     tables: frozenset[str]
     sha256: str
+    byte_count: int
+    profile: BackupProfile
 
 
-def verify_backup(path: Path) -> BackupVerification:
+def verify_backup(path: Path, *, profile: BackupProfile = BackupProfile.PRODUCTION) -> BackupVerification:
     """Open a backup read-only and prove the required application tables exist."""
     path = path.expanduser().resolve()
     if not path.is_file():
@@ -45,17 +66,20 @@ def verify_backup(path: Path) -> BackupVerification:
     connection = duckdb.connect(str(path), read_only=True)
     try:
         tables = frozenset(row[0] for row in connection.execute("SHOW TABLES").fetchall())
-        missing = sorted(REQUIRED_TABLES - tables)
+        required = PROFILE_REQUIRED_TABLES[profile]
+        missing = sorted(required - tables)
         if missing:
             raise ValueError(f"Backup is missing required tables: {', '.join(missing)}")
-        for table in sorted(REQUIRED_TABLES):
+        for table in sorted(required):
             connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()
     finally:
         connection.close()
-    return BackupVerification(path=path, tables=tables, sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    return BackupVerification(path=path, tables=tables,
+                              sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                              byte_count=path.stat().st_size, profile=profile)
 
 
-def validated_backups(directory: Path) -> list[Path]:
+def validated_backups(directory: Path, *, profile: BackupProfile = BackupProfile.PRODUCTION) -> list[Path]:
     """Return newest-first application backups which pass read-only validation."""
     directory = directory.expanduser().resolve()
     if not directory.is_dir():
@@ -68,7 +92,7 @@ def validated_backups(directory: Path) -> list[Path]:
     valid: list[Path] = []
     for candidate in candidates:
         try:
-            verify_backup(candidate)
+            verify_backup(candidate, profile=profile)
         except (OSError, duckdb.Error, ValueError):
             continue
         valid.append(candidate)
@@ -82,6 +106,7 @@ def create_backup(
     retention_count: int = 3,
     now: datetime | None = None,
     production_database_path: Path | None = None,
+    profile: BackupProfile = BackupProfile.PRODUCTION,
 ) -> Path:
     """Create, validate, atomically publish, and prune a DuckDB backup."""
     if retention_count < 1:
@@ -111,8 +136,17 @@ def create_backup(
         connection.execute(f"IMPORT DATABASE {_sql_string(str(export_directory))}")
         connection.close()
         connection = None
-        verify_backup(temporary)
+        temporary_verification = verify_backup(temporary, profile=profile)
         os.replace(temporary, final)
+        try:
+            published_verification = verify_backup(final, profile=profile)
+        except BaseException:
+            final.unlink(missing_ok=True)
+            raise
+        if (published_verification.sha256 != temporary_verification.sha256 or
+                published_verification.byte_count != temporary_verification.byte_count):
+            final.unlink(missing_ok=True)
+            raise OSError("published backup failed SHA-256 or byte-count verification")
         # Directory durability matters for the atomic rename on abrupt restart.
         directory_fd = os.open(destination_dir, os.O_RDONLY)
         try:
@@ -127,7 +161,7 @@ def create_backup(
     finally:
         shutil.rmtree(export_directory, ignore_errors=True)
 
-    for stale in validated_backups(destination_dir)[retention_count:]:
+    for stale in validated_backups(destination_dir, profile=profile)[retention_count:]:
         stale.unlink()
     return final
 
@@ -152,6 +186,7 @@ def create_initial_research_backup(
         destination,
         retention_count=retention_count,
         production_database_path=production_database_path,
+        profile=BackupProfile.RESEARCH,
     )
 
 
@@ -159,11 +194,13 @@ def restore_plan(source: Path, destination: Path) -> dict[str, object]:
     """Read-only verification and plan. Deliberately performs no restore."""
     verified = verify_backup(source)
     target = destination.expanduser().resolve()
-    return {"status": "verified", "sha256": verified.sha256, "required_tables": sorted(REQUIRED_TABLES),
+    return {"status": "verified", "sha256": verified.sha256,
+            "required_tables": sorted(PROFILE_REQUIRED_TABLES[BackupProfile.PRODUCTION]),
             "destination_exists": target.exists(), "automatic_restore": False}
 
 
-def backup_status(directory: Path | None, *, configured: bool = True) -> dict[str, object]:
+def backup_status(directory: Path | None, *, configured: bool = True,
+                  profile: BackupProfile = BackupProfile.RESEARCH) -> dict[str, object]:
     """Bounded status without disclosing filesystem paths.
 
     Only files with the application-managed prefix are evidence of a managed
@@ -174,15 +211,16 @@ def backup_status(directory: Path | None, *, configured: bool = True) -> dict[st
         return {"status": "not_configured", "validated_count": 0, "latest_at": None}
     directory = directory.expanduser().resolve()
     candidates = list(directory.glob(f"{BACKUP_PREFIX}*.duckdb")) if directory.is_dir() else []
-    backups = validated_backups(directory)
+    backups = validated_backups(directory, profile=profile)
     if not backups:
         return {"status": "unvalidated" if candidates else "missing",
                 "validated_count": 0, "latest_at": None}
     latest = backups[0]
-    verification = verify_backup(latest)
+    verification = verify_backup(latest, profile=profile)
     return {"status": "validated", "validated_count": min(len(backups), 100),
             "latest_at": datetime.fromtimestamp(latest.stat().st_mtime, timezone.utc).isoformat(),
-            "sha256": verification.sha256}
+            "sha256": verification.sha256, "byte_count": verification.byte_count,
+            "profile": profile.value}
 
 
 def restore_backup(source: Path, destination: Path) -> Path:
@@ -235,6 +273,7 @@ def main() -> None:
     )
     verify = subparsers.add_parser("verify", help="verify a backup read-only")
     verify.add_argument("backup", type=Path)
+    verify.add_argument("--profile", choices=[item.value for item in BackupProfile], required=True)
     restore = subparsers.add_parser("restore", help="restore into a path which does not exist")
     restore.add_argument("backup", type=Path)
     restore.add_argument("destination", type=Path)
@@ -262,9 +301,10 @@ def main() -> None:
         )
         print(json.dumps({"status": "validated", "backup": str(result)}))
     elif args.command == "verify":
-        result = verify_backup(args.backup)
+        result = verify_backup(args.backup, profile=BackupProfile(args.profile))
         print(json.dumps({"status": "validated", "backup": str(result.path),
-                          "tables": sorted(result.tables)}))
+                          "profile": result.profile.value, "sha256": result.sha256,
+                          "byte_count": result.byte_count, "tables": sorted(result.tables)}))
     else:
         result = restore_backup(args.backup, args.destination)
         print(json.dumps({"status": "restored", "database": str(result)}))
