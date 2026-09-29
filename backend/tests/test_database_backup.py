@@ -142,6 +142,7 @@ def test_windows_publication_skips_only_unsupported_directory_open(
     assert verify_backup(result, profile=BackupProfile.RESEARCH).path == result
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires real POSIX directory fsync")
 def test_posix_publication_fsyncs_parent_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
