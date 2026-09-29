@@ -132,6 +132,29 @@ def create_backup(
     return final
 
 
+def create_initial_research_backup(
+    research_database_path: Path,
+    production_database_path: Path,
+    backup_directory: Path,
+    *,
+    authorized: bool = False,
+    retention_count: int = 3,
+) -> Path:
+    """Create only the first managed research backup after explicit authorization."""
+    if not authorized:
+        raise PermissionError("explicit initial research backup authorization is required")
+    destination = backup_directory.expanduser().resolve()
+    existing = list(destination.glob(f"{BACKUP_PREFIX}*.duckdb")) if destination.is_dir() else []
+    if existing:
+        raise FileExistsError("a managed backup already exists; no files were changed")
+    return create_backup(
+        research_database_path,
+        destination,
+        retention_count=retention_count,
+        production_database_path=production_database_path,
+    )
+
+
 def restore_plan(source: Path, destination: Path) -> dict[str, object]:
     """Read-only verification and plan. Deliberately performs no restore."""
     verified = verify_backup(source)
@@ -140,14 +163,24 @@ def restore_plan(source: Path, destination: Path) -> dict[str, object]:
             "destination_exists": target.exists(), "automatic_restore": False}
 
 
-def backup_status(directory: Path) -> dict[str, object]:
-    """Bounded status without disclosing filesystem paths."""
+def backup_status(directory: Path | None, *, configured: bool = True) -> dict[str, object]:
+    """Bounded status without disclosing filesystem paths.
+
+    Only files with the application-managed prefix are evidence of a managed
+    backup.  Other files in the directory are deliberately neither adopted nor
+    removed.
+    """
+    if not configured or directory is None:
+        return {"status": "not_configured", "validated_count": 0, "latest_at": None}
+    directory = directory.expanduser().resolve()
+    candidates = list(directory.glob(f"{BACKUP_PREFIX}*.duckdb")) if directory.is_dir() else []
     backups = validated_backups(directory)
     if not backups:
-        return {"status": "missing", "validated_count": 0, "latest_at": None}
+        return {"status": "unvalidated" if candidates else "missing",
+                "validated_count": 0, "latest_at": None}
     latest = backups[0]
     verification = verify_backup(latest)
-    return {"status": "healthy", "validated_count": min(len(backups), 100),
+    return {"status": "validated", "validated_count": min(len(backups), 100),
             "latest_at": datetime.fromtimestamp(latest.stat().st_mtime, timezone.utc).isoformat(),
             "sha256": verification.sha256}
 
@@ -189,6 +222,17 @@ def main() -> None:
     create.add_argument("--database", type=Path)
     create.add_argument("--destination", type=Path)
     create.add_argument("--retention", type=int)
+    initial = subparsers.add_parser(
+        "create-initial",
+        help="create the first managed backup of the isolated research database",
+    )
+    initial.add_argument("--destination", type=Path)
+    initial.add_argument("--retention", type=int)
+    initial.add_argument(
+        "--authorize",
+        required=True,
+        help='must be exactly "CREATE INITIAL RESEARCH BACKUP"',
+    )
     verify = subparsers.add_parser("verify", help="verify a backup read-only")
     verify.add_argument("backup", type=Path)
     restore = subparsers.add_parser("restore", help="restore into a path which does not exist")
@@ -200,6 +244,20 @@ def main() -> None:
         result = create_backup(
             args.database or settings.database_path,
             args.destination or settings.backup_path,
+            retention_count=args.retention or settings.backup_retention_count,
+        )
+        print(json.dumps({"status": "validated", "backup": str(result)}))
+    elif args.command == "create-initial":
+        if args.authorize != "CREATE INITIAL RESEARCH BACKUP":
+            parser.error("explicit authorization phrase is required")
+        destination = args.destination or settings.backup_path
+        if destination is None:
+            parser.error("a backup destination must be configured or supplied")
+        result = create_initial_research_backup(
+            settings.research_database_path,
+            settings.database_path,
+            destination,
+            authorized=True,
             retention_count=args.retention or settings.backup_retention_count,
         )
         print(json.dumps({"status": "validated", "backup": str(result)}))

@@ -50,15 +50,16 @@ function Summary({section, retry}: {section: Section; retry: () => void}) {
   const data = section.data ?? {};
   const counts = (data.counts ?? {}) as Result;
   const backup = (data.backup ?? {}) as Result;
+  const progress = (data.security_progress ?? {}) as Result;
   const plan = (data.month_end_plan ?? {}) as Result;
   const selections = Array.isArray(plan.proposed_selections) ? plan.proposed_selections.slice(0, 3) : [];
   return <>
     <div className="ops-grid summary-grid">
-      <div className="panel ops-card"><p className="eyebrow">System</p><h2>{String(data.overall)}</h2><p>Latest refresh: {String(data.latest_successful_refresh ?? "Not recorded")}</p></div>
-      <div className="panel ops-card"><h2>Market data</h2><p>Price: {String(data.latest_price_date ?? "Missing")}</p><p>FX: {String(data.latest_fx_date ?? "Missing")}</p></div>
-      <div className="panel ops-card"><h2>Research funnel</h2><p>{String(counts.selected ?? 0)} selected · {String(counts.model_ready ?? 0)} model-ready · {String(counts.withheld ?? 0)} withheld</p></div>
+      <div className="panel ops-card"><p className="eyebrow">System</p><h2>{String(data.overall)}</h2><p>Latest refresh: {String(data.latest_successful_refresh ?? "not_recorded")}</p><p>Journal: {String(data.journal_evidence ?? "not_recorded")}</p></div>
+      <div className="panel ops-card"><h2>Market data</h2><p>Price: {String(data.latest_price_date ?? "not_recorded")}</p><p>FX: {String(data.latest_fx_date ?? "not_recorded")}</p></div>
+      <div className="panel ops-card"><h2>Research funnel</h2><p>{String(counts.selected ?? "not_recorded")} selected · {String(counts.model_ready ?? "not_assessed")} model-ready · {String(counts.withheld ?? "not_assessed")} withheld</p><p>{String(progress.completed ?? "not_recorded")} completed · {String(progress.permanently_failed ?? "not_recorded")} permanent failures · {String(progress.pending ?? "not_recorded")} pending</p></div>
       <div className="panel ops-card"><h2>Next operation</h2><p>{String(data.next_scheduled_operation ?? "Scheduler disabled")}</p></div>
-      <div className="panel ops-card"><h2>Backup</h2><p>{String(backup.status ?? "Unknown")}</p><p>{String(backup.latest_at ?? "No validated backup")}</p></div>
+      <div className="panel ops-card"><h2>Backup</h2><p>{String(backup.status ?? "not_configured")}</p><p>{String(backup.latest_at ?? "not_recorded")}</p></div>
       <div className="panel ops-card"><h2>Month-end plan</h2><p>{String(plan.state ?? "Not confirmed")}</p>{plan.state === "confirmed" && <ul>{selections.map((item, i) => <li key={i}>{String(item)}</li>)}</ul>}</div>
     </div>
     <details className="panel result"><summary>Diagnostic details</summary><pre>{JSON.stringify(data, null, 2)}</pre></details>

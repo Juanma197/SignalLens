@@ -250,7 +250,8 @@ def test_runtime_stop_is_checkpointed_and_resume_only_processes_pending(tmp_path
     coverage = EODHDIngestion(path, production, resume_client).coverage()
     assert coverage["latest_run"]["attempted"] == 4
     assert coverage["latest_run"]["request_count"] == 8
-    assert coverage["security_progress"] == {"attempted": 5, "completed": 5, "pending": 0, "actual_failed": 0}
+    assert coverage["security_progress"] == {"attempted": 5, "completed": 5, "pending": 0,
+        "actual_failed": 0, "permanently_failed": 0, "retryable_or_other_failed": 0}
     assert coverage["catalogue_selections"] and len(coverage["price_history"]) == 5
     assert production.read_bytes() == production_before
 

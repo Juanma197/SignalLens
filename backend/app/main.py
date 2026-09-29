@@ -3,6 +3,7 @@ from hmac import compare_digest
 import time
 import uuid
 
+import duckdb
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -159,7 +160,28 @@ def operations_health() -> dict:
 
 @app.get("/api/v1/operations/backups/status")
 def operations_backup_status() -> dict:
-    return _redacted(lambda: backup_status(settings.backup_path))
+    return _redacted(lambda: backup_status(
+        settings.backup_path, configured="backup_path" in settings.model_fields_set))
+
+
+def _recent_operations_read_only(limit: int) -> list[dict]:
+    """Read an existing journal without creating schema as a side effect."""
+    path = settings.research_database_path
+    if not path.is_file():
+        return []
+    with duckdb.connect(str(path), read_only=True) as connection:
+        tables = {row[0] for row in connection.execute("SHOW TABLES").fetchall()}
+        if "research_operations" not in tables:
+            return []
+        columns = ["operation_id", "operation_type", "state", "created_at", "started_at",
+                   "finished_at", "progress", "summary", "strategy_version",
+                   "configuration_version", "failure_class"]
+        rows = connection.execute(
+            "SELECT * FROM research_operations ORDER BY created_at DESC LIMIT ?",
+            [min(max(limit, 1), 20)],
+        ).fetchall()
+    return [{key: value.isoformat() if isinstance(value, datetime) else value
+             for key, value in zip(columns, row)} for row in rows]
 
 
 @app.get("/api/v1/operations/summary")
@@ -167,20 +189,40 @@ def operations_summary() -> dict:
     """Bounded operator-first summary; diagnostics remain separate endpoints."""
     health = research_health(settings.research_database_path, settings.database_path,
                              scheduler_enabled=settings.scheduler_enabled)
-    backup = backup_status(settings.backup_path)
+    backup = backup_status(settings.backup_path,
+                           configured="backup_path" in settings.model_fields_set)
+    coverage = _research_ingestion().coverage()
     history: list[dict] = []
     if settings.research_database_path.is_file():
         try:
-            history = OperationHistory(settings.research_database_path, settings.database_path).recent(
-                settings.operations_history_limit)
+            history = _recent_operations_read_only(settings.operations_history_limit)
         except Exception:
             history = []
     running = any(item["state"] in {"queued", "running"} for item in history)
-    attention = not health["database_isolation_confirmed"] or backup["status"] != "healthy"
+    price_dates = [item.get("latest_trading_date") for item in coverage.get("price_coverage", [])
+                   if item.get("latest_trading_date") is not None]
+    fx_dates = [item.get("latest_observation_date") for item in coverage.get("fx_coverage", [])
+                if item.get("latest_observation_date") is not None]
+    progress = coverage.get("security_progress") or {}
+    selected = sum(int(item.get("securities", 0))
+                   for item in coverage.get("catalogue_selections", []))
+    latest_run = coverage.get("latest_run")
+    running = running or bool(latest_run and latest_run.get("status") in {"queued", "running"})
+    attention = (not health["database_isolation_confirmed"]
+                 or backup["status"] not in {"validated", "not_configured"}
+                 or int(progress.get("permanently_failed", 0)) > 0)
     return {"label": "RESEARCH ONLY — NOT INVESTMENT ADVICE",
             "overall": "Running" if running else "Attention required" if attention else "Healthy",
-            "latest_successful_refresh": None, "latest_price_date": None, "latest_fx_date": None,
-            "counts": {"selected": 0, "model_ready": 0, "withheld": 0},
+            "latest_successful_refresh": (latest_run.get("finished_at") if latest_run and
+                latest_run.get("status") in {"completed", "completed_with_failures", "partial"} else "not_recorded"),
+            "latest_price_date": max(price_dates) if price_dates else "not_recorded",
+            "latest_fx_date": max(fx_dates) if fx_dates else "not_recorded",
+            "counts": {"selected": selected, "model_ready": "not_assessed",
+                       "withheld": "not_assessed"},
+            "security_progress": progress or "not_recorded",
+            "latest_ingestion": latest_run or "not_recorded",
+            "readiness": "not_assessed", "scoring": "not_assessed",
+            "journal_evidence": "recorded" if history else "not_recorded",
             "next_scheduled_operation": None, "backup": backup,
             "month_end_plan": {"state": "not_confirmed", "proposed_selections": []},
             "shadow_cohorts": [], "recent_operations": history[:20],

@@ -600,9 +600,17 @@ class EODHDIngestion:
                     rows = db.execute("SELECT primary_exchange,currency,COUNT(*) FROM security_listings WHERE retrieval_id=? GROUP BY 1,2 ORDER BY 1,2", [retrieval[0]]).fetchall()
                     result["catalogue_selections"] = [{"region": x[0], "currency": x[1], "securities": x[2]} for x in rows]
             if "eodhd_ingestion_checkpoints" in tables:
-                states = dict(db.execute("SELECT status,COUNT(*) FROM eodhd_ingestion_checkpoints WHERE stage='prices' GROUP BY status").fetchall())
-                result["security_progress"] = {"attempted": states.get("completed", 0) + states.get("failed", 0),
-                    "completed": states.get("completed", 0), "pending": states.get("pending", 0), "actual_failed": states.get("failed", 0)}
+                rows = db.execute("SELECT status,error_code,COUNT(*) FROM eodhd_ingestion_checkpoints WHERE stage='prices' GROUP BY 1,2").fetchall()
+                states = {(status, code): count for status, code, count in rows}
+                completed = sum(count for (status, _), count in states.items() if status == "completed")
+                failed = sum(count for (status, _), count in states.items() if status == "failed")
+                permanent = sum(count for (status, code), count in states.items()
+                                if status == "failed" and code in PERMANENT_FAILURE_CODES)
+                pending = sum(count for (status, _), count in states.items() if status == "pending")
+                result["security_progress"] = {"attempted": completed + failed,
+                    "completed": completed, "pending": pending, "actual_failed": failed,
+                    "permanently_failed": permanent,
+                    "retryable_or_other_failed": failed - permanent}
             if "global_price_observations" in tables:
                 depth = db.execute("SELECT qualified_symbol,COUNT(*),MIN(trading_date),MAX(trading_date) FROM global_price_observations GROUP BY 1 ORDER BY 1").fetchall()
                 today = datetime.now(timezone.utc).date()
