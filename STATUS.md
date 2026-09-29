@@ -13,6 +13,15 @@ Last updated: 2026-09-29
   and fundamentals remain unavailable under the current EODHD entitlement.
 - No live provider request, production publication, real investment, broker action,
   or September 2026 shadow-vintage creation occurred.
+- The operator-observed initial research backup failure is repaired with explicit,
+  non-interchangeable production/research schema profiles. The failed attempt left
+  the managed directory empty; research validation now covers the initialized EODHD
+  storage contract without requiring production prediction tables.
+- The reported research digest changed from `9811DF2F…E611DB4` to
+  `1E8A44E2…860244`. The only known intervening structural delta is empty
+  `research_operations` journal initialization. The two operator-held database
+  versions were unavailable here for a read-only physical comparison, so the hashes
+  alone neither prove that this is the sole change nor provide evidence of corruption.
 
 ## Milestone 20 live-defect repair prepared (operator retry pending)
 

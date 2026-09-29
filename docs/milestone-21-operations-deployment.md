@@ -43,11 +43,52 @@ with scheduler enablement.
 ## Backup and restore
 
 Backups are atomically published after DuckDB validation and SHA-256 calculation;
-retention defaults to three. The status endpoint is read-only and never reveals a
-path. Use `python -m app.database_backup verify BACKUP` and a restore plan first.
+the byte count and digest are rechecked after the atomic rename, and retention
+defaults to three. Production and research use explicit, non-interchangeable
+profiles. The production profile requires `price_bars`, `prediction_vintages`, and
+`prediction_records`. The research profile instead requires the initialized EODHD
+catalogue/listing, global price, FX, corporate-action, ingestion run/failure,
+checkpoint/catalogue-validation, and sanitized operation-journal tables. Shadow
+tables remain prospective and are validated as ordinary DuckDB contents when they
+exist; their absence before the first separately authorized shadow creation is not
+an error. The source is opened read-only and copied by DuckDB `EXPORT DATABASE` /
+`IMPORT DATABASE`, so the output file need not be byte-identical to the source.
+Integrity means that the imported database passes its named schema profile and the
+temporary and atomically published files have identical SHA-256 and byte count.
+
+The status endpoint applies the research profile, is read-only, and never reveals a
+path. Use `python -m app.database_backup verify BACKUP --profile research` for a
+research backup (or `--profile production` for an application backup) and a restore
+plan first. Never infer a profile from whichever tables happen to be present.
 Restore always targets an absent path and is never automatic; an operator must stop
 writers, verify the hash/tables, select a new destination, and deliberately switch
 configuration after independent review.
+
+### Operator-observed initial-backup failure (2026-09-29)
+
+The authorized `create-initial` attempt correctly left the managed-backup directory
+empty, but rejected the valid isolated research database because the shared verifier
+incorrectly demanded the three production-only tables. The repair gives
+`create-initial` and `/operations/backups/status` the explicit research profile;
+validation failures still remove export/temporary artifacts and publish nothing.
+Manual files are neither adopted nor pruned, and a second managed initial backup is
+still refused.
+
+The operator reported current SHA-256
+`1E8A44E2F07207863151D53259F62D93F12C2282CD516EB6568A80CA33860244`, versus the
+earlier read-only assessment's
+`9811DF2FFAF758C19618329780EA86C2D79F90026236923A18A9CA540E611DB4`. The operator
+database is not present in this repository/environment, so those digests alone
+cannot prove a page-level or row-level delta and no corruption conclusion is
+warranted. The exact *known structural* delta in the intervening application path
+is initialization of `research_operations`: eleven columns (`operation_id`,
+`operation_type`, `state`, `created_at`, `started_at`, `finished_at`, `progress`,
+`summary`, `strategy_version`, `configuration_version`, and `failure_class`) and no
+operation row merely from table creation. Current summary/status reads do not create
+that schema. No other legitimate operator operation is evidenced by the supplied
+hashes; confirming that the journal is the sole physical change would require a
+read-only table/schema comparison of the two operator-held versions, which was not
+available and must not be represented as completed.
 
 ## Notifications
 
