@@ -76,12 +76,22 @@ class OperationRequest(BaseModel):
 assessment_jobs: AssessmentJobs | None = None
 _shadow_plans: dict[str, tuple[float, OperationRequest]] = {}
 
+STAGING_READ_ONLY_POST_PATHS = {
+    "/api/v1/operations/assessments/model-readiness",
+    "/api/v1/operations/assessments/research-scoring",
+}
+
 
 def _assessment_jobs() -> AssessmentJobs:
     """Initialize persistence only when an operator explicitly starts/reads a job."""
     global assessment_jobs
     if assessment_jobs is None:
-        history = OperationHistory(settings.research_database_path, settings.database_path)
+        # A staging assessment must not change either protected database merely to
+        # record its own progress. Process-local state retains timeout, cancellation
+        # and single-flight behavior without broadening staging write access.
+        history = None if settings.staging_mode else OperationHistory(
+            settings.research_database_path, settings.database_path
+        )
         assessment_jobs = AssessmentJobs(history=history)
     return assessment_jobs
 
@@ -140,7 +150,11 @@ async def authenticate_private_api(request: Request, call_next):
                 content={"detail": "Invalid or missing bearer token"},
                 headers={"WWW-Authenticate": "Bearer"},
             )
-    if settings.staging_mode and request.method not in {"GET", "HEAD", "OPTIONS"}:
+    staging_read_only_assessment = (
+        request.method == "POST" and request.url.path in STAGING_READ_ONLY_POST_PATHS
+    )
+    if (settings.staging_mode and request.method not in {"GET", "HEAD", "OPTIONS"}
+            and not staging_read_only_assessment):
         return JSONResponse(status_code=409, content={"detail": {
             "code": "staging_read_only", "message": "Staging mode prohibits all writes."}})
     return await call_next(request)

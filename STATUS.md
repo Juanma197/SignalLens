@@ -1,6 +1,22 @@
 # SignalLens Status
 
-Last updated: 2026-09-29
+Last updated: 2026-09-30
+
+## Milestone 22 — Railway staging assessment repair prepared (not deployed)
+
+- Railway staging was observed healthy with database isolation, the research
+  database, and its validated backup confirmed. **Model readiness** nevertheless
+  returned `staging_read_only` because its POST start request was caught by the
+  blanket staging mutation guard; research scoring was therefore not attempted.
+- The correction permits only the two named read-only assessment start paths and
+  keeps their bounded, single-flight job state in memory in staging. All other
+  non-GET operations remain blocked, while each assessment retains before/after
+  fingerprints of both database files.
+- Post-merge verification must run both assessments through the authenticated
+  dashboard, independently compare both database files before and after, and
+  re-confirm refresh, shadow, publication, watchlist, scheduler, provider, and
+  broker/investment actions remain unavailable. No Railway access, provider call,
+  database modification, merge, or deployment occurred during this repair.
 
 ## Milestone 21 — implementation prepared (not deployed)
 

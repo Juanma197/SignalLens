@@ -46,9 +46,11 @@ TZ=UTC
 ```
 
 Railway supplies `PORT`; do not set it. An empty provider token prevents EODHD
-use. Staging rejects every non-GET API method before endpoint code runs, so
-refresh, journal-writing assessments, shadow planning/creation/evaluation,
-watchlist writes, and monthly publication are unavailable. Keep the production
+use. Staging rejects every non-GET API method before endpoint code runs except
+the two exact read-only assessment start paths. Those assessments keep job state
+in process memory and fingerprint both databases before and after; they do not
+write the operations journal. Refresh, shadow planning/creation/evaluation,
+watchlist writes, and monthly publication remain unavailable. Keep the production
 path absent and distinct; startup configuration fails closed if paths alias or
 leave `/data`. Secrets and absolute paths are never returned by health output.
 
@@ -132,9 +134,29 @@ curl -fsS -H 'Authorization: Bearer <api-token>' https://<backend-domain>/api/v1
 
 Open frontend `/operations`; it must show API available, database present,
 backup status, scheduler disabled, and publication disabled. Expensive
-assessments remain manual and, because they journal results, are blocked by the
-staging all-write guard. Restart the backend and repeat readiness plus the
+assessments remain manual and are permitted through only the exact
+model-readiness and research-scoring start paths. Their job state is deliberately
+ephemeral in staging. Restart the backend and repeat readiness plus the
 operations page checks; the mounted data and journal must remain.
+
+### Observed failure and post-merge correction check
+
+The first Railway verification found healthy staging, confirmed database
+isolation, and a present research database and validated backup. However,
+clicking **Model readiness** returned `staging_read_only` / “Staging mode
+prohibits all writes,” so research scoring was not attempted. The blanket method
+guard had classified the POST used to start an otherwise read-only in-process
+assessment as a database mutation.
+
+After this correction is merged (do not deploy from an unmerged branch), record
+the SHA-256 and byte count of both database paths, then use the authenticated
+dashboard to run **Model readiness** followed by **Research scoring**. Confirm
+both jobs complete, each response reports unchanged before/after fingerprints,
+and independent SHA-256 and byte-count checks of both files still match. Confirm
+an incremental-refresh execution, shadow-vintage creation, matured-shadow
+evaluation, monthly production cycle, and watchlist mutation each returns
+`staging_read_only`; confirm the scheduler remains disabled and no provider or
+broker request occurs. A restart may discard assessment job results by design.
 
 For a failed pre-publication restore, remove only the hidden temporary restore
 file after checking logs; source and destinations are preserved. If the atomic
