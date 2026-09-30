@@ -134,12 +134,13 @@ export default function OperationsPage() {
     <nav><span className="mark">SL</span><strong>Research operations</strong><Link href="/">Research view</Link></nav>
     <section className="hero compact"><p className="eyebrow">{LABEL}</p><h1>Operate safely.<br/><span>Fail closed.</span></h1></section>
     <Summary section={summary} retry={() => load("/summary", setSummary)}/>
-    <details><summary>Advanced research operations</summary>
+    <details><summary>Advanced research operations — read-only assessments permitted in staging</summary>
     <section className="ops-grid">
       <div className="panel ops-card"><h2>Process health</h2><Status section={health} retry={() => load("/health", setHealth)}/></div>
       <div className="panel ops-card"><h2>Coverage</h2><Status section={coverage} retry={() => load("/coverage", setCoverage)}/></div>
       <div className="panel ops-card"><h2>Shadow status</h2><Status section={shadow} retry={() => load("/shadow/status", setShadow)}/></div>
       <div className="panel ops-card"><h2>Long-running assessments</h2>
+        <p><strong>Read-only in staging.</strong> These assessments may run; they do not persist job state or modify research or production data.</p>
         <label>Decision time (UTC)<input name="ops_decision_clock" autoComplete="off" type="datetime-local" value={decisionAt} onChange={e => setDecisionAt(e.target.value ? `${e.target.value}:00Z` : "")}/></label>
         <button disabled={!decisionAt || readiness.state === "loading"} onClick={() => assessment("model-readiness", setReadiness)}>Model readiness</button>
         <Status section={readiness} retry={() => assessment("model-readiness", setReadiness)}/>
