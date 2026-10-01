@@ -1,5 +1,9 @@
 # SignalLens
 
+## Explainable company research (Milestone 32)
+
+SignalLens now provides bounded, point-in-time company briefs through the read-only CLI, authenticated research API, and `/research` dashboard. The brief separates the frozen 90% price / 10% dilution score from financial and official-SEC-event context, and never produces an investment recommendation. See the [Milestone 32 runbook](docs/milestone-32-company-research-briefs.md) for its structure, safety rules, citations, pre-vintage behavior, and exact PowerShell commands.
+
 ## Milestone 31: research-only SEC material events
 
 Official SEC submissions metadata for 8-K, 8-K/A, 6-K, and defensible 6-K/A

@@ -1,5 +1,12 @@
 # SignalLens Status
 
+## Milestone 32 — implemented
+
+- Deterministic, fingerprint-verified company and prospective-selection briefs are available as strictly read-only CLI and authenticated API operations.
+- Briefs enforce explicit point-in-time boundaries, model-ready price and dilution evidence, bounded escaped SEC metadata, contextual fundamentals, risk flags, and accession provenance.
+- The `/research` dashboard presents finance-language score cards, context, event timeline, missing data, known-at time, and the mandatory paper-research disclaimer.
+- The strategy remains frozen at 90% price and 10% dilution. No vintage, model change, provider access, deployment, publication, or recommendation was produced.
+
 ## Milestone 31 — implementation prepared; operator run not performed
 
 - Added resumable research-only SEC submissions-metadata runs, checkpoints,
