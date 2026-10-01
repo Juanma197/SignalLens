@@ -515,6 +515,13 @@ and no strategy-success claim is made.
   Passing evidence can only support a later operator review and horizon lock.
 ## Milestone 24 — Bounded live SEC fundamentals pilot (implementation complete)
 
+- [x] Corrected the observed offline `ValueError`: the first implementation
+  queried the newest universe snapshot, which returned no rows despite the
+  initialized 500-security EODHD catalogue (100 US). SEC selection now reuses
+  the model-readiness/audit active-catalogue selector; an operator-shaped
+  regression covers an empty/non-applicable snapshot and byte-identical files.
+- [x] Bundled normalization evidence is explicitly labelled as synthetic,
+  self-contained fixture evidence and never represented as live issuer evidence.
 - [x] Official SEC ticker mapping, submissions, and Company Facts endpoints only.
 - [x] Offline-by-default fixture assessment and fail-closed live authorization.
 - [x] Deterministic selection of no more than three active-catalogue US securities.

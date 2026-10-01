@@ -16,6 +16,7 @@ from typing import Any
 import duckdb
 import pandas as pd
 
+from .active_catalogue import select_active_catalogue
 from .eodhd_ingestion import PERMANENT_FAILURE_CODES, RETRYABLE_FAILURE_CODES
 from .research_observations import (
     EXPECTED_REGIONS,
@@ -137,17 +138,10 @@ def assess_model_readiness(
     try:
         with duckdb.connect(str(research_db), read_only=True) as connection:
             _validate_schema(connection, boundary)
-            retrieval = connection.execute(
-                """SELECT retrieval_id, retrieved_at FROM security_master_retrievals
-                   WHERE status='completed' AND retrieved_at<=?
-                   ORDER BY retrieved_at DESC, retrieval_id DESC LIMIT 1""", [boundary]
-            ).fetchone()
-            if retrieval is None:
+            active_catalogue = select_active_catalogue(connection, as_of=boundary)
+            if active_catalogue is None:
                 raise ReadinessError("no completed active catalogue exists at the decision boundary")
-            catalogue = _frame(connection, """SELECT security_id, qualified_symbol,
-                    UPPER(primary_exchange) AS region, UPPER(currency) AS currency,
-                    (active AND instrument_type IN ('common_stock','ordinary_share')) AS eligible
-                FROM security_listings WHERE retrieval_id=? ORDER BY qualified_symbol""", [retrieval[0]])
+            catalogue = active_catalogue.listings
             prices = _frame(connection, """SELECT qualified_symbol,trading_date,currency,open,high,low,
                     close,adjusted_close,volume,status,source,retrieved_at
                 FROM global_price_observations ORDER BY qualified_symbol,trading_date,source""")
@@ -257,7 +251,8 @@ def assess_model_readiness(
         "affected_symbols_sample_limit": sample_limit,
         "affected_symbols_sample_truncated": len(affected) > sample_limit,
         "database_fingerprints": files,
-        "active_catalogue": {"retrieval_id": retrieval[0], "retrieved_at": retrieval[1]},
+        "active_catalogue": {"retrieval_id": active_catalogue.retrieval_id,
+                             "retrieved_at": active_catalogue.retrieved_at},
         "required_regions": sorted(EXPECTED_REGIONS),
     }
     return report

@@ -19,6 +19,7 @@ from typing import Any, Callable
 import duckdb
 import httpx
 
+from .active_catalogue import select_active_catalogue
 from .global_market_data import CorporateAction, FXObservation, GlobalMarketDataRepository, PriceObservation
 from .global_universe import GlobalUniverseRepository, ListingObservation, normalized_company_name, utc_naive
 
@@ -421,9 +422,11 @@ class EODHDIngestion:
                 result = {"command": "audit", "mode": "read_only", "status": "unavailable",
                           "securities": 0, "classifications": {"unavailable": 0}, "affected": []}
             else:
-                rid = db.execute("SELECT retrieval_id FROM security_master_retrievals WHERE status='completed' ORDER BY retrieved_at DESC LIMIT 1").fetchone()
-                listings = [] if rid is None else db.execute(
-                    "SELECT qualified_symbol,primary_exchange,currency FROM security_listings WHERE retrieval_id=? ORDER BY qualified_symbol", [rid[0]]).fetchall()
+                active = select_active_catalogue(db)
+                listings = [] if active is None else [
+                    (row.qualified_symbol, row.region, row.currency)
+                    for row in active.listings.loc[active.listings["eligible"].astype(bool)].itertuples()
+                ]
                 price_stats = {}
                 duplicates = 0
                 if "global_price_observations" in tables:
