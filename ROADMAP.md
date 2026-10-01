@@ -1,5 +1,12 @@
 # SignalLens Roadmap
 
+## Milestone 30 — point-in-time company events (complete)
+
+The normalized event contract, SEC readiness assessment, offline status commands,
+source comparison, safety limits, and context-only dashboard are complete. Future
+work may probe one authorized source at a time, but only after terms, timestamps,
+version behavior, request budgets, and storage rights are explicitly approved.
+
 ## After Milestone 29
 
 Milestone 29 replaces the prospective experiment's operational fixture with an

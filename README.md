@@ -1,5 +1,18 @@
 # SignalLens
 
+## Milestone 30: point-in-time news and company events
+
+SignalLens now has provider-neutral, research-only event records, deterministic
+issuer matching/deduplication, bounded SEC 8-K readiness, and a source capability
+matrix. News remains **CONTEXT ONLY — NOT USED IN SCORE** and produces no news
+recommendation. The prospective model remains frozen at 90% price and 10%
+dilution. See the [Milestone 30 runbook](docs/milestone-30-news-events.md).
+
+```bash
+cd backend
+python -m app.news_events_cli news-events-capability --research-db /absolute/path/research.duckdb --production-db /absolute/path/production.duckdb
+```
+
 ## Milestone 29: database-backed prospective readiness
 
 The prospective US shadow now plans directly from the authoritative research

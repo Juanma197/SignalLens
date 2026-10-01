@@ -1,0 +1,14 @@
+{
+  "event_id": "fixture-1",
+  "company_id": "company-aapl",
+  "company_name": "Example Issuer",
+  "ticker": "AAPL",
+  "cik": "0000320193",
+  "category": "earnings_release",
+  "headline": "<b>Example issuer reports results</b>\u0000",
+  "summary": "Quarterly results were published. This fixture contains no copyrighted article text.",
+  "source_name": "Example regulator",
+  "source_url": "HTTPS://Example.COM/releases/1/?utm_source=test&b=2&a=1#section",
+  "published_at": "2026-09-01T13:00:00+00:00",
+  "retrieved_at": "2026-09-01T13:05:00+00:00"
+}

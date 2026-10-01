@@ -16,6 +16,12 @@ h1 span { color:#83918a; }
 .data-status span { color:var(--muted); font-size:11px; }
 .panel { background:rgba(17,26,22,.84); border:1px solid var(--line); border-radius:22px; overflow:hidden; box-shadow:0 30px 80px #0007; }
 .horizon-evidence { margin-bottom:20px; }
+.news-context-panel { margin-bottom:20px; }
+.source-table { border-top:1px solid var(--line); }
+.source-row { display:grid; grid-template-columns:1.2fr .7fr 1.35fr 1.35fr; gap:16px; padding:14px 30px; border-bottom:1px solid var(--line); color:var(--muted); font-size:12px; line-height:1.4; }
+.source-row:last-child { border-bottom:0; }
+.source-head { color:var(--ink); background:#0c1511; font-size:10px; letter-spacing:.06em; text-transform:uppercase; }
+.source-row .confirmed { color:var(--green); font-weight:700; }
 .horizon-grid { display:grid; grid-template-columns:repeat(4,1fr); border-top:1px solid var(--line); }
 .horizon-grid > div { padding:24px; border-right:1px solid var(--line); }
 .horizon-grid > div:last-child { border-right:0; }
@@ -137,6 +143,7 @@ footer { border-top:1px solid var(--line); padding:16px 30px; font-size:12px; ov
 .vintage-macro-values b { font-size:14px; }
 
 @media (max-width:760px) { .hero{padding-top:55px}.data-status{grid-template-columns:repeat(2,1fr)}.grid,.outcome-list,.macro-grid,.vintage-macro-values,.coverage-grid{grid-template-columns:1fr}.coverage-grid div,article,.outcome-row,.macro-card{border-right:0;border-bottom:1px solid var(--line)}.coverage-grid div:last-child,.outcome-row:last-child,.macro-card:last-child{border-bottom:0}.watchlist-row{grid-template-columns:1fr}.history-row{grid-template-columns:1fr;align-items:start}.history-row>div:nth-child(2){align-items:start}.history-row>div:last-child{text-align:left}.panel>header,.vintage-macro-heading{align-items:start;gap:18px;flex-direction:column} }
+@media (max-width:760px) { .source-row { grid-template-columns:1fr; gap:5px; } .source-head { display:none; } }
 
 nav a { margin-left:auto; color:var(--green); text-decoration:none; }
 .hero.compact { padding:52px 0 36px; }
