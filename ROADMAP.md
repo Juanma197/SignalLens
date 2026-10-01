@@ -1,6 +1,11 @@
 # SignalLens Roadmap
 
-## After Milestone 28
+## After Milestone 29
+
+Milestone 29 replaces the prospective experiment's operational fixture with an
+authoritative database adapter, expiring database-bound plan identifiers,
+readiness states, and safe scheduler planning. Human-authorized creation remains
+the only creation route and has not been run.
 
 1. Accumulate genuinely prospective monthly US paper vintages without changing
    version 1.0.0 or making early success claims.

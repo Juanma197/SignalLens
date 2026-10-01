@@ -1,5 +1,16 @@
 # SignalLens
 
+## Milestone 29: database-backed prospective readiness
+
+The prospective US shadow now plans directly from the authoritative research
+database. Operational planning no longer accepts a hand-authored fixture; the
+fixture command is explicitly offline/test-only. Creation still requires a fresh
+database-bound plan identifier and deliberate operator authorization, which the
+scheduler cannot supply. See the [Milestone 29 operator runbook](docs/milestone-29-database-shadow-readiness.md).
+
+**Do not run the October command until the complete October 2026 month-end US
+session, price, applicable FX, and SEC refresh data are available.**
+
 ## Milestone 28: prospective US paper research
 
 SignalLens now contains an immutable, prospective-only US hypothesis: 90% of

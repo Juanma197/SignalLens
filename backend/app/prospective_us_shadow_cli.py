@@ -3,29 +3,38 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
 from .prospective_us_shadow import (AUTHORIZATION_PHRASE, build_plan,
-    create_from_plan, status)
+    create_from_database_plan, plan_from_databases, readiness, status)
 
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="Prospective US paper shadow research")
     commands = root.add_subparsers(dest="command", required=True)
-    for name in ("plan-prospective-us-shadow", "prospective-us-shadow-status",
-                 "evaluate-prospective-us-shadows", "create-prospective-us-shadow"):
+    for name in ("plan-prospective-us-shadow-offline-fixture",
+                 "plan-prospective-us-shadow-from-db", "prospective-us-shadow-readiness",
+                 "prospective-us-shadow-status", "evaluate-prospective-us-shadows",
+                 "create-prospective-us-shadow"):
         command = commands.add_parser(name)
         command.add_argument("--research-db", type=Path, required=True)
         command.add_argument("--production-db", type=Path, required=True)
-        if name in {"plan-prospective-us-shadow", "create-prospective-us-shadow"}:
+        if name == "plan-prospective-us-shadow-offline-fixture":
             command.add_argument("--fixture", type=Path, required=True,
-                help="Offline decision-time input bundle; live providers are never called")
+                help="OFFLINE/TEST-ONLY input bundle; prohibited as an operational source")
+        if name in {"plan-prospective-us-shadow-offline-fixture",
+                    "plan-prospective-us-shadow-from-db", "prospective-us-shadow-readiness"}:
             command.add_argument("--decision-at", type=datetime.fromisoformat, required=True)
+        if name in {"plan-prospective-us-shadow-from-db", "prospective-us-shadow-readiness"}:
+            command.add_argument("--us-session-date", type=date.fromisoformat, required=True)
+            command.add_argument("--require-fx", action="store_true",
+                help="Require session-date FX only when the catalogue genuinely needs it")
         if name == "create-prospective-us-shadow":
-            command.add_argument("--plan-file", type=Path, required=True)
+            command.add_argument("--plan-identifier", required=True,
+                help="exact identifier emitted by the immediately preceding database plan")
             command.add_argument("--authorization", required=True,
                 help=f"exactly: {AUTHORIZATION_PHRASE}")
         if name == "evaluate-prospective-us-shadows":
@@ -48,13 +57,24 @@ def execute(args: argparse.Namespace, *, now: datetime | None = None) -> dict:
         result = status(research_db=args.research_db, production_db=args.production_db)
         return {**result, "command": args.command, "as_of": args.as_of.isoformat(),
                 "mode": "strictly_read_only", "outcomes_written": 0}
-    prices, dilution, readiness = _fixture(args.fixture)
-    if args.command == "plan-prospective-us-shadow":
-        return build_plan(prices, dilution, decision_at=args.decision_at, generated_at=now,
-            session_ready=readiness["complete_month_end_session"], fx_ready=readiness["fx_ready"])
-    plan = json.loads(args.plan_file.read_text(encoding="utf-8"))
-    return create_from_plan(research_db=args.research_db, production_db=args.production_db,
-        plan=plan, prices=prices, dilution=dilution, authorization=args.authorization, now=now)
+    if args.command == "plan-prospective-us-shadow-offline-fixture":
+        prices, dilution, fixture_readiness = _fixture(args.fixture)
+        result = build_plan(prices, dilution, decision_at=args.decision_at, generated_at=now,
+            session_ready=fixture_readiness["complete_month_end_session"],
+            fx_ready=fixture_readiness["fx_ready"])
+        return {**result, "command": args.command, "mode": "offline_test_only",
+                "operational_source": False}
+    if args.command == "plan-prospective-us-shadow-from-db":
+        return plan_from_databases(research_db=args.research_db, production_db=args.production_db,
+            decision_at=args.decision_at, session_date=args.us_session_date, now=now,
+            require_fx=args.require_fx)
+    if args.command == "prospective-us-shadow-readiness":
+        return readiness(research_db=args.research_db, production_db=args.production_db,
+            decision_at=args.decision_at, session_date=args.us_session_date, now=now,
+            require_fx=args.require_fx)
+    return create_from_database_plan(research_db=args.research_db,
+        production_db=args.production_db, plan_identifier=args.plan_identifier,
+        authorization=args.authorization, now=now)
 
 
 def main() -> None:
