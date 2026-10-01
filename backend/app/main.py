@@ -239,7 +239,13 @@ def operations_us_fundamentals_evidence() -> dict:
     sec = _redacted(lambda: sec_ingestion_status(
         settings.research_database_path, settings.database_path))
     families = sorted(set(FACTOR_FAMILIES.values()))
-    return {"label": "US-ONLY RESEARCH — NOT INVESTMENT ADVICE",
+    return {"label": "EXPLORATORY DIAGNOSTICS — NOT A NEW MODEL",
+        "frozen_model": "failed_at_both_126_and_252_sessions",
+        "main_detracting_families": "requires_explicit_offline_diagnostic_run",
+        "main_helping_families": "requires_explicit_offline_diagnostic_run",
+        "coverage_warning": "current_membership_not_survivorship_free",
+        "concentration_warning": "enhanced concentration approximately doubled in Milestone 26",
+        "defect_status": "no defect established; diagnostic run required",
         "sec_coverage": {key: sec.get(key) for key in (
             "selected_us_securities", "mapped", "completed", "permanently_failed",
             "pending", "retryable", "observations", "revisions", "amendments")},

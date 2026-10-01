@@ -344,3 +344,12 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Add bounded aggregate dashboard evidence and immutable read-only CLI.
 - [ ] Run on operator data only after merge and explicit operator execution.
 - [ ] Add international fundamentals only after comparable point-in-time sources exist.
+## Milestone 27 — US fundamentals attribution and failure diagnosis
+
+- [x] Preserve the frozen configuration hash and failed 126/252 headline evidence.
+- [x] Add bounded factor/family, coverage, accounting, direction, temporal and concentration attribution.
+- [x] Add multiplicity-labelled leave-one-family-out diagnostics without model selection.
+- [x] Add an immutable explicit-path CLI and aggregate dashboard warning.
+- [x] Document US-only current-membership/non-survivorship-free limitations and absent international factors.
+- [ ] Run the diagnostic against operator data only after merge and human authorization.
+- [ ] Pre-register any later hypothesis before independent evaluation; do not derive it from these comparisons.
