@@ -1,5 +1,17 @@
 # SignalLens Status
 
+## Milestone 31 — implementation prepared; operator run not performed
+
+- Added resumable research-only SEC submissions-metadata runs, checkpoints,
+  normalized event records, and structured failures using stored CIK mappings.
+- Added bounded 8-K, 8-K/A, 6-K, and 6-K/A classification with strict
+  acceptance-time and issuer-identity safeguards.
+- Planning/status are fingerprint-verified read-only operations; historical
+  submissions files are disclosed separately and never expanded automatically.
+- No live SEC request, operator/Railway access, filing body, exhibit, article,
+  ranking, candidate, score change, shadow selection, or deployment occurred.
+- The prospective strategy remains frozen at 90% price and 10% dilution.
+
 ## Milestone 30 — implemented
 
 - Provider-neutral event schema and all 15 requested categories are research-only.

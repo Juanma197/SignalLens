@@ -1,5 +1,14 @@
 # SignalLens Roadmap
 
+## Milestone 31 — Research-only SEC material-event ingestion
+
+- [x] Add dedicated run, checkpoint, normalized metadata, and failure tables.
+- [x] Require strict acceptance timestamps and durable stored CIK matches.
+- [x] Keep historical auxiliary files separately visible and opt-in.
+- [x] Add plan, ingest, status, retry, dashboard context, and offline regressions.
+- [ ] Run a one-request operator pilot only after merge, backup, and review.
+- [ ] Evaluate issuer releases or licensed news only under a later explicit scope.
+
 ## Milestone 30 — point-in-time company events (complete)
 
 The normalized event contract, SEC readiness assessment, offline status commands,

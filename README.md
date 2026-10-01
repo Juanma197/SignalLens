@@ -1,5 +1,14 @@
 # SignalLens
 
+## Milestone 31: research-only SEC material events
+
+Official SEC submissions metadata for 8-K, 8-K/A, 6-K, and defensible 6-K/A
+records can now be ingested transactionally using the existing stored CIK map.
+Acceptance time is the sole public-availability boundary; filing bodies and
+exhibits are never requested or stored. The dashboard labels this evidence
+**OFFICIAL FILING CONTEXT — NOT USED IN SCORE**. See the
+[Milestone 31 runbook](docs/milestone-31-sec-events.md).
+
 ## Milestone 30: point-in-time news and company events
 
 SignalLens now has provider-neutral, research-only event records, deterministic
