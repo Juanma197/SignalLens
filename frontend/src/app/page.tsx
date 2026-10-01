@@ -406,6 +406,23 @@ export default async function Home() {
         <footer>{companyCapability.provider} official endpoints · {companyCapability.scope} · live access: {companyCapability.live_access.replaceAll("_", " ")}</footer>
       </section>
 
+      <section className="panel news-context-panel">
+        <header><div><p className="eyebrow">POINT-IN-TIME COMPANY EVENTS</p><h2>News and event source coverage</h2></div>
+          <span className="outcome-status unavailable">CONTEXT ONLY — NOT USED IN SCORE</span></header>
+        <p className="notice warning">NO NEWS-BASED RECOMMENDATION. Historical use requires a timezone-aware publication time and retrieval time; current webpages never prove earlier availability.</p>
+        <div className="source-table" role="table" aria-label="News source capability">
+          <div className="source-row source-head" role="row"><b>Source family</b><b>Access</b><b>Historical suitability</b><b>License / storage</b></div>
+          <div className="source-row" role="row"><span>SEC regulatory filings</span><span className="confirmed">Confirmed offline</span><span>Suitable when acceptance time is retained</span><span>Public-record metadata; no articles</span></div>
+          <div className="source-row" role="row"><span>Issuer IR releases</span><span>Theoretical</span><span>Archived versions required</span><span>Site terms; metadata by default</span></div>
+          <div className="source-row" role="row"><span>Exchange / regulator services</span><span>Theoretical</span><span>Potentially strong</span><span>Redistribution may be restricted</span></div>
+          <div className="source-row" role="row"><span>Government contracts / enforcement</span><span>Theoretical</span><span>Conditional on time and entity match</span><span>Public-record terms</span></div>
+          <div className="source-row" role="row"><span>Licensed news APIs</span><span>Theoretical</span><span>Contract and timestamp audit required</span><span>Paid; storage/display restrictions</span></div>
+          <div className="source-row" role="row"><span>Open web / aggregators</span><span>Theoretical</span><span>Generally unsuitable</span><span>Copyright limits reuse</span></div>
+          <div className="source-row" role="row"><span>Yahoo Finance</span><span>Theoretical</span><span>Latest/current context only</span><span>License and timestamps unproven</span></div>
+        </div>
+        <footer>15 normalized event categories · most recent permitted metadata: unavailable until an explicit read-only status assessment · non-US coverage remains theoretical</footer>
+      </section>
+
       <section className="panel horizon-evidence">
         <header>
           <div>

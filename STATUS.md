@@ -1,5 +1,14 @@
 # SignalLens Status
 
+## Milestone 30 — implemented
+
+- Provider-neutral event schema and all 15 requested categories are research-only.
+- Publication and retrieval timestamps are mandatory, timezone-aware availability boundaries.
+- Existing SEC 8-K/8-K/A metadata can be assessed offline without rewriting SEC facts.
+- Seven source families are separated into confirmed versus theoretical access.
+- No source was probed live; no article, score, ranking, candidate, or vintage was created.
+- The frozen prospective model remains 90% price and 10% dilution.
+
 ## Milestone 29 — database-backed readiness implemented; awaiting month-end
 
 - Authoritative, fingerprinted planning now reads the catalogue, prices,
