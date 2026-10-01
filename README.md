@@ -1,5 +1,14 @@
 # SignalLens
 
+## Milestone 25 SEC research ingestion
+
+SignalLens now has a resumable, research-only point-in-time SEC fundamentals
+store for the 100-security US catalogue, plus a storage-free documentary source
+assessment for LSE, TO, XETRA and PA. It remains isolated from scoring and the
+production publisher; no ranking or candidate can be produced. Planning and
+status are read-only, while ingestion requires an exact authorization phrase and
+contact-bearing SEC User-Agent. See the [Milestone 25 runbook](docs/milestone-25-sec-ingestion.md).
+
 ## Milestone 21 autonomous research operations
 
 SignalLens now includes persistent sanitized operation history, deterministic

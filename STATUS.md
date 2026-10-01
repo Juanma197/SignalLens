@@ -1,6 +1,6 @@
 # SignalLens Status
 
-Last updated: 2026-09-30
+Last updated: 2026-10-01
 
 ## Milestone 22 — Railway staging assessment repair prepared (not deployed)
 
@@ -531,3 +531,13 @@ and no strategy-success claim is made.
 - [x] Both explicit DuckDB paths are opened read-only and SHA-256/byte immutability
   is included in the aggregate-only report.
 - [x] No observations are stored and no candidates, model changes, or rankings are produced.
+## Milestone 25 — SEC ingestion foundation (implementation complete)
+
+- Added dedicated research-only issuer, filing, normalized-fact, run,
+  checkpoint and structured-failure tables with point-in-time provenance.
+- Added read-only planning/readiness and explicitly authorized, budgeted,
+  resumable ingest/retry commands. Implementation and tests made no live calls.
+- Added offline non-US source models for LSE, TO, XETRA and PA; none is claimed
+  live-confirmed or yet approved for point-in-time backtesting.
+- SEC evidence remains isolated from scoring. Existing multi-horizon failures
+  are frozen and no ranking, candidate, shadow vintage or production write occurred.

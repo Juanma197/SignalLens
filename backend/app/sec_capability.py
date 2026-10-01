@@ -194,6 +194,7 @@ def normalize_facts(ticker: str, cik: str, facts: dict[str, Any], availability: 
                         "currency": "USD" if unit.startswith("USD") else None, "value": value,
                         "period_start": item.get("start"), "period_end": item["end"],
                         "fiscal_year": item.get("fy"), "fiscal_period": item.get("fp"),
+                        "frame": item.get("frame"),
                         "accession": accn, "form": form, "filed_at": filed,
                         "public_at": public_at.isoformat(),
                         "amendment": amended, "retrieved_at": retrieved_at.isoformat(),
