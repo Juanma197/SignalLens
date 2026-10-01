@@ -1,5 +1,7 @@
 import json
 import os
+from decimal import Decimal
+from enum import Enum
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,6 +12,7 @@ import pytest
 from app.international_fundamentals import capability_report
 from app.sec_capability import fingerprint
 from app.sec_ingestion import (AUTHORIZATION_PHRASE, IngestionLimits, ingest, plan,
+                               _aggregate_map, _json_value, initialize_schema,
                                status)
 
 FIXTURE=Path(__file__).parent/"fixtures/sec_capability.json"
@@ -100,3 +103,95 @@ def test_request_budget_stop_is_checkpointed_and_retryable(tmp_path,monkeypatch)
         dry_run=False,limits=IngestionLimits(max_requests=1),transport=transport)
     assert result["status"]=="stopped" and result["stop_reason"]=="request_budget_exhausted"
     assert status(research,production)["retryable"]==1
+
+
+def post_pilot_databases(tmp_path):
+    """Offline reproduction of the 100-name, three-request operator pilot."""
+    research, production = databases(tmp_path)
+    with duckdb.connect(str(research)) as db:
+        db.execute("DELETE FROM security_listings")
+        db.executemany(
+            "INSERT INTO security_listings VALUES ('r',?,?,?,?,?,?,true,NULL)",
+            [(f"sec{i:03}", f"T{i:03}", f"T{i:03}.US", "US", "USD", "common_stock")
+             for i in range(100)],
+        )
+    initialize_schema(research)
+    now = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
+    with duckdb.connect(str(research)) as db:
+        db.execute("INSERT INTO sec_issuers VALUES ('sec000','T000.US','T000','0000000001','Issuer','fixture',?)", [now])
+        db.execute("""INSERT INTO sec_ingestion_runs VALUES
+            ('pilot',?,?,'stopped',false,3,900,3,714,0,337,'request_budget_exhausted')""", [now, now])
+        db.execute("INSERT INTO sec_checkpoints VALUES ('sec000','T000.US','T000','0000000001','completed','pilot',?,1)", [now])
+        db.execute("INSERT INTO sec_checkpoints VALUES ('sec001','T001.US','T001',NULL,'retryable_failure','pilot',?,1)", [now])
+        db.execute("""INSERT INTO sec_facts
+            SELECT sha256(i::VARCHAR),'sec000','T000.US','T000','0000000001','us-gaap',
+              CASE WHEN i%2=0 THEN 'Assets' ELSE 'NetIncomeLoss' END,i::DOUBLE,'USD',
+              CASE WHEN i%3=0 THEN NULL ELSE 'USD' END,
+              CASE WHEN i%5=0 THEN NULL ELSE DATE '2025-01-01' END,DATE '2025-12-31',2025,'FY',NULL,'10-K',
+              'accession-'||i,DATE '2026-02-01',TIMESTAMPTZ '2026-02-01 12:00:00+00',false,i<337,
+              'offline-fixture',?
+            FROM range(714) AS facts(i)""", [now])
+        db.execute("""INSERT INTO sec_failures VALUES
+            ('failure','pilot','sec001','T001.US','ingestion','request_budget_exhausted',true,1,?,NULL)""", [now])
+    return research, production
+
+
+def test_empty_initialized_status_is_json_safe_and_immutable(tmp_path):
+    research, production = databases(tmp_path)
+    initialize_schema(research)
+    before = (fingerprint(research), fingerprint(production))
+    report = status(research, production)
+    assert report["observations"] == report["revisions"] == 0
+    assert report["public_availability_range"] == {"earliest": None, "latest": None}
+    json.dumps(report, sort_keys=True)
+    assert before == (fingerprint(research), fingerprint(production))
+
+
+def test_exact_post_pilot_status_is_safe_consistent_and_read_only(tmp_path):
+    research, production = post_pilot_databases(tmp_path)
+    before = (fingerprint(research), fingerprint(production))
+    with duckdb.connect(str(research), read_only=True) as db:
+        legacy_currencies = dict(db.execute(
+            "SELECT currency,count(*) FROM sec_facts GROUP BY currency ORDER BY currency"
+        ).fetchall())
+    with pytest.raises(TypeError, match="not supported between instances"):
+        json.dumps({"currencies": legacy_currencies}, sort_keys=True)
+    report = status(research, production)
+    assert (report["selected_us_securities"], report["completed"], report["retryable"],
+            report["permanently_failed"], report["pending"]) == (100, 1, 1, 0, 98)
+    assert report["observations"] == 714 and report["revisions"] == 337
+    assert report["currencies"] == {"(null)": 238, "USD": 476}
+    assert report["checkpoint_consistency"]["status"] == "consistent"
+    assert report["checkpoint_consistency"]["completed_in_latest_run"] == 1
+    assert report["latest_run"]["stop_reason"] == "request_budget_exhausted"
+    assert report["generated_rankings"] == report["generated_candidates"] == 0
+    # This was the operator-visible crash: sort_keys compared None with "USD".
+    json.dumps(report, sort_keys=True)
+    assert before == (fingerprint(research), fingerprint(production))
+
+    resume = plan(research, production)
+    assert resume["completed"] == 1 and resume["pending"] == 99
+    assert resume["expected_requests"] == 199
+    assert "T000.US" not in resume["symbol_samples"]
+    assert before == (fingerprint(research), fingerprint(production))
+
+
+def test_status_counts_completed_retryable_permanent_and_pending_states(tmp_path):
+    research, production = post_pilot_databases(tmp_path)
+    now = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
+    with duckdb.connect(str(research)) as db:
+        db.execute("INSERT INTO sec_checkpoints VALUES ('sec002','T002.US','T002',NULL,'permanent_failure','pilot',?,1)", [now])
+        # A checkpoint outside the active catalogue must not distort its counts.
+        db.execute("INSERT INTO sec_checkpoints VALUES ('stale','OLD.US','OLD',NULL,'completed','pilot',?,1)", [now])
+    report = status(research, production)
+    assert (report["completed"], report["retryable"], report["permanently_failed"], report["pending"]) == (1, 1, 1, 97)
+
+
+def test_duckdb_scalar_and_mixed_aggregate_values_are_json_safe():
+    class State(Enum):
+        COMPLETE = "complete"
+
+    assert _aggregate_map([(None, 2), ("USD", Decimal("3")), (State.COMPLETE, 1)]) == {
+        "(null)": 2, "USD": 3, "complete": 1,
+    }
+    assert _json_value(datetime(2026, 1, 2, tzinfo=timezone.utc)) == "2026-01-02T00:00:00+00:00"
