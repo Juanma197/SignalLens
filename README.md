@@ -228,3 +228,7 @@ SignalLens/
 ## Important
 
 The live ranking is the historically encouraging 126-trading-day momentum benchmark. Fundamentals, filings, news, and macro data currently provide frozen research context; they do not yet alter the score. SignalLens is decision support, not investment advice.
+
+## Milestone 26 US point-in-time fundamentals
+
+A deterministic, read-only, **US-only** comparison now tests the unchanged price model against a pre-registered fundamental enhancement. See the [Milestone 26 runbook](docs/milestone-26-us-fundamentals.md) for frozen formulas, weights, safeguards and the operator command. International markets remain on the price-only baseline; no candidates or recommendations are generated.

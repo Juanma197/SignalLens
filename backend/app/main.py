@@ -56,6 +56,9 @@ from .operations import AssessmentJobs, OperationHistory, research_health, safe_
 from .database_backup import backup_status
 from .shadow_portfolios import (create_shadow_vintage, evaluate_matured_shadows,
                                 plan_shadow_vintage, shadow_status)
+from .sec_ingestion import status as sec_ingestion_status
+from .us_fundamentals import (FACTOR_FAMILIES, FAMILY_WEIGHTS, LOCKED_HORIZONS,
+                              configuration_hash)
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
@@ -228,6 +231,24 @@ def _recent_operations_read_only(limit: int) -> list[dict]:
         ).fetchall()
     return [{key: value.isoformat() if isinstance(value, datetime) else value
              for key, value in zip(columns, row)} for row in rows]
+
+
+@app.get("/api/v1/operations/us-fundamentals/evidence")
+def operations_us_fundamentals_evidence() -> dict:
+    """Bounded aggregate capability display; evaluation remains an explicit CLI."""
+    sec = _redacted(lambda: sec_ingestion_status(
+        settings.research_database_path, settings.database_path))
+    families = sorted(set(FACTOR_FAMILIES.values()))
+    return {"label": "US-ONLY RESEARCH — NOT INVESTMENT ADVICE",
+        "sec_coverage": {key: sec.get(key) for key in (
+            "selected_us_securities", "mapped", "completed", "permanently_failed",
+            "pending", "retryable", "observations", "revisions", "amendments")},
+        "available_factor_families": families, "family_weights": FAMILY_WEIGHTS,
+        "locked_horizons": list(LOCKED_HORIZONS), "configuration_hash": configuration_hash(),
+        "comparison": "US price-only versus US price plus fundamentals",
+        "gate_results": "run explicit read-only evaluation to populate evidence",
+        "international_model": "unchanged_price_only_baseline",
+        "message": "NO CANDIDATES GENERATED."}
 
 
 @app.get("/api/v1/operations/summary")

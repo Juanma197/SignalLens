@@ -541,3 +541,7 @@ and no strategy-success claim is made.
   live-confirmed or yet approved for point-in-time backtesting.
 - SEC evidence remains isolated from scoring. Existing multi-horizon failures
   are frozen and no ranking, candidate, shadow vintage or production write occurred.
+
+## Milestone 26 — implemented, not evaluated on operator data
+
+The point-in-time SEC selector, frozen US factors, matched 126/252-session comparison, safety fingerprints, CLI and aggregate dashboard evidence are implemented with offline regressions. No live evaluation, tuning, candidate, ranking, provider request, deployment or database write was performed. The catalogue remains current-membership and not survivorship-free; synthetic success is not live evidence.
