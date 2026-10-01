@@ -47,15 +47,54 @@ class CompanyEvidenceUnavailableError(CompanyResearchError):
     reason_code = "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
 
 
+class UnknownCompanySymbolError(CompanyResearchError):
+    """The normalized symbol is absent from the active catalogue."""
+
+    reason_code = "COMPANY_BRIEF_UNKNOWN_SYMBOL"
+
+
+class CompanyIdentityAmbiguityError(CompanyResearchError):
+    """The active catalogue cannot resolve the symbol to one identity."""
+
+    reason_code = "COMPANY_BRIEF_IDENTITY_AMBIGUITY"
+
+
+class CompanyBriefInvalidTimestampError(CompanyResearchError):
+    """The supplied decision timestamp has no timezone."""
+
+    reason_code = "COMPANY_BRIEF_INVALID_TIMESTAMP"
+
+
+class CompanyBriefFutureDecisionError(CompanyResearchError):
+    """The supplied decision timestamp is in the future."""
+
+    reason_code = "COMPANY_BRIEF_FUTURE_DECISION"
+
+
+class CompanyBriefDatabaseNotReadyError(CompanyResearchError):
+    """The read-only evidence databases cannot safely serve a brief."""
+
+    reason_code = "COMPANY_BRIEF_DATABASE_NOT_READY"
+
+
 _QUALIFIED_SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9-]*(?:\.[A-Z0-9-]+)+$")
+
+
+def company_brief_reason_code(exc: Exception) -> str:
+    """Map failures to bounded public codes by type, never by message text."""
+    if isinstance(exc, CompanyResearchError):
+        return exc.reason_code
+    if isinstance(exc, ReadinessError):
+        return "COMPANY_BRIEF_NOT_READY"
+    return "COMPANY_BRIEF_INTERNAL_ERROR"
 
 
 def _utc(value: datetime, now: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
-        raise ReadinessError("decision timestamp must be timezone-aware")
+        raise CompanyBriefInvalidTimestampError("decision timestamp must be timezone-aware")
     value = value.astimezone(timezone.utc)
     if value > now.astimezone(timezone.utc):
-        raise ReadinessError("future decision timestamps are not permitted")
+        raise CompanyBriefFutureDecisionError("future decision timestamps are not permitted")
     return value
 
 
@@ -145,11 +184,12 @@ def _selection(db: duckdb.DuckDBPyConnection, security_id: str,
 
 
 def _brief_inputs(*, research_db: Path, production_db: Path,
-                  decision_at: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+                  decision_at: datetime, qualified_symbol: str
+                  ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
     """Build point-in-time evidence without applying prospective month-end gates."""
     if (not research_db.is_file() or not production_db.is_file() or research_db.is_symlink()
             or production_db.is_symlink() or _same_file(research_db, production_db)):
-        raise ReadinessError("distinct existing regular database files are required")
+        raise CompanyBriefDatabaseNotReadyError("distinct existing regular database files are required")
     with duckdb.connect(str(production_db), read_only=True) as production:
         production.execute("SELECT 1")
     required = {"security_master_retrievals", "security_listings", "global_price_observations",
@@ -157,9 +197,15 @@ def _brief_inputs(*, research_db: Path, production_db: Path,
         "sec_issuers", "sec_checkpoints", "sec_facts"}
     with duckdb.connect(str(research_db), read_only=True) as db:
         missing = required - _tables(db)
-        if missing: raise ReadinessError("company research evidence schema is incomplete")
+        if missing: raise CompanyBriefDatabaseNotReadyError("company research evidence schema is incomplete")
         active = select_active_catalogue(db, as_of=decision_at.replace(tzinfo=None))
         catalogue = active.listings
+        catalogue_matches = catalogue.loc[catalogue.qualified_symbol.eq(qualified_symbol)]
+        if catalogue_matches.empty:
+            raise UnknownCompanySymbolError("normalized symbol is absent from the active catalogue")
+        if len(catalogue_matches) != 1:
+            raise CompanyIdentityAmbiguityError("active catalogue symbol does not resolve to one identity")
+        catalogue_row = catalogue_matches.iloc[0]
         prices = db.execute("SELECT * FROM global_price_observations").fetchdf()
         fx = db.execute("SELECT * FROM global_fx_observations").fetchdf()
         actions = db.execute("SELECT * FROM global_corporate_actions").fetchdf()
@@ -176,7 +222,7 @@ def _brief_inputs(*, research_db: Path, production_db: Path,
     visible_actions = actions.loc[pd.to_datetime(actions.ex_date, errors="coerce").dt.date.le(decision_at.date())]
     scores = prepare_cross_section(us_obs, prices, decision_at=decision_at,
         segment_boundaries=detect_price_segments(visible, visible_actions))
-    if scores.empty: raise ReadinessError("no model-ready price evidence exists at the decision boundary")
+    if scores.empty: raise CompanyEvidenceUnavailableError("no frozen price-score evidence exists at the decision boundary")
     scores["price_percentile"] = scores.composite_score.rank(method="average", pct=True)
     latest = visible.loc[visible.status.eq("available")].sort_values(
         ["qualified_symbol", "trading_date", "retrieved_at"]).drop_duplicates("qualified_symbol", keep="last")
@@ -188,7 +234,7 @@ def _brief_inputs(*, research_db: Path, production_db: Path,
     mapped = set(issuers.loc[pd.to_datetime(issuers.mapped_at, utc=True).le(pd.Timestamp(decision_at)), "security_id"])
     completed = set(cp.loc[cp.status.eq("completed"), "security_id"])
     dilution = _dilution_from_facts(facts, us.loc[us.security_id.isin(mapped & completed)], decision_at)
-    return price_rows, dilution
+    return price_rows, dilution, catalogue_row
 
 
 def company_research_brief(*, research_db: Path, production_db: Path,
@@ -202,13 +248,15 @@ def company_research_brief(*, research_db: Path, production_db: Path,
         raise InvalidQualifiedSymbolError("a normalized exchange-qualified symbol is required")
     if not 1 <= max_events <= MAX_EVENTS: raise ReadinessError("event limit must be between 1 and 10")
     before = (fingerprint(research_db), fingerprint(production_db))
-    prices, dilution = _brief_inputs(research_db=research_db, production_db=production_db,
-        decision_at=decision_at)
-    matches = prices.loc[prices.qualified_symbol.eq(qualified_symbol)]
+    prices, dilution, catalogue_row = _brief_inputs(
+        research_db=research_db, production_db=production_db,
+        decision_at=decision_at, qualified_symbol=qualified_symbol)
+    matches = prices.loc[
+        prices.security_id.eq(catalogue_row.security_id)
+        & prices.qualified_symbol.eq(qualified_symbol)
+    ]
     if len(matches) != 1:
-        raise CompanyEvidenceUnavailableError(
-            "unknown, ambiguous, or non-model-ready qualified symbol"
-        )
+        raise CompanyEvidenceUnavailableError("active catalogue identity lacks frozen price-score evidence")
     eligible, _ = score_inputs(prices, dilution, decision_at=decision_at)
     scored = eligible.loc[eligible.security_id.eq(matches.iloc[0].security_id)]
     row = matches.iloc[0] if scored.empty else scored.iloc[0]
@@ -218,7 +266,8 @@ def company_research_brief(*, research_db: Path, production_db: Path,
         identities = db.execute("""SELECT company_name,ticker,primary_exchange,listing_country,currency
           FROM security_listings WHERE retrieval_id=? AND security_id=?""",
           [active.retrieval_id, security_id]).fetchall()
-        if len(identities) != 1: raise ReadinessError("ticker reuse or identity ambiguity requires effective-date resolution")
+        if len(identities) != 1:
+            raise CompanyIdentityAmbiguityError("ticker reuse requires effective-date identity resolution")
         company, ticker, exchange, country, currency = identities[0]
         facts = db.execute("""SELECT * FROM sec_facts WHERE security_id=? AND public_at<=?
           AND retrieved_at<=? ORDER BY period_end,public_at,retrieved_at""", [security_id, decision_at, decision_at]).fetchdf()
@@ -287,7 +336,7 @@ def company_research_brief(*, research_db: Path, production_db: Path,
         result["price_behaviour"]["price_contribution"] = selection["price_contribution"]
         result["dilution_share_count_evidence"]["frozen_score_contribution"] = selection["dilution_contribution"]
     if before != (fingerprint(research_db), fingerprint(production_db)):
-        raise ReadinessError("database changed during read-only brief")
+        raise CompanyBriefDatabaseNotReadyError("database changed during read-only brief")
     result["database_immutability"] = {"verified": True}
     return result
 
@@ -304,7 +353,8 @@ def prospective_selection_briefs(*, research_db: Path, production_db: Path,
                 if raw: symbols = [str(x["qualified_symbol"]) for x in json.loads(raw[0])[:3]]
     briefs = [company_research_brief(research_db=research_db, production_db=production_db,
               qualified_symbol=s, decision_at=decision_at, now=now) for s in symbols]
-    if before != (fingerprint(research_db), fingerprint(production_db)): raise ReadinessError("database changed during read-only briefs")
+    if before != (fingerprint(research_db), fingerprint(production_db)):
+        raise CompanyBriefDatabaseNotReadyError("database changed during read-only briefs")
     return {"notice": NOTICE, "decision_at": decision_at, "paper_selection_count": len(briefs),
         "briefs": briefs, "reason": None if briefs else "no paper selection exists yet",
         "first_permissible_vintage": SPECIFICATION["first_permissible_vintage"]}

@@ -62,7 +62,8 @@ from .us_fundamentals import (FACTOR_FAMILIES, FAMILY_WEIGHTS, LOCKED_HORIZONS,
                               configuration_hash)
 from .prospective_us_shadow import (readiness as prospective_us_shadow_readiness,
                                     status as prospective_us_shadow_status)
-from .company_research import company_research_brief, prospective_selection_briefs
+from .company_research import (company_brief_reason_code, company_research_brief,
+                               prospective_selection_briefs)
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
@@ -128,6 +129,19 @@ def _redacted(call):
         raise
     except Exception:
         raise HTTPException(409, detail=safe_error()) from None
+
+
+def _company_brief_redacted(call):
+    """Expose only a stable brief failure class, never internal details."""
+    try:
+        return call()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(409, detail={
+            "code": company_brief_reason_code(exc),
+            "message": "company research brief failed; details redacted",
+        }) from None
 
 
 @app.middleware("http")
@@ -273,7 +287,7 @@ def research_company_brief(qualified_symbol: str = Query(..., max_length=40),
                            decision_at: datetime = Query(...),
                            max_events: int = Query(6, ge=1, le=10)) -> dict:
     """Authenticated, bounded and strictly read-only point-in-time brief."""
-    return _redacted(lambda: company_research_brief(
+    return _company_brief_redacted(lambda: company_research_brief(
         research_db=settings.research_database_path, production_db=settings.database_path,
         qualified_symbol=qualified_symbol, decision_at=decision_at, max_events=max_events))
 
@@ -281,7 +295,7 @@ def research_company_brief(qualified_symbol: str = Query(..., max_length=40),
 @app.get("/api/v1/research/prospective-selection-briefs")
 def research_prospective_selection_briefs(decision_at: datetime = Query(...)) -> dict:
     """Explain no more than three already-registered paper selections."""
-    return _redacted(lambda: prospective_selection_briefs(
+    return _company_brief_redacted(lambda: prospective_selection_briefs(
         research_db=settings.research_database_path, production_db=settings.database_path,
         decision_at=decision_at))
 
