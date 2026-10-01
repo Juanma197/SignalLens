@@ -545,3 +545,17 @@ and no strategy-success claim is made.
 ## Milestone 26 — implemented, not evaluated on operator data
 
 The point-in-time SEC selector, frozen US factors, matched 126/252-session comparison, safety fingerprints, CLI and aggregate dashboard evidence are implemented with offline regressions. No live evaluation, tuning, candidate, ranking, provider request, deployment or database write was performed. The catalogue remains current-membership and not survivorship-free; synthetic success is not live evidence.
+## Milestone 27 — US fundamentals attribution (implementation complete)
+
+- Frozen Milestone 26 evidence is preserved: 126 sessions had 101 vintages,
+  4,670 matches and -0.0416297 incremental excess; 252 sessions had 97
+  vintages, 4,265 matches and -0.0522613. Both failed after multiplicity control.
+- Added exploratory factor/family, leave-one-out, coverage, accounting,
+  direction, temporal and concentration diagnostics. No weight or factor is
+  tuned, no replacement model is proposed, and no candidate is generated.
+- The command requires two explicit, isolated paths, opens through the frozen
+  read-only pipeline, reconciles its configuration, and proves both fingerprints
+  unchanged. Development used deterministic fixtures only; operator databases,
+  Railway and providers were not accessed.
+- Scope remains US-only current membership and not survivorship-free.
+  International fundamentals and defensible point-in-time classifications are unavailable.

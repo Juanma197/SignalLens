@@ -1,5 +1,25 @@
 # SignalLens
 
+## Milestone 27 fundamentals failure diagnosis
+
+SignalLens now includes a bounded, strictly read-only attribution command for
+the failed frozen US fundamentals experiment. It reports factor/family,
+missingness, accounting and concentration diagnostics and leave-one-family-out
+counterfactuals without changing a factor or weight. Everything is labelled
+**EXPLORATORY DIAGNOSTICS — NOT A NEW MODEL** and produces no ranking or
+candidate. See the [Milestone 27 runbook](docs/milestone-27-us-fundamentals-diagnostics.md).
+
+```powershell
+Push-Location backend
+& ..\.venv\Scripts\python.exe -m app.eodhd_ingestion_cli research-us-fundamentals-diagnostics --research-db "data\research\signallens-research.duckdb" --production-db "data\signallens.duckdb" --decision-at "2026-10-01T00:00:00+00:00"
+Pop-Location
+```
+
+The Milestone 26 frozen blend failed at both 126 sessions (101 vintages, 4,670
+matched predictions, -0.0416297 incremental excess) and 252 sessions (97
+vintages, 4,265 predictions, -0.0522613). Current membership is not
+survivorship-free, scope is US-only, and international fundamentals are absent.
+
 ## Milestone 25 SEC research ingestion
 
 SignalLens now has a resumable, research-only point-in-time SEC fundamentals

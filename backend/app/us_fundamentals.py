@@ -11,7 +11,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import duckdb
 import numpy as np
@@ -269,7 +269,8 @@ def holm_two_horizons(pvalues: dict[int, float | None]) -> dict[int, dict[str, A
 
 
 def assess_us_fundamentals(*, research_db: Path, production_db: Path,
-                           decision_at: datetime | None = None) -> dict[str, Any]:
+                           decision_at: datetime | None = None,
+                           attribution_collector: Callable[[int, pd.DataFrame], None] | None = None) -> dict[str, Any]:
     research_db, production_db = Path(research_db), Path(production_db)
     before = {"research": fingerprint(research_db), "production": fingerprint(production_db)}
     if not before["research"].exists or not before["production"].exists: raise ReadinessError("both databases must exist")
@@ -305,6 +306,11 @@ def assess_us_fundamentals(*, research_db: Path, production_db: Path,
             panels.append(normalized); coverage[str(pd.Timestamp(vintage).date())] = cov
         fundamentals = pd.concat(panels, ignore_index=True) if panels else pd.DataFrame(columns=["security_id", "vintage_date", "fundamental_score"])
         if not predictions.empty: predictions["security_id"] = predictions.qualified_symbol.map(us.set_index("qualified_symbol").security_id)
+        if attribution_collector is not None:
+            keys = ["security_id", "vintage_date"]
+            detail = predictions.merge(fundamentals, on=keys, how="inner")
+            detail = detail.loc[detail.fundamental_score.notna()].copy()
+            attribution_collector(horizon, detail)
         result = evaluate_matched(predictions, fundamentals, horizon); results[str(horizon)] = result
         pvalues[horizon] = result.get("incremental_inference", {}).get("raw_p_value")
     # Holm is locked to this milestone's two tests (not the old four-horizon family).

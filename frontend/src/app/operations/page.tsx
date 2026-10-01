@@ -135,8 +135,8 @@ export default function OperationsPage() {
     <nav><span className="mark">SL</span><strong>Research operations</strong><Link href="/">Research view</Link></nav>
     <section className="hero compact"><p className="eyebrow">{LABEL}</p><h1>Operate safely.<br/><span>Fail closed.</span></h1></section>
     <Summary section={summary} retry={() => load("/summary", setSummary)}/>
-    <section className="panel result"><h2>US point-in-time fundamental evidence</h2>
-      <p>Aggregate coverage and locked comparison only. Raw filings are not displayed.</p>
+    <section className="panel result"><p className="eyebrow">EXPLORATORY DIAGNOSTICS — NOT A NEW MODEL</p><h2>US fundamentals failure diagnosis</h2>
+      <p><strong>Frozen model failed.</strong> Aggregate coverage, family attribution, concentration and defect status only. Raw filings are not displayed.</p>
       <Status section={fundamentals} retry={() => load("/us-fundamentals/evidence", setFundamentals)}/>
       <strong>NO CANDIDATES GENERATED.</strong>
     </section>
