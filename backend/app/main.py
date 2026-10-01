@@ -57,6 +57,7 @@ from .database_backup import backup_status
 from .shadow_portfolios import (create_shadow_vintage, evaluate_matured_shadows,
                                 plan_shadow_vintage, shadow_status)
 from .sec_ingestion import status as sec_ingestion_status
+from .sec_events import status as sec_event_status
 from .us_fundamentals import (FACTOR_FAMILIES, FAMILY_WEIGHTS, LOCKED_HORIZONS,
                               configuration_hash)
 from .prospective_us_shadow import (readiness as prospective_us_shadow_readiness,
@@ -257,6 +258,13 @@ def operations_us_fundamentals_evidence() -> dict:
         "gate_results": "run explicit read-only evaluation to populate evidence",
         "international_model": "unchanged_price_only_baseline",
         "message": "NO CANDIDATES GENERATED."}
+
+
+@app.get("/api/v1/operations/sec-events/status")
+def operations_sec_events_status() -> dict:
+    """Read-only, bounded official-filing context; never returns document bodies."""
+    return _redacted(lambda: sec_event_status(
+        settings.research_database_path, settings.database_path))
 
 
 @app.get("/api/v1/operations/summary")

@@ -77,6 +77,7 @@ export default function OperationsPage() {
   const [coverage, setCoverage] = useState<Section>(idle);
   const [fundamentals, setFundamentals] = useState<Section>(idle);
   const [prospective, setProspective] = useState<Section>(idle);
+  const [secEvents, setSecEvents] = useState<Section>(idle);
   const [shadow, setShadow] = useState<Section>(idle);
   const [readiness, setReadiness] = useState<Section>(idle);
   const [scoring, setScoring] = useState<Section>(idle);
@@ -94,7 +95,7 @@ export default function OperationsPage() {
     catch (error) { setter(previous => ({...previous, state: "error", error: error as Result})); }
   }, []);
   useEffect(() => {
-    load("/summary", setSummary); load("/health", setHealth); load("/coverage", setCoverage); load("/shadow/status", setShadow); load("/us-fundamentals/evidence", setFundamentals); load("/prospective-us-shadow/status", setProspective);
+    load("/summary", setSummary); load("/health", setHealth); load("/coverage", setCoverage); load("/shadow/status", setShadow); load("/us-fundamentals/evidence", setFundamentals); load("/prospective-us-shadow/status", setProspective); load("/sec-events/status", setSecEvents);
     return () => { setAuthorization(""); setConfirmation(""); setSessions(""); };
   }, [load]);
 
@@ -144,6 +145,10 @@ export default function OperationsPage() {
     <section className="panel result prospective-research"><p className="eyebrow">PROSPECTIVE PAPER RESEARCH ONLY</p><h2>US price + dilution shadow</h2>
       <p><strong>NOT VALIDATED — NOT INVESTMENT ADVICE.</strong> This evidence series is separate from production predictions and recommendations.</p>
       <Status section={prospective} retry={() => load("/prospective-us-shadow/status", setProspective)}/>
+    </section>
+    <section className="panel result"><p className="eyebrow">OFFICIAL FILING CONTEXT — NOT USED IN SCORE</p><h2>SEC material events</h2>
+      <p>Metadata only: recent count, form/category, publication time and amendment coverage. No filing body, recommendation, or sentiment is displayed.</p>
+      <Status section={secEvents} retry={() => load("/sec-events/status", setSecEvents)}/>
     </section>
     <details><summary>Advanced research operations — read-only assessments permitted in staging</summary>
     <section className="ops-grid">

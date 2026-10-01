@@ -266,6 +266,24 @@ def capability(research: Path, production: Path) -> dict[str, Any]:
 def sec_readiness(research: Path, production: Path) -> dict[str, Any]:
     def query(db):
         tables = {r[0] for r in db.execute("SHOW TABLES").fetchall()}
+        if "sec_event_metadata" in tables:
+            total, earliest, latest, amendments, with_items = db.execute(
+                "SELECT count(*),min(public_at),max(public_at),sum(is_amendment),sum(item_codes<>'[]') FROM sec_event_metadata"
+            ).fetchone()
+            aggregate = lambda column: {str(key): int(count) for key, count in db.execute(
+                f"SELECT {column},count(*) FROM sec_event_metadata GROUP BY {column} ORDER BY {column}"
+            ).fetchall()}
+            assessed = db.execute("SELECT count(*) FROM sec_event_checkpoints").fetchone()[0]
+            return {"command":"sec-events-readiness","issuers_assessed":int(assessed),
+                "filings":int(total),"event_filings":int(total),"amendments":int(amendments or 0),
+                "forms":aggregate("form"),"publication_range":{"earliest":earliest,"latest":latest},
+                "item_metadata_available":bool(with_items),
+                "item_metadata_coverage":round(int(with_items or 0)/int(total),4) if total else 0.0,
+                "event_categories":aggregate("event_category"),
+                "coverage":aggregate("scope"),
+                "affected_symbol_samples":[row[0][:80] for row in db.execute(
+                    "SELECT DISTINCT qualified_symbol FROM sec_event_metadata ORDER BY 1 LIMIT 10").fetchall()],
+                "classification":"bounded to SEC item metadata; reduced confidence when unavailable"}
         if "sec_filings" not in tables: return {"command":"sec-events-readiness","filings":0,"amendments":0,"publication_range":{"earliest":None,"latest":None},"categories":{}}
         columns = {r[1] for r in db.execute("PRAGMA table_info('sec_filings')").fetchall()}
         forms = db.execute("SELECT form,count(*),min(public_at),max(public_at) FROM sec_filings WHERE form IN ('8-K','8-K/A') GROUP BY form ORDER BY form").fetchall()
