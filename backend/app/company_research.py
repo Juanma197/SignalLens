@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,27 @@ from .research_scoring import prepare_cross_section
 MAX_EVENTS = 10
 MAX_TEXT = 240
 NOTICE = "PAPER RESEARCH ONLY — NOT INVESTMENT ADVICE."
+
+
+class CompanyResearchError(ReadinessError):
+    """A company-brief refusal with a stable, public CLI reason code."""
+
+    reason_code = "COMPANY_BRIEF_NOT_READY"
+
+
+class InvalidQualifiedSymbolError(CompanyResearchError):
+    """The supplied symbol does not have accepted qualified-symbol syntax."""
+
+    reason_code = "COMPANY_BRIEF_INVALID_SYMBOL"
+
+
+class CompanyEvidenceUnavailableError(CompanyResearchError):
+    """The requested symbol cannot be served from frozen model evidence."""
+
+    reason_code = "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
+
+
+_QUALIFIED_SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9-]*(?:\.[A-Z0-9-]+)+$")
 
 
 def _utc(value: datetime, now: datetime) -> datetime:
@@ -176,14 +198,17 @@ def company_research_brief(*, research_db: Path, production_db: Path,
     now = now or datetime.now(timezone.utc); decision_at = _utc(decision_at, now)
     if decision_at <= REGISTRATION_AT:
         raise ReadinessError("company research decision timestamp must be after strategy registration")
-    if not qualified_symbol or "." not in qualified_symbol or qualified_symbol != qualified_symbol.upper():
-        raise ReadinessError("a normalized exchange-qualified symbol is required")
+    if not isinstance(qualified_symbol, str) or not _QUALIFIED_SYMBOL.fullmatch(qualified_symbol):
+        raise InvalidQualifiedSymbolError("a normalized exchange-qualified symbol is required")
     if not 1 <= max_events <= MAX_EVENTS: raise ReadinessError("event limit must be between 1 and 10")
     before = (fingerprint(research_db), fingerprint(production_db))
     prices, dilution = _brief_inputs(research_db=research_db, production_db=production_db,
         decision_at=decision_at)
     matches = prices.loc[prices.qualified_symbol.eq(qualified_symbol)]
-    if len(matches) != 1: raise ReadinessError("unknown, ambiguous, or non-model-ready qualified symbol")
+    if len(matches) != 1:
+        raise CompanyEvidenceUnavailableError(
+            "unknown, ambiguous, or non-model-ready qualified symbol"
+        )
     eligible, _ = score_inputs(prices, dilution, decision_at=decision_at)
     scored = eligible.loc[eligible.security_id.eq(matches.iloc[0].security_id)]
     row = matches.iloc[0] if scored.empty else scored.iloc[0]

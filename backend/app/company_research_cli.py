@@ -6,7 +6,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .company_research import company_research_brief, prospective_selection_briefs
+from .company_research import (CompanyResearchError, company_research_brief,
+                               prospective_selection_briefs)
 from .model_readiness import ReadinessError
 
 
@@ -14,10 +15,11 @@ def _reason_code(exc: Exception) -> str:
     """Return a bounded public failure category without reflecting exception text."""
     if not isinstance(exc, ReadinessError):
         return "COMPANY_BRIEF_INTERNAL_ERROR"
+    if isinstance(exc, CompanyResearchError):
+        return exc.reason_code
     message = str(exc).lower()
     if "future" in message: return "COMPANY_BRIEF_FUTURE_DECISION"
     if "timezone" in message: return "COMPANY_BRIEF_INVALID_TIMESTAMP"
-    if "qualified symbol" in message: return "COMPANY_BRIEF_INVALID_SYMBOL"
     if "unknown" in message or "model-ready" in message: return "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
     if "database" in message or "schema" in message: return "COMPANY_BRIEF_DATABASE_NOT_READY"
     return "COMPANY_BRIEF_NOT_READY"
