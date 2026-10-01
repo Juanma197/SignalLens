@@ -7,6 +7,20 @@ from datetime import datetime
 from pathlib import Path
 
 from .company_research import company_research_brief, prospective_selection_briefs
+from .model_readiness import ReadinessError
+
+
+def _reason_code(exc: Exception) -> str:
+    """Return a bounded public failure category without reflecting exception text."""
+    if not isinstance(exc, ReadinessError):
+        return "COMPANY_BRIEF_INTERNAL_ERROR"
+    message = str(exc).lower()
+    if "future" in message: return "COMPANY_BRIEF_FUTURE_DECISION"
+    if "timezone" in message: return "COMPANY_BRIEF_INVALID_TIMESTAMP"
+    if "qualified symbol" in message: return "COMPANY_BRIEF_INVALID_SYMBOL"
+    if "unknown" in message or "model-ready" in message: return "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
+    if "database" in message or "schema" in message: return "COMPANY_BRIEF_DATABASE_NOT_READY"
+    return "COMPANY_BRIEF_NOT_READY"
 
 
 def parser() -> argparse.ArgumentParser:
@@ -36,7 +50,7 @@ def main() -> None:
     try:
         print(json.dumps(execute(parser().parse_args()), sort_keys=True, default=str))
     except Exception as exc:
-        print(json.dumps({"status": "failed", "error": {"code": type(exc).__name__,
+        print(json.dumps({"status": "failed", "error": {"code": _reason_code(exc),
             "message": "company research brief failed; details redacted"}}), file=sys.stderr)
         raise SystemExit(1) from None
 

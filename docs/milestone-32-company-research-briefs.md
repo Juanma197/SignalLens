@@ -4,7 +4,15 @@
 
 Briefs are deterministic, read-only descriptions of evidence known at an explicit, timezone-aware decision timestamp. They are labelled **PAPER RESEARCH ONLY — NOT INVESTMENT ADVICE.** They never download data, read filing bodies, create a vintage, publish a ranking, predict a price, or recommend a security. Stored event text is untrusted: output is HTML-escaped and limited to 240 characters; events are limited to ten and paper groups to three.
 
-Both explicit database files are validated as distinct regular files and fingerprinted before and after every operation. Responses expose only the immutability result—not paths or hashes. Unknown/unqualified/ambiguous symbols, ticker reuse without effective-date resolution, future timestamps, non-model-ready prices, unavailable dilution, and unsafe aliases fail closed.
+Both explicit database files are validated as distinct regular files and fingerprinted before and after every operation. Responses expose only the immutability result—not paths or hashes. Unknown/unqualified/ambiguous symbols, ticker reuse without effective-date resolution, future timestamps, non-model-ready prices, and unsafe aliases fail closed. Missing dilution remains viewable only with explicit score withholding and missing-data output.
+
+## Pre-vintage repair (October 2026)
+
+The initially merged adapter incorrectly sent an individual brief's calendar date to the prospective-vintage database input path. That path intentionally accepts only a completed US month-end session, so the valid `2026-10-01T12:00:00Z` operator request failed before a brief could be assembled. The correction separates brief evidence lookup from vintage planning; the prospective plan/create path and its completed-month-end gates remain unchanged.
+
+After the registered strategy timestamp, an individual pre-vintage brief may be requested at any timezone-aware, non-future timestamp. It uses the active identity and the latest model-ready price observation, dilution facts, contextual fundamentals, and SEC event metadata that were public **and retrieved** no later than that timestamp. It never advances the cutoff to a later month-end. When required dilution score evidence is absent, the brief explicitly withholds the dilution percentile, contribution, and combined score rather than assigning a neutral or invented value.
+
+Until a registered prospective vintage exists, `why_it_is_being_viewed` says only that no paper selection exists; it does not call the company selected, ranked, recommended, or a Top 3 member. Once a vintage exists, selection status and displayed 90/10 contributions come from the latest stored vintage at the requested boundary. An unselected company is reported as unselected for that stored vintage, and no current-evidence score is substituted for the frozen record.
 
 ## Brief structure and permitted language
 
