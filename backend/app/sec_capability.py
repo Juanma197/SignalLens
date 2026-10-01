@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 import duckdb
 import httpx
 
+from .active_catalogue import eodhd_ticker, select_active_catalogue
+
 SEC_TICKERS = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik}.json"
 SEC_FACTS = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
@@ -56,22 +58,30 @@ def fingerprint(path: Path) -> dict[str, Any]:
 
 
 def select_representatives(research_db: Path) -> list[dict[str, str]]:
-    """Select at most three eligible US securities from the newest active snapshot."""
+    """Select up to three US names from the authoritative active catalogue."""
     with duckdb.connect(str(research_db), read_only=True) as db:
         tables = {row[0] for row in db.execute("SHOW TABLES").fetchall()}
-        if not {"universe_snapshots", "universe_snapshot_members", "security_listings"} <= tables:
+        if not {"security_master_retrievals", "security_listings"} <= tables:
             raise ValueError("active research catalogue unavailable")
-        rows = db.execute("""
-            WITH latest AS (SELECT snapshot_id FROM universe_snapshots
-              ORDER BY snapshot_at DESC, snapshot_id DESC LIMIT 1), listings AS (
-              SELECT security_id,ticker,listing_country,cik,
-                     row_number() OVER (PARTITION BY security_id ORDER BY last_seen_at DESC,retrieval_id DESC) n
-              FROM security_listings)
-            SELECT m.security_id,l.ticker,l.cik FROM universe_snapshot_members m
-            JOIN latest USING(snapshot_id) JOIN listings l USING(security_id)
-            WHERE m.eligible AND m.canonical AND l.n=1 AND l.listing_country='US'
-            ORDER BY m.security_id,l.ticker LIMIT ?""", [MAX_SECURITIES]).fetchall()
-    return [{"security_id": row[0], "ticker": row[1].upper(), "catalogue_cik": row[2]} for row in rows]
+        catalogue = select_active_catalogue(db)
+        if catalogue is None:
+            return []
+        selected = catalogue.listings.loc[
+            catalogue.listings["eligible"].astype(bool)
+            & catalogue.listings["region"].eq("US")
+        ].head(MAX_SECURITIES)
+        ids = selected["security_id"].astype(str).tolist()
+        if not ids:
+            return []
+        metadata = {
+            str(row[0]): row[1:]
+            for row in db.execute(
+                "SELECT security_id,ticker,cik FROM security_listings WHERE retrieval_id=?",
+                [catalogue.retrieval_id],
+            ).fetchall()
+        }
+    return [{"security_id": security_id, "ticker": eodhd_ticker(metadata[security_id][0]),
+             "catalogue_cik": metadata[security_id][1]} for security_id in ids]
 
 
 @dataclass(frozen=True)
@@ -196,12 +206,16 @@ def normalize_facts(ticker: str, cik: str, facts: dict[str, Any], availability: 
 
 def sanitized_report(securities: list[dict[str, str]], normalized: list[dict[str, Any]], found: dict[str, set[str]],
                      reasons: list[str], request_count: int, limits: Limits, mode: str,
-                     before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]) -> dict[str, Any]:
+                     before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]],
+                     catalogue_representatives: int) -> dict[str, Any]:
     forms = sorted({row["form"] for row in normalized}); dates = sorted(row["public_at"][:10] for row in normalized)
     concepts_found = sorted({concept for values in found.values() for concept in values})
     expected = sorted({concept for values in CONCEPTS.values() for concept in values})
     return {"command": "sec-fundamentals-capability", "mode": mode, "status": "completed",
         "provider": "sec-edgar", "securities_attempted": len(securities), "request_count": request_count,
+        "evidence_scope": "sanitized_fixture" if mode == "fixture" else "live_catalogue_representatives",
+        "catalogue_representatives_selected": catalogue_representatives,
+        "fixture_issuer_match_claimed": False if mode == "fixture" else None,
         "request_budget": limits.max_requests, "forms": forms,
         "public_availability_date_range": {"earliest": dates[0] if dates else None, "latest": dates[-1] if dates else None},
         "concepts_found": concepts_found, "concepts_missing": sorted(set(expected)-set(concepts_found)),
@@ -225,15 +239,21 @@ def run_assessment(*, research_db: Path, production_db: Path, fixture: dict[str,
     for path in (research_db, production_db):
         with duckdb.connect(str(path), read_only=True) as db: db.execute("SELECT 1").fetchone()
     before = {str(path): fingerprint(path) for path in (research_db, production_db)}
-    securities = select_representatives(research_db)
-    if not securities: raise ValueError("no eligible US securities in active research catalogue")
+    catalogue_securities = select_representatives(research_db)
+    if not catalogue_securities: raise ValueError("no eligible US securities in active research catalogue")
     if fixture is None:
         if authorize_live_sec is not True: raise PermissionError("explicit --authorize-live-sec required")
         if not valid_user_agent(user_agent): raise ValueError("invalid SIGNALLENS_SEC_USER_AGENT (SEC User-Agent)")
         client = SECClient(user_agent or "", limits, transport=transport)
-        mapping_payload = client.get(SEC_TICKERS)
+        mapping_payload = client.get(SEC_TICKERS); securities = catalogue_securities
     else:
         client = None; mapping_payload = fixture.get("ticker_mapping", {})
+        # Fixture issuers are deliberately independent of the operator catalogue:
+        # they prove normalization, never facts about whichever live names were selected.
+        fixture_tickers = sorted({eodhd_ticker(row.get("ticker"))
+            for row in mapping_payload.values() if isinstance(row, dict) and row.get("ticker")})
+        securities = [{"security_id": "fixture-evidence", "ticker": ticker,
+                       "catalogue_cik": None} for ticker in fixture_tickers[:MAX_SECURITIES]]
     mapping = ticker_ciks(mapping_payload, [row["ticker"] for row in securities])
     normalized: list[dict[str, Any]] = []; found = {family: set() for family in CONCEPTS}; reasons: list[str] = []
     now = (retrieved_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -250,4 +270,5 @@ def run_assessment(*, research_db: Path, production_db: Path, fixture: dict[str,
     after = {str(path): fingerprint(path) for path in (research_db, production_db)}
     if before != after: raise RuntimeError("database immutability violated")
     return sanitized_report(securities, normalized, found, reasons, client.count if client else 0,
-                            limits, "live" if fixture is None else "fixture", before, after)
+                            limits, "live" if fixture is None else "fixture", before, after,
+                            len(catalogue_securities))

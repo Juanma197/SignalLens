@@ -8,8 +8,11 @@ It never calls EODHD, Yahoo Finance, Railway, or SEC HTML pages.
 ## Preconditions
 
 Both database arguments are mandatory, distinct, existing DuckDB files. The
-research database must contain an active universe snapshot with eligible,
-canonical US securities. The command opens both files read-only and reports the
+research database must contain a completed EODHD security-master retrieval with
+active US common-stock or ordinary-share listings. This is the same authoritative
+active-catalogue selector used by model-readiness and audit; `universe_snapshots`
+is not a catalogue authority and may contain no applicable members. The command
+opens both files read-only and reports the
 before/after byte counts and SHA-256 digests. Live mode additionally requires the
 literal authorization flag and a non-placeholder contact-bearing user agent.
 
@@ -24,6 +27,19 @@ python -m app.sec_capability_cli sec-fundamentals-offline --research-db /absolut
 
 To use another sanitized local fixture, append `--fixture /absolute/path/fixture.json`.
 Offline mode constructs no HTTP client and makes zero network requests.
+The bundled fixture is deterministic, self-contained normalization evidence. Its
+synthetic ticker/CIK is not matched to, and makes no claim about, the selected
+live-catalogue representatives; the aggregate report labels this distinction.
+
+### Corrected operator failure
+
+The original pilot incorrectly selected from the newest `universe_snapshots`
+record. On the operator-shaped database (500 active EODHD listings, including
+100 US listings) that query returned `[]`, causing the CLI's redacted
+`ValueError`. The repair selects at most three deterministic US representatives
+from the latest completed security-master retrieval instead. A regression keeps
+the empty/non-applicable snapshot alongside the 500-listing catalogue and checks
+both database files remain byte-for-byte unchanged.
 
 ## Explicitly authorized live assessment
 
