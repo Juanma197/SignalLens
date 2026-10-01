@@ -59,6 +59,7 @@ from .shadow_portfolios import (create_shadow_vintage, evaluate_matured_shadows,
 from .sec_ingestion import status as sec_ingestion_status
 from .us_fundamentals import (FACTOR_FAMILIES, FAMILY_WEIGHTS, LOCKED_HORIZONS,
                               configuration_hash)
+from .prospective_us_shadow import status as prospective_us_shadow_status
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
@@ -405,6 +406,13 @@ def operations_shadow_create(body: OperationRequest, request: Request) -> dict:
 def operations_shadow_status() -> dict:
     return _redacted(lambda: shadow_status(research_db=settings.research_database_path,
                                            production_db=settings.database_path))
+
+
+@app.get("/api/v1/operations/prospective-us-shadow/status")
+def operations_prospective_us_shadow_status() -> dict:
+    """Strictly read-only, separately labelled prospective paper evidence."""
+    return _redacted(lambda: prospective_us_shadow_status(
+        research_db=settings.research_database_path, production_db=settings.database_path))
 
 
 @app.post("/api/v1/operations/shadow/evaluate-matured")

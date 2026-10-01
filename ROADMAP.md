@@ -1,5 +1,14 @@
 # SignalLens Roadmap
 
+## After Milestone 28
+
+1. Accumulate genuinely prospective monthly US paper vintages without changing
+   version 1.0.0 or making early success claims.
+2. Build point-in-time news/event capability with the same retrieval-time and
+   integrity boundaries.
+3. Extend point-in-time fundamentals capability beyond the US without treating
+   current catalogue membership as survivorship-free.
+
 ## Milestone 20 — standalone research operations and safe scheduling
 
 Implemented: bounded operator APIs and CLI plans, responsive operations UI, separate

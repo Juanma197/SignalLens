@@ -54,6 +54,7 @@ article p { color:#bac4be; line-height:1.5; }
 .fundamentals { margin-top:14px; padding:14px; border:1px solid var(--line); border-radius:10px; background:#0d1713; }
 .fundamentals.unavailable { color:var(--muted); font-size:11px; }
 .fundamentals-heading { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px; color:#c9d4ce; font-size:11px; font-weight:700; }
+.prospective-research { border-color:#4c7b68; background:linear-gradient(135deg,#0b1815,#101713); }
 .coverage { text-transform:uppercase; letter-spacing:.08em; font-size:8px; }
 .coverage.complete { color:var(--green); }
 .coverage.partial { color:#e3b687; }
