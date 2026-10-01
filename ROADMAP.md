@@ -387,3 +387,9 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Document US-only current-membership/non-survivorship-free limitations and absent international factors.
 - [ ] Run the diagnostic against operator data only after merge and human authorization.
 - [ ] Pre-register any later hypothesis before independent evaluation; do not derive it from these comparisons.
+## Milestone 33 — Safe Railway research synchronization
+
+- [x] Add read-only planning/status and explicitly authorized apply/rollback commands.
+- [x] Enforce artifact identity, Milestone 33 schema, alias isolation, capacity, locking, maintenance, atomic publication, durability, and automatic recovery.
+- [x] Preserve scheduler/publication disablement and production fingerprints.
+- [ ] Perform the operator-controlled staging upload and verification after review; deployment is out of scope.

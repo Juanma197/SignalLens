@@ -1,5 +1,17 @@
 # SignalLens Status
 
+## Milestone 33 — implementation complete; Railway operation not performed
+
+- Added fail-closed, expiring-plan research synchronization with an explicit
+  candidate identity, compatibility contract, conservative capacity gate,
+  exclusive maintenance lock, validated rollback, atomic publication, durability,
+  post-publication verification, and automatic restoration.
+- Status is bounded and path-redacted. Liveness stays available during maintenance;
+  readiness reports maintenance and research-backed APIs fail before opening DuckDB.
+- Scheduler and production publication remain disabled. No Railway, provider, or
+  operator database was accessed; no upload, deployment, production write,
+  recommendation, broker action, or prospective vintage occurred.
+
 ## Milestone 32 — implemented
 
 - Deterministic, fingerprint-verified company and prospective-selection briefs are available as strictly read-only CLI and authenticated API operations.

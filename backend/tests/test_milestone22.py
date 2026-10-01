@@ -121,10 +121,27 @@ def test_liveness_and_missing_database_readiness_are_bounded(tmp_path, monkeypat
     assert response.status_code == 503
     assert response.json() == {"status": "not_initialized", "configuration_valid": True,
         "paths_distinct": True, "volume_mounted": True,
-        "research_database_exists": False, "provider_requests": False}
+        "research_database_exists": False, "research_maintenance": False,
+        "provider_requests": False}
     summary = client.get("/api/v1/operations/summary",
                          headers={"Authorization": "Bearer " + "x" * 32}).json()
     assert summary["overall"] == "not_initialized"
+
+
+def test_research_maintenance_is_bounded_before_database_open(tmp_path, monkeypatch):
+    configured = staging(tmp_path)
+    monkeypatch.setattr(main, "settings", configured)
+    (tmp_path / "research-maintenance.json").write_text("{}")
+    client = TestClient(main.app)
+    assert client.get("/api/v1/health").status_code == 200
+    ready = client.get("/api/v1/ready")
+    assert ready.status_code == 503 and ready.json()["status"] == "research_maintenance"
+    response = client.get("/api/v1/research/company-brief", params={
+        "qualified_symbol": "PGEN.US", "decision_at": "2026-10-01T21:00:00Z"},
+        headers={"Authorization": "Bearer " + "x" * 32})
+    assert response.status_code == 503
+    assert response.json()["detail"] == {"code": "research_maintenance",
+        "message": "Research data is temporarily unavailable for maintenance."}
 
 
 def test_staging_configuration_refuses_alias_and_scheduler(tmp_path):
