@@ -1,0 +1,22 @@
+{
+  "ticker_mapping": {"0": {"cik_str": 1001, "ticker": "AAA", "title": "redacted"}},
+  "submissions": {"0000001001": {"filings": {"recent": {
+    "accessionNumber": ["0000001001-26-000001", "0000001001-26-000002"],
+    "form": ["10-Q", "10-Q/A"], "filingDate": ["2026-05-01", "2026-05-10"],
+    "acceptanceDateTime": ["20260501120000", "20260510130000"]
+  }}}},
+  "companyfacts": {"0000001001": {"facts": {"us-gaap": {
+    "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+      {"start":"2026-01-01","end":"2026-03-31","val":100,"accn":"0000001001-26-000001","fy":2026,"fp":"Q1","form":"10-Q"},
+      {"start":"2026-01-01","end":"2026-03-31","val":101,"accn":"0000001001-26-000002","fy":2026,"fp":"Q1","form":"10-Q/A"}
+    ]}},
+    "NetIncomeLoss": {"units": {"USD": [{"start":"2026-01-01","end":"2026-03-31","val":12,"accn":"0000001001-26-000001","fy":2026,"fp":"Q1","form":"10-Q"}]}},
+    "OperatingIncomeLoss": {"units": {"USD": [{"start":"2026-01-01","end":"2026-03-31","val":18,"accn":"0000001001-26-000001","fy":2026,"fp":"Q1","form":"10-Q"}]}},
+    "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [{"start":"2026-01-01","end":"2026-03-31","val":20,"accn":"0000001001-26-000001","fy":2026,"fp":"Q1","form":"10-Q"}]}},
+    "PaymentsToAcquirePropertyPlantAndEquipment": {"units": {"USD": [{"start":"2026-01-01","end":"2026-03-31","val":5,"accn":"0000001001-26-000001","fy":2026,"fp":"Q1","form":"10-Q"}]}},
+    "Assets": {"units": {"USD": [{"end":"2026-03-31","val":500,"accn":"0000001001-26-000001","fy":2026,"fp":"Q1","form":"10-Q"}]}},
+    "StockholdersEquity": {"units": {"USD": [{"end":"2026-03-31","val":300,"accn":"0000001001-26-000001","fy":2026,"fp":"Q1","form":"10-Q"}]}},
+    "LongTermDebtNoncurrent": {"units": {"USD": [{"end":"2026-03-31","val":80,"accn":"0000001001-26-000001","fy":2026,"fp":"Q1","form":"10-Q"}]}},
+    "EntityCommonStockSharesOutstanding": {"units": {"shares": [{"end":"2026-03-31","val":50,"accn":"0000001001-26-000001","fy":2026,"fp":"Q1","form":"10-Q"}]}}
+  }}}}
+}

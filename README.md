@@ -72,6 +72,17 @@ score, rank, publish or write a database. The default documented workflow is the
 no-network fixture mode; see
 [`docs/milestone-17-fundamentals-capability.md`](docs/milestone-17-fundamentals-capability.md).
 
+Milestone 24 adds a storage-free, bounded SEC EDGAR fundamentals pilot. It is
+offline by default, selects at most three eligible US securities from the active
+research catalogue, and proves both databases unchanged. See the dedicated
+[`SEC operator runbook`](docs/milestone-24-sec-fundamentals-pilot.md).
+
+```bash
+cd backend
+python -m app.sec_capability_cli sec-fundamentals-offline --research-db /absolute/path/research.duckdb --production-db /absolute/path/production.duckdb
+SIGNALLENS_SEC_USER_AGENT='SignalLens Research ops@example.com' python -m app.sec_capability_cli sec-fundamentals-live --authorize-live-sec --research-db /absolute/path/research.duckdb --production-db /absolute/path/production.duckdb
+```
+
 After merge, run the deterministic offline assessment from PowerShell:
 
 ```powershell

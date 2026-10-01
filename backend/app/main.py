@@ -196,6 +196,20 @@ def operations_backup_status() -> dict:
         settings.backup_path, configured="backup_path" in settings.model_fields_set))
 
 
+@app.get("/api/v1/company-intelligence/capability")
+def company_intelligence_capability() -> dict:
+    """Aggregate pilot status only; observations and issuer identities are never served."""
+    return {
+        "status": "offline_fixture_ready",
+        "provider": "SEC EDGAR",
+        "scope": "Up to 3 active-catalogue US securities",
+        "storage": "disabled",
+        "ranking": "disabled",
+        "live_access": "explicit_operator_authorization_required",
+        "feature_families": 9,
+    }
+
+
 def _recent_operations_read_only(limit: int) -> list[dict]:
     """Read an existing journal without creating schema as a side effect."""
     path = settings.research_database_path
