@@ -1,5 +1,17 @@
 # SignalLens Status
 
+## Milestone 29 — database-backed readiness implemented; awaiting month-end
+
+- Authoritative, fingerprinted planning now reads the catalogue, prices,
+  sessions, applicable FX, SEC mappings/checkpoints, and point-in-time facts.
+- Fixture input is isolated to a plainly named offline/test command.
+- Expiring database-bound plan IDs connect planning to transactional,
+  idempotent, research-only 126/252 creation.
+- Scheduler planning cannot authorize creation; scheduling remains disabled by
+  default and staging remains read-only.
+- No provider, Railway, operator database, deployment, schedule, or real vintage
+  was accessed or created. October planning must wait for complete month-end data.
+
 ## Milestone 28 — implemented, evidence immature
 
 - Pre-registered `prospective-us-dilution-1.0.0` at 2026-10-01T00:00:00Z.

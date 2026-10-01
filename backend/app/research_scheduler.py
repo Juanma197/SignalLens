@@ -67,5 +67,16 @@ class SchedulerService:
     def routine_freshness(self, at, operation): return self.run("routine_freshness", at, operation)
     def incremental_refresh(self, at, operation): return self.run("incremental_refresh", at, operation)
     def month_end_shadow_plan(self, at, operation): return self.run("month_end_shadow_plan", at, operation)
+    def prospective_shadow_plan(self, at, operation):
+        """Scheduler may run a read-only DB plan, but can never authorize creation."""
+        result = self.run("month_end_shadow_plan", at, operation)
+        result["authorization_supplied"] = False
+        result["automatic_creation"] = False
+        return result
+
+    def prospective_shadow_create(self, at, operation=None):
+        """Deliberately absent from the scheduler's write authority."""
+        return {"status": "prohibited", "job": "prospective_shadow_create",
+                "reason": "deliberate_operator_authorization_required", "mutated": False}
     def matured_shadow_evaluation(self, at, operation): return self.run("matured_shadow_evaluation", at, operation)
     def backup(self, at, operation): return self.run("backup", at, operation)

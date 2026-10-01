@@ -32,15 +32,16 @@ weight, and only future evidence can assess it.
 
 All commands require explicit, distinct research and production database paths.
 Planning, status, and evaluation fingerprint both files and are strictly
-read-only. The fixture is a decision-time, offline input bundle; commands never
-contact a provider.
+read-only. Milestone 29 supersedes the fixture as an operational input. Fixtures
+are strictly offline/test-only under the deliberately named
+`plan-prospective-us-shadow-offline-fixture` command. Planning never contacts a
+provider.
 
 ```powershell
 $ResearchDb = "C:\SignalLens\data\research.duckdb"
 $ProductionDb = "C:\SignalLens\data\production.duckdb"
-$Fixture = "C:\SignalLens\inputs\prospective-us-2026-10.json"
 $DecisionAt = "2026-10-30T22:00:00+00:00"
-python -m app.prospective_us_shadow_cli plan-prospective-us-shadow --research-db $ResearchDb --production-db $ProductionDb --fixture $Fixture --decision-at $DecisionAt
+python -m app.prospective_us_shadow_cli plan-prospective-us-shadow-from-db --research-db $ResearchDb --production-db $ProductionDb --decision-at $DecisionAt --us-session-date 2026-10-30
 python -m app.prospective_us_shadow_cli prospective-us-shadow-status --research-db $ResearchDb --production-db $ProductionDb
 python -m app.prospective_us_shadow_cli evaluate-prospective-us-shadows --research-db $ResearchDb --production-db $ProductionDb --as-of $DecisionAt
 ```
