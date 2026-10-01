@@ -75,6 +75,7 @@ export default function OperationsPage() {
   const [summary, setSummary] = useState<Section>(idle);
   const [health, setHealth] = useState<Section>(idle);
   const [coverage, setCoverage] = useState<Section>(idle);
+  const [fundamentals, setFundamentals] = useState<Section>(idle);
   const [shadow, setShadow] = useState<Section>(idle);
   const [readiness, setReadiness] = useState<Section>(idle);
   const [scoring, setScoring] = useState<Section>(idle);
@@ -92,7 +93,7 @@ export default function OperationsPage() {
     catch (error) { setter(previous => ({...previous, state: "error", error: error as Result})); }
   }, []);
   useEffect(() => {
-    load("/summary", setSummary); load("/health", setHealth); load("/coverage", setCoverage); load("/shadow/status", setShadow);
+    load("/summary", setSummary); load("/health", setHealth); load("/coverage", setCoverage); load("/shadow/status", setShadow); load("/us-fundamentals/evidence", setFundamentals);
     return () => { setAuthorization(""); setConfirmation(""); setSessions(""); };
   }, [load]);
 
@@ -134,6 +135,11 @@ export default function OperationsPage() {
     <nav><span className="mark">SL</span><strong>Research operations</strong><Link href="/">Research view</Link></nav>
     <section className="hero compact"><p className="eyebrow">{LABEL}</p><h1>Operate safely.<br/><span>Fail closed.</span></h1></section>
     <Summary section={summary} retry={() => load("/summary", setSummary)}/>
+    <section className="panel result"><h2>US point-in-time fundamental evidence</h2>
+      <p>Aggregate coverage and locked comparison only. Raw filings are not displayed.</p>
+      <Status section={fundamentals} retry={() => load("/us-fundamentals/evidence", setFundamentals)}/>
+      <strong>NO CANDIDATES GENERATED.</strong>
+    </section>
     <details><summary>Advanced research operations — read-only assessments permitted in staging</summary>
     <section className="ops-grid">
       <div className="panel ops-card"><h2>Process health</h2><Status section={health} retry={() => load("/health", setHealth)}/></div>

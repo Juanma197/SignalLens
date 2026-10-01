@@ -335,3 +335,12 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [ ] Run a deliberately small authorized operator batch after merge and review readiness.
 - [ ] Evaluate US price-only versus US price-plus-fundamentals in a later milestone.
 - [ ] Consider international factors only after comparable point-in-time proof.
+
+## Milestone 26 — US point-in-time fundamentals
+
+- [x] Pre-register formulas, history, staleness, safeguards and weights.
+- [x] Add point-in-time revision/amendment selection and fail-closed duration handling.
+- [x] Add matched US price-only versus enhanced evaluation at 126/252 sessions.
+- [x] Add bounded aggregate dashboard evidence and immutable read-only CLI.
+- [ ] Run on operator data only after merge and explicit operator execution.
+- [ ] Add international fundamentals only after comparable point-in-time sources exist.

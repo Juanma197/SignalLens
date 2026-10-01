@@ -14,13 +14,14 @@ from .extreme_label_diagnostics import diagnose_extreme_labels, plan_label_repai
 from .model_readiness import assess_model_readiness
 from .research_scoring import assess_research_scoring
 from .horizon_evaluation import assess_horizon_evaluation
+from .us_fundamentals import assess_us_fundamentals
 from .shadow_portfolios import (create_shadow_vintage, evaluate_matured_shadows,
     plan_shadow_vintage, shadow_status)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bounded EODHD global research ingestion")
-    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "diagnose-extreme-labels", "plan-label-repair", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage", "model-readiness", "research-scoring", "research-horizon-evaluation", "plan-shadow-vintage", "create-shadow-vintage", "shadow-status", "evaluate-matured-shadows"])
+    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "diagnose-extreme-labels", "plan-label-repair", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage", "model-readiness", "research-scoring", "research-horizon-evaluation", "research-us-fundamentals-evaluation", "plan-shadow-vintage", "create-shadow-vintage", "shadow-status", "evaluate-matured-shadows"])
     parser.add_argument("--catalogue-fixture", type=Path,
                         help="local sanitized JSON object keyed by region (diagnose-catalogue only)")
     parser.add_argument("--research-db", type=Path)
@@ -92,6 +93,11 @@ def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = 
         if args.research_db is None or args.production_db is None:
             raise ValueError("research-horizon-evaluation requires explicit --research-db and --production-db paths")
         return assess_horizon_evaluation(research_db=args.research_db,
+            production_db=args.production_db, decision_at=args.decision_at or captured)
+    if args.command == "research-us-fundamentals-evaluation":
+        if args.research_db is None or args.production_db is None:
+            raise ValueError("research-us-fundamentals-evaluation requires explicit --research-db and --production-db paths")
+        return assess_us_fundamentals(research_db=args.research_db,
             production_db=args.production_db, decision_at=args.decision_at or captured)
     if args.command == "diagnose-extreme-labels":
         if args.research_db is None or args.production_db is None:
