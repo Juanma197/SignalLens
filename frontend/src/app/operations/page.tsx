@@ -76,6 +76,7 @@ export default function OperationsPage() {
   const [health, setHealth] = useState<Section>(idle);
   const [coverage, setCoverage] = useState<Section>(idle);
   const [fundamentals, setFundamentals] = useState<Section>(idle);
+  const [prospective, setProspective] = useState<Section>(idle);
   const [shadow, setShadow] = useState<Section>(idle);
   const [readiness, setReadiness] = useState<Section>(idle);
   const [scoring, setScoring] = useState<Section>(idle);
@@ -93,7 +94,7 @@ export default function OperationsPage() {
     catch (error) { setter(previous => ({...previous, state: "error", error: error as Result})); }
   }, []);
   useEffect(() => {
-    load("/summary", setSummary); load("/health", setHealth); load("/coverage", setCoverage); load("/shadow/status", setShadow); load("/us-fundamentals/evidence", setFundamentals);
+    load("/summary", setSummary); load("/health", setHealth); load("/coverage", setCoverage); load("/shadow/status", setShadow); load("/us-fundamentals/evidence", setFundamentals); load("/prospective-us-shadow/status", setProspective);
     return () => { setAuthorization(""); setConfirmation(""); setSessions(""); };
   }, [load]);
 
@@ -139,6 +140,10 @@ export default function OperationsPage() {
       <p><strong>Frozen model failed.</strong> Aggregate coverage, family attribution, concentration and defect status only. Raw filings are not displayed.</p>
       <Status section={fundamentals} retry={() => load("/us-fundamentals/evidence", setFundamentals)}/>
       <strong>NO CANDIDATES GENERATED.</strong>
+    </section>
+    <section className="panel result prospective-research"><p className="eyebrow">PROSPECTIVE PAPER RESEARCH ONLY</p><h2>US price + dilution shadow</h2>
+      <p><strong>NOT VALIDATED — NOT INVESTMENT ADVICE.</strong> This evidence series is separate from production predictions and recommendations.</p>
+      <Status section={prospective} retry={() => load("/prospective-us-shadow/status", setProspective)}/>
     </section>
     <details><summary>Advanced research operations — read-only assessments permitted in staging</summary>
     <section className="ops-grid">

@@ -1,0 +1,19 @@
+{
+  "hypothesis_name": "Prospective US price quality with dilution overlay",
+  "semantic_version": "prospective-us-dilution-1.0.0",
+  "registration_timestamp": "2026-10-01T00:00:00Z",
+  "first_permissible_vintage": "2026-10 month-end after registration, only when the exact US session and FX are complete",
+  "economic_rationale": "Price behaviour remains primary. Lower point-in-time year-over-year diluted-share growth may indicate less owner dilution; a fixed small overlay is economically pre-registered after exploratory evidence and requires genuinely prospective confirmation. The 90/10 weight was not historically optimized.",
+  "eligible_universe": "Current-catalogue US common stocks with an existing model-ready price observation and defensible point-in-time dilution evidence; permanently unmapped SEC securities are reported separately.",
+  "score_formula": "0.90 * existing price-only percentile + 0.10 * dilution percentile, where lower year-over-year diluted-share growth ranks higher and buybacks may rank favourably",
+  "eligibility_and_withholding": "Missing, stale, nonfinite, incompatible, unreliable, late-filed or late-retrieved share observations are unavailable and are never zero, neutral or poor. Leverage, profitability, cash flow, growth and valuation are diagnostics only and never ranking inputs.",
+  "horizons_trading_sessions": [126, 252],
+  "selection_count": {"minimum": 0, "maximum": 3},
+  "tie_breaking": "prospective score descending, then qualified symbol ascending",
+  "rebalance_cadence": "monthly after a complete US month-end session and required FX readiness",
+  "outcome_definitions": "Complete equal-weight total price returns at the exact 126th and 252nd subsequent trading sessions; missing or integrity-excluded members make the cohort incomplete",
+  "baselines": ["matching top-three price-only selections using identical eligible securities and decision date", "equal-weight eligible-US universe using identical decision date"],
+  "integrity_gates": ["publicly available and retrieved by decision timestamp", "exact session maturity", "complete outcomes", "immutable vintage", "regional/session-date safety", "research and production isolation", "no unresolved integrity exclusion"],
+  "promotion_requirements": {"completed_monthly_vintages": 12, "security_level_predictions": 500, "complete_matured_outcomes": true, "positive_incremental_vs_price_only": true, "positive_excess_vs_equal_weight": true, "dependence_aware_confidence_interval_excludes_zero": true, "positive_period_rate_minimum": 0.5, "acceptable_concentration": true, "no_integrity_failures": true, "no_unresolved_material_missingness_bias": true, "multiplicity_correction_across_locked_horizons": true},
+  "prohibited_retrospective_changes": ["no vintage at or before registration", "no reconstruction of September 2026 or earlier", "no weight tuning", "no rewriting a vintage", "no changing this version after its first vintage", "no mixing versions or horizons", "no early success claim", "no production publication or broker action"]
+}

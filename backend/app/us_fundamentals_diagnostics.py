@@ -20,6 +20,7 @@ from .model_readiness import ReadinessError, _same_file, fingerprint
 from .us_fundamentals import (FACTOR_DIRECTIONS, FACTOR_FAMILIES,
     FAMILY_WEIGHTS, FUNDAMENTAL_WEIGHT, LOCKED_HORIZONS, PRICE_WEIGHT,
     assess_us_fundamentals, configuration_hash)
+from .statistics import safe_correlation
 
 OBSERVED_HEADLINE = {
     126: {"eligible_vintages": 101, "predictions": 4670,
@@ -108,7 +109,9 @@ def factor_evidence(matched: pd.DataFrame, score: str, *, weight: float,
     correlations, spreads, monotonic, vintage_spreads = [], [], [], {}
     for vintage, group in valid.groupby("vintage_date", sort=True):
         if group[score].nunique() > 1 and group.forward_return.nunique() > 1:
-            correlations.append(group[score].rank().corr(group.forward_return.rank()))
+            correlation = safe_correlation(group[score].rank(), group.forward_return.rank())
+            if correlation["value"] is not None:
+                correlations.append(correlation["value"])
         spread, _, mono = _quantile_evidence(group, score)
         if spread is not None:
             spreads.append(spread); vintage_spreads[str(pd.Timestamp(vintage).date())] = spread
@@ -144,7 +147,7 @@ def factor_evidence(matched: pd.DataFrame, score: str, *, weight: float,
             "top_security_share": float(selected_counts.head(1).sum() / total_selected),
             "top_symbols": [{"qualified_symbol": str(k), "selections": int(v)}
                             for k, v in selected_counts.head(MAX_ITEMS).items()]},
-        "price_score_rank_correlation": _safe_float(valid[score].rank().corr(valid["score"].rank())),
+        "price_score_rank_correlation": safe_correlation(valid[score].rank(), valid["score"].rank())["value"],
         "selected_top_group_overlap": float(overlap), "horizon_sessions": horizon,
     }
 
@@ -189,9 +192,9 @@ def coverage_diagnosis(matched: pd.DataFrame) -> dict[str, Any]:
         "early_late_coverage": [_safe_float(part.mean()) for part in halves if len(part)],
         "missing_never_scored": True}
     if "score" in matched:
-        result["coverage_price_score_rank_correlation"] = _safe_float(pd.Series(passing.astype(float)).corr(matched.score.rank()))
+        result["coverage_price_score_rank_correlation"] = safe_correlation(passing.astype(float), matched.score.rank())["value"]
     if "price_history_sessions" in matched:
-        result["coverage_price_history_correlation"] = _safe_float(pd.Series(passing.astype(float)).corr(matched.price_history_sessions))
+        result["coverage_price_history_correlation"] = safe_correlation(passing.astype(float), matched.price_history_sessions)["value"]
     return result
 
 

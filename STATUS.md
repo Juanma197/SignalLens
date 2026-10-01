@@ -1,5 +1,18 @@
 # SignalLens Status
 
+## Milestone 28 — implemented, evidence immature
+
+- Pre-registered `prospective-us-dilution-1.0.0` at 2026-10-01T00:00:00Z.
+- Locked the unoptimized 90/10 price/dilution paper score and zero-to-three
+  deterministic selections.
+- Added read-only plan/status/evaluation commands plus separately authorized,
+  transactional research creation; no real vintage was created.
+- Added 126/252 cohorts with matching price-only and equal-weight baselines,
+  safe undefined-correlation handling, production isolation, and a separate
+  dashboard section.
+- Evidence is immature. Promotion discussion is prohibited until every frozen
+  gate is met. Current-membership and US-only limitations remain.
+
 Last updated: 2026-10-01
 
 ## Milestone 22 — Railway staging assessment repair prepared (not deployed)

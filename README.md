@@ -1,5 +1,16 @@
 # SignalLens
 
+## Milestone 28: prospective US paper research
+
+SignalLens now contains an immutable, prospective-only US hypothesis: 90% of
+the existing price percentile plus a 10% point-in-time dilution percentile.
+It is **not validated and not investment advice**. The frozen specification,
+strict month-end boundary, read-only planning/status workflow, exact-session
+maturity rules, and promotion gates are documented in
+[`docs/milestone-28-prospective-us-shadow.md`](docs/milestone-28-prospective-us-shadow.md).
+No historical vintage is reconstructed and no production recommendation is
+created.
+
 ## Milestone 27 fundamentals failure diagnosis
 
 SignalLens now includes a bounded, strictly read-only attribution command for
