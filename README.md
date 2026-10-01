@@ -1,5 +1,14 @@
 # SignalLens
 
+## Safe Railway research synchronization (Milestone 33)
+
+An operator-controlled staging workflow now validates an uploaded research
+database, creates a verified rollback artifact, isolates readers, and atomically
+publishes or restores it while fingerprinting the untouched production database.
+Scheduling and production publication remain unavailable. Follow the
+[Milestone 33 Railway runbook](docs/milestone-33-railway-research-sync.md); never
+overwrite `/data/signallens.duckdb`.
+
 ## Explainable company research (Milestone 32)
 
 SignalLens now provides bounded, point-in-time company briefs through the read-only CLI, authenticated research API, and `/research` dashboard. The brief separates the frozen 90% price / 10% dilution score from financial and official-SEC-event context, and never produces an investment recommendation. See the [Milestone 32 runbook](docs/milestone-32-company-research-briefs.md) for its structure, safety rules, citations, pre-vintage behavior, and exact PowerShell commands.

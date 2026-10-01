@@ -54,6 +54,7 @@ from .model_readiness import assess_model_readiness
 from .research_scoring import assess_research_scoring
 from .operations import AssessmentJobs, OperationHistory, research_health, safe_error
 from .database_backup import backup_status
+from .research_sync import marker_path as research_maintenance_marker
 from .shadow_portfolios import (create_shadow_vintage, evaluate_matured_shadows,
                                 plan_shadow_vintage, shadow_status)
 from .sec_ingestion import status as sec_ingestion_status
@@ -171,6 +172,17 @@ async def authenticate_private_api(request: Request, call_next):
                 content={"detail": "Invalid or missing bearer token"},
                 headers={"WWW-Authenticate": "Bearer"},
             )
+    # The marker is checked before any endpoint dependency can open DuckDB.  It
+    # deliberately leaves metadata-only liveness and readiness reachable.
+    volume = (settings.persistent_volume_path
+              or settings.research_database_path.parent).expanduser().resolve()
+    if (request.url.path.startswith("/api/v1/")
+            and request.url.path not in PUBLIC_API_PATHS
+            and research_maintenance_marker(volume).is_file()):
+        return JSONResponse(status_code=503, content={"detail": {
+            "code": "research_maintenance",
+            "message": "Research data is temporarily unavailable for maintenance.",
+        }}, headers={"Retry-After": "5"})
     staging_read_only_assessment = (
         request.method == "POST" and request.url.path in STAGING_READ_ONLY_POST_PATHS
     )
@@ -195,12 +207,14 @@ def ready() -> JSONResponse:
     distinct = research != production
     volume_present = volume.is_dir()
     initialized = research.is_file()
-    ready_now = distinct and volume_present and initialized
-    state = "ready" if ready_now else "not_initialized" if not initialized else "not_ready"
+    maintenance = research_maintenance_marker(volume).is_file()
+    ready_now = distinct and volume_present and initialized and not maintenance
+    state = ("research_maintenance" if maintenance else "ready" if ready_now
+             else "not_initialized" if not initialized else "not_ready")
     return JSONResponse(status_code=200 if ready_now else 503, content={
         "status": state, "configuration_valid": True, "paths_distinct": distinct,
         "volume_mounted": volume_present, "research_database_exists": initialized,
-        "provider_requests": False,
+        "research_maintenance": maintenance, "provider_requests": False,
     })
 
 
