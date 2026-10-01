@@ -325,3 +325,13 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Preserve filing versions and reject fiscal period-end substitution.
 - [x] Publish only sanitized aggregate capability metadata to the dashboard.
 - [ ] Decide on storage design only after an operator reviews a live aggregate report.
+## Milestone 25 — Point-in-time fundamentals ingestion foundation
+
+- [x] Define research-only SEC issuer, filing, fact, run, checkpoint and failure storage.
+- [x] Preserve acceptance-time provenance, amendments and restated fact versions.
+- [x] Add deterministic plan, ingest, status and retry operations with hard safety bounds.
+- [x] Keep production immutable and all recommendation/publishing paths isolated.
+- [x] Assess official-source candidates for LSE, TO, XETRA and PA without live requests.
+- [ ] Run a deliberately small authorized operator batch after merge and review readiness.
+- [ ] Evaluate US price-only versus US price-plus-fundamentals in a later milestone.
+- [ ] Consider international factors only after comparable point-in-time proof.
