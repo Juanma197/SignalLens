@@ -3,7 +3,9 @@ from datetime import datetime, timedelta, timezone
 import duckdb
 import pytest
 
-from app.company_research import NOTICE, company_research_brief, prospective_selection_briefs
+from app.company_research import (NOTICE, CompanyEvidenceUnavailableError,
+                                  InvalidQualifiedSymbolError, company_research_brief,
+                                  prospective_selection_briefs)
 from app.company_research_cli import _reason_code
 from app.model_readiness import ReadinessError, fingerprint
 from app.prospective_us_shadow import (AUTHORIZATION_PHRASE, create_from_database_plan,
@@ -121,5 +123,36 @@ def test_registered_vintage_contributions_are_reconciled_exactly(tmp_path):
 
 
 def test_cli_reason_codes_are_stable_and_do_not_reflect_details():
-    assert _reason_code(ReadinessError("unknown secret/path symbol")) == "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
+    assert _reason_code(InvalidQualifiedSymbolError("details")) == "COMPANY_BRIEF_INVALID_SYMBOL"
+    assert _reason_code(CompanyEvidenceUnavailableError("details")) == "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
+    assert _reason_code(ReadinessError("unknown, ambiguous, or non-model-ready qualified symbol")) == "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
     assert _reason_code(RuntimeError("provider raw response")) == "COMPANY_BRIEF_INTERNAL_ERROR"
+
+
+def test_cli_symbol_reason_codes_cover_malformed_unknown_unscored_and_success(tmp_path):
+    research, production, decision = populated_databases(tmp_path)
+    common = {"research_db": research, "production_db": production,
+              "decision_at": decision, "now": decision + timedelta(minutes=1)}
+
+    with pytest.raises(InvalidQualifiedSymbolError) as malformed:
+        company_research_brief(**common, qualified_symbol="a")
+    assert _reason_code(malformed.value) == "COMPANY_BRIEF_INVALID_SYMBOL"
+
+    with pytest.raises(CompanyEvidenceUnavailableError) as unknown:
+        company_research_brief(**common, qualified_symbol="UNKNOWN.US")
+    assert _reason_code(unknown.value) == "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
+
+    # A.US remains an eligible member of the active catalogue, but no longer
+    # has enough history to enter frozen price-score reconstruction.
+    with duckdb.connect(str(research)) as db:
+        db.execute("""DELETE FROM global_price_observations
+                      WHERE qualified_symbol='A.US' AND trading_date < DATE '2026-10-30'""")
+        active_count = db.execute("""SELECT count(*) FROM security_listings
+            WHERE retrieval_id='r' AND qualified_symbol='A.US' AND active""").fetchone()[0]
+    assert active_count == 1
+    with pytest.raises(CompanyEvidenceUnavailableError) as unscored:
+        company_research_brief(**common, qualified_symbol="A.US")
+    assert _reason_code(unscored.value) == "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
+
+    brief = company_research_brief(**common, qualified_symbol="B.US")
+    assert brief["company_identity"]["qualified_symbol"] == "B.US"
