@@ -137,6 +137,7 @@ type GlobalMarketCoverage = {
 
 type ShadowCandidate = { security_id: string; rank: number | null; overall_score: number; confidence: number; eligible: boolean; lens_scores: Record<string, number>; contributions: Record<string, number>; exclusions: string[]; evidence: string[] };
 type ShadowResearch = { status: "available" | "unavailable"; label: string; model_version?: string; feature_version?: string; evaluated_at?: string; candidates: ShadowCandidate[] };
+type CompanyCapability = { status: string; provider: string; scope: string; storage: string; ranking: string; live_access: string; feature_families: number };
 
 type MacroObservation = {
   observation_id: string;
@@ -320,7 +321,7 @@ function formatMacro(item: Pick<MacroObservation, "unit" | "value">): string {
 }
 
 export default async function Home() {
-  const [data, status, outcomes, history, watchlist, macro, universeCoverage, marketCoverage, shadow] =
+  const [data, status, outcomes, history, watchlist, macro, universeCoverage, marketCoverage, shadow, companyCapability] =
     await Promise.all([
       fetchJson("/api/v1/rankings/latest", unavailable),
       fetchJson<DataStatus | null>("/api/v1/data/status", null),
@@ -338,6 +339,10 @@ export default async function Home() {
       }),
       fetchJson<ShadowResearch>("/api/v1/research/global-multifactor/latest", {
         status: "unavailable", label: "SHADOW RESEARCH — NOT A PRODUCTION RANKING", candidates: [],
+      }),
+      fetchJson<CompanyCapability>("/api/v1/company-intelligence/capability", {
+        status: "unavailable", provider: "SEC EDGAR", scope: "Bounded US pilot",
+        storage: "disabled", ranking: "disabled", live_access: "authorization_required", feature_families: 9,
       }),
     ]);
 
@@ -386,6 +391,19 @@ export default async function Home() {
         <div><b>{status?.row_count.toLocaleString() ?? "—"}</b><span>daily observations</span></div>
         <div><b>{status?.forward_horizon_trading_days ?? 21}</b><span>trading-day horizon</span></div>
         <div><b>{status?.duplicate_rows ?? "—"}</b><span>duplicate rows</span></div>
+      </section>
+
+      <section className="panel capability-panel">
+        <header><div><p className="eyebrow">BOUNDED SEC EDGAR PILOT</p><h2>Company intelligence capability</h2></div>
+          <span className="outcome-status unavailable">{companyCapability.status.replaceAll("_", " ")}</span></header>
+        <div className="coverage-grid">
+          <div><b>{companyCapability.feature_families}</b><span>feature families assessed</span></div>
+          <div><b>≤ 3</b><span>US securities per run</span></div>
+          <div><b>{companyCapability.storage}</b><span>observation storage</span></div>
+          <div><b>{companyCapability.ranking}</b><span>ranking output</span></div>
+        </div>
+        <p className="notice warning">Aggregate capability metadata only. No company recommendation, raw filing, live observation, or ranking is displayed.</p>
+        <footer>{companyCapability.provider} official endpoints · {companyCapability.scope} · live access: {companyCapability.live_access.replaceAll("_", " ")}</footer>
       </section>
 
       <section className="panel horizon-evidence">

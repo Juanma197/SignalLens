@@ -513,3 +513,14 @@ and no strategy-success claim is made.
   failed baseline. It is not rewritten or obscured.
 - The command is database-immutable, provider-free and candidate-incapable.
   Passing evidence can only support a later operator review and horizon lock.
+## Milestone 24 — Bounded live SEC fundamentals pilot (implementation complete)
+
+- [x] Official SEC ticker mapping, submissions, and Company Facts endpoints only.
+- [x] Offline-by-default fixture assessment and fail-closed live authorization.
+- [x] Deterministic selection of no more than three active-catalogue US securities.
+- [x] Hard request/retry/pacing/timeout/response bounds and redacted failures.
+- [x] Point-in-time normalization retains accession, form, fiscal period, filing
+  availability, amendments, taxonomy, unit/currency, source and retrieval time.
+- [x] Both explicit DuckDB paths are opened read-only and SHA-256/byte immutability
+  is included in the aggregate-only report.
+- [x] No observations are stored and no candidates, model changes, or rankings are produced.

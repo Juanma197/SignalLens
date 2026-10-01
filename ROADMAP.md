@@ -317,3 +317,11 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Make the bounded operator summary primary and keep diagnostics explicitly collapsed.
 - [x] Document separate Railway services, persistent research volume and read-only staging.
 - [ ] Deploy only after human review; deployment and September 2026 vintage creation are out of scope.
+## Milestone 24 — Bounded live SEC fundamentals pilot
+
+- [x] Establish an official-SEC-only, offline-first capability boundary.
+- [x] Assess nine bounded point-in-time fundamental feature families for at most
+  three deterministic US representatives.
+- [x] Preserve filing versions and reject fiscal period-end substitution.
+- [x] Publish only sanitized aggregate capability metadata to the dashboard.
+- [ ] Decide on storage design only after an operator reviews a live aggregate report.
