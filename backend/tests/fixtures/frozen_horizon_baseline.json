@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "immutable_baseline": true,
+  "candidate_generation_authorized": false,
+  "ranking_generated": false,
+  "candidates": [],
+  "horizons": [
+    {"sessions": 21, "decision": "failed", "plain_language": "The short-horizon evidence did not clear the final validation gates."},
+    {"sessions": 63, "decision": "failed", "plain_language": "The quarterly-horizon evidence did not clear the final validation gates."},
+    {"sessions": 126, "decision": "failed", "plain_language": "The result was promising, but was not stable across regions and did not survive adjustment for testing four horizons."},
+    {"sessions": 252, "decision": "failed", "plain_language": "Average results were positive in all five regions, but confidence was insufficient and significance did not survive the four-horizon adjustment."}
+  ]
+}
