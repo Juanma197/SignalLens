@@ -62,6 +62,7 @@ from .us_fundamentals import (FACTOR_FAMILIES, FAMILY_WEIGHTS, LOCKED_HORIZONS,
                               configuration_hash)
 from .prospective_us_shadow import (readiness as prospective_us_shadow_readiness,
                                     status as prospective_us_shadow_status)
+from .company_research import company_research_brief, prospective_selection_briefs
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
@@ -265,6 +266,24 @@ def operations_sec_events_status() -> dict:
     """Read-only, bounded official-filing context; never returns document bodies."""
     return _redacted(lambda: sec_event_status(
         settings.research_database_path, settings.database_path))
+
+
+@app.get("/api/v1/research/company-brief")
+def research_company_brief(qualified_symbol: str = Query(..., max_length=40),
+                           decision_at: datetime = Query(...),
+                           max_events: int = Query(6, ge=1, le=10)) -> dict:
+    """Authenticated, bounded and strictly read-only point-in-time brief."""
+    return _redacted(lambda: company_research_brief(
+        research_db=settings.research_database_path, production_db=settings.database_path,
+        qualified_symbol=qualified_symbol, decision_at=decision_at, max_events=max_events))
+
+
+@app.get("/api/v1/research/prospective-selection-briefs")
+def research_prospective_selection_briefs(decision_at: datetime = Query(...)) -> dict:
+    """Explain no more than three already-registered paper selections."""
+    return _redacted(lambda: prospective_selection_briefs(
+        research_db=settings.research_database_path, production_db=settings.database_path,
+        decision_at=decision_at))
 
 
 @app.get("/api/v1/operations/summary")

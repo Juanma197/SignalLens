@@ -1,5 +1,9 @@
 # SignalLens Roadmap
 
+## Milestone 32 — explainable company research briefs (complete)
+
+Delivered the bounded read-only adapter, CLI/API surfaces, user-facing research page, offline safety tests, and operator runbook. The first permissible paper vintage remains October 2026 month-end and must be created only by the separately authorized prospective workflow. Future work may integrate the page in Railway after review; it must not relax authentication, point-in-time filtering, output bounds, or the frozen score.
+
 ## Milestone 31 — Research-only SEC material-event ingestion
 
 - [x] Add dedicated run, checkpoint, normalized metadata, and failure tables.

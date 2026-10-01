@@ -247,7 +247,9 @@ def database_inputs(*, research_db: Path, production_db: Path, decision_at: date
     price_rows = scores.merge(latest[["qualified_symbol", "adjusted_close", "trading_date"]], on="qualified_symbol")
     price_rows = price_rows.rename(columns={"adjusted_close": "decision_price", "trading_date": "price_date"})
     price_rows["model_ready"] = True
-    price_rows = price_rows[["security_id", "qualified_symbol", "price_percentile", "decision_price", "model_ready", "price_date"]]
+    price_rows = price_rows[["security_id", "qualified_symbol", "price_percentile", "decision_price",
+        "model_ready", "price_date", "momentum_126d", "trend_21d",
+        "annualized_volatility_63d", "max_drawdown_126d"]]
     cp = checkpoints.copy(); cp["updated_at"] = pd.to_datetime(cp.updated_at, utc=True, errors="coerce")
     cp = cp.loc[cp.updated_at.le(pd.Timestamp(decision_at))].sort_values("updated_at").drop_duplicates("security_id", keep="last")
     mapped = set(issuers.loc[pd.to_datetime(issuers.mapped_at, utc=True).le(pd.Timestamp(decision_at)), "security_id"])
