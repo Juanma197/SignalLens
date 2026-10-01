@@ -12,7 +12,9 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
@@ -27,6 +29,7 @@ from .sec_capability import (CONCEPTS, SEC_FACTS, SEC_SUBMISSIONS, SEC_TICKERS,
 AUTHORIZATION_PHRASE = "I AUTHORIZE RESEARCH-ONLY SEC INGESTION"
 REGIONS = ("US",)
 MAX_SYMBOL_SAMPLES = 10
+MAX_SAMPLE_LENGTH = 80
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sec_issuers(
@@ -131,16 +134,58 @@ def plan(research: Path, production: Path) -> dict[str, Any]:
     return _readonly(query, research, production)
 
 
+def _json_value(value: Any) -> Any:
+    """Convert DuckDB/Python scalar values to deterministic JSON primitives."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, Enum):
+        return _json_value(value.value)
+    return str(value)
+
+
+def _aggregate_map(rows: list[tuple[Any, Any]]) -> dict[str, int]:
+    """Make GROUP BY results safe for ``json.dumps(sort_keys=True)``.
+
+    DuckDB returns a Python ``None`` key for SQL NULL.  Mixing that key with text
+    keys raises TypeError while JSON is sorting dictionary keys.
+    """
+    result: dict[str, int] = {}
+    for raw_key, raw_count in rows:
+        key = "(null)" if raw_key is None else str(_json_value(raw_key))
+        result[key] = result.get(key, 0) + int(raw_count or 0)
+    return result
+
+
+def _sample(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return "".join(character if character.isprintable() else "?" for character in text)[:MAX_SAMPLE_LENGTH]
+
+
 def status(research: Path, production: Path) -> dict[str, Any]:
     def query(db: duckdb.DuckDBPyConnection) -> dict[str, Any]:
-        selected = _catalogue(db); tables = {r[0] for r in db.execute("SHOW TABLES").fetchall()}
+        selected = _catalogue(db); selected_ids = {row["security_id"] for row in selected}
+        tables = {r[0] for r in db.execute("SHOW TABLES").fetchall()}
         if "sec_facts" not in tables:
             return {"command":"sec-ingestion-status", "selected_us_securities":len(selected), "mapped":0,
                     "completed":0,"pending":len(selected),"permanently_failed":0,"retryable":0,
-                    "observations":0,"feature_families":{k:"unavailable" for k in CONCEPTS}}
-        counts = dict(db.execute("SELECT status,count(*) FROM sec_checkpoints GROUP BY status").fetchall())
+                    "observations":0,"revisions":0,
+                    "public_availability_range":{"earliest":None,"latest":None},
+                    "feature_families":{k:"unavailable" for k in CONCEPTS},
+                    "affected_symbol_samples":[],"generated_rankings":0,"generated_candidates":0,
+                    "latest_run":None,"checkpoint_consistency":{"status":"not_applicable","checks":[]}}
+        checkpoint_rows = db.execute("SELECT security_id,status FROM sec_checkpoints").fetchall()
+        states = {str(security_id): str(state) for security_id, state in checkpoint_rows
+                  if str(security_id) in selected_ids}
+        completed = sum(state == "completed" for state in states.values())
+        permanent = sum(state == "permanent_failure" for state in states.values())
+        retryable = sum(state == "retryable_failure" for state in states.values())
+        pending = len(selected_ids) - completed - permanent - retryable
         facts = db.execute("SELECT count(*),min(public_at),max(public_at) FROM sec_facts").fetchone()
-        concepts = dict(db.execute("SELECT concept,count(*) FROM sec_facts GROUP BY concept ORDER BY concept").fetchall())
+        concepts = _aggregate_map(db.execute("SELECT concept,count(*) FROM sec_facts GROUP BY concept ORDER BY concept").fetchall())
         families = {}
         for family, expected in CONCEPTS.items():
             present = len(set(expected) & concepts.keys())
@@ -149,20 +194,47 @@ def status(research: Path, production: Path) -> dict[str, Any]:
             families["debt_interest_coverage"] = "unavailable"
         conflicts = db.execute("""SELECT count(*) FROM (SELECT security_id,taxonomy,concept,period_start,period_end,
             accession_number FROM sec_facts GROUP BY ALL HAVING count(DISTINCT unit)>1)""").fetchone()[0]
-        samples = [r[0] for r in db.execute("SELECT DISTINCT qualified_symbol FROM sec_failures WHERE resolved_at IS NULL ORDER BY 1 LIMIT ?",[MAX_SYMBOL_SAMPLES]).fetchall()]
+        samples = [_sample(r[0]) for r in db.execute("SELECT DISTINCT qualified_symbol FROM sec_failures WHERE resolved_at IS NULL ORDER BY 1 LIMIT ?",[MAX_SYMBOL_SAMPLES]).fetchall()]
+        run_row = db.execute("""SELECT run_id,started_at,finished_at,status,request_budget,request_count,
+            inserted_count,unchanged_count,revision_count,stop_reason FROM sec_ingestion_runs
+            ORDER BY started_at DESC,run_id DESC LIMIT 1""").fetchone()
+        latest_run = None
+        consistency = {"status":"not_applicable","checks":[]}
+        if run_row:
+            columns = ("run_id","started_at","finished_at","status","request_budget","request_count",
+                       "inserted_count","unchanged_count","revision_count","stop_reason")
+            latest_run = {key:_json_value(value) for key,value in zip(columns,run_row)}
+            run_states = [str(row[0]) for row in db.execute(
+                "SELECT status FROM sec_checkpoints WHERE last_run_id=?", [run_row[0]]).fetchall()]
+            run_completed = run_states.count("completed")
+            run_retryable = run_states.count("retryable_failure")
+            checks = {
+                "request_count_within_budget": int(run_row[5]) <= int(run_row[4]),
+                "completed_issuers_have_request_capacity": int(run_row[5]) >= 1 + (2 * run_completed),
+                "inserted_total_is_present": int(facts[0]) >= int(run_row[6]),
+                "revision_total_is_present": int(db.execute("SELECT count(*) FROM sec_facts WHERE is_revision").fetchone()[0]) >= int(run_row[8]),
+                "budget_stop_has_retryable_checkpoint": run_row[9] != "request_budget_exhausted" or run_retryable > 0,
+                "budget_stop_exhausted_budget": run_row[9] != "request_budget_exhausted" or int(run_row[5]) == int(run_row[4]),
+            }
+            consistency = {"status":"consistent" if all(checks.values()) else "inconsistent",
+                           "checks":[{"name":name,"passed":passed} for name,passed in checks.items()],
+                           "completed_in_latest_run":run_completed,
+                           "retryable_in_latest_run":run_retryable}
         return {"command":"sec-ingestion-status", "selected_us_securities":len(selected),
             "mapped":db.execute("SELECT count(DISTINCT security_id) FROM sec_issuers").fetchone()[0],
-            "completed":counts.get("completed",0), "pending":len(selected)-sum(counts.values()),
-            "permanently_failed":counts.get("permanent_failure",0), "retryable":counts.get("retryable_failure",0),
-            "observations":facts[0], "public_availability_range":{"earliest":str(facts[1]) if facts[1] else None,"latest":str(facts[2]) if facts[2] else None},
+            "completed":completed, "pending":pending,
+            "permanently_failed":permanent, "retryable":retryable,
+            "observations":int(facts[0]), "public_availability_range":{"earliest":_json_value(facts[1]),"latest":_json_value(facts[2])},
             "coverage_by_concept":concepts, "feature_families":families,
-            "forms":dict(db.execute("SELECT form,count(*) FROM sec_facts GROUP BY form ORDER BY form").fetchall()),
-            "units":dict(db.execute("SELECT unit,count(*) FROM sec_facts GROUP BY unit ORDER BY unit").fetchall()),
-            "currencies":dict(db.execute("SELECT currency,count(*) FROM sec_facts GROUP BY currency ORDER BY currency").fetchall()),
+            "forms":_aggregate_map(db.execute("SELECT form,count(*) FROM sec_facts GROUP BY form ORDER BY form").fetchall()),
+            "units":_aggregate_map(db.execute("SELECT unit,count(*) FROM sec_facts GROUP BY unit ORDER BY unit").fetchall()),
+            "currencies":_aggregate_map(db.execute("SELECT currency,count(*) FROM sec_facts GROUP BY currency ORDER BY currency").fetchall()),
             "amendments":db.execute("SELECT count(*) FROM sec_facts WHERE is_amendment").fetchone()[0],
             "revisions":db.execute("SELECT count(*) FROM sec_facts WHERE is_revision").fetchone()[0],
             "missing_availability":db.execute("SELECT count(*) FROM sec_failures WHERE reason_code='missing_availability_date'").fetchone()[0],
-            "conflicting_units":conflicts,"affected_symbol_samples":samples}
+            "conflicting_units":conflicts,"affected_symbol_samples":samples,
+            "latest_run":latest_run,"checkpoint_consistency":consistency,
+            "generated_rankings":0,"generated_candidates":0}
     return _readonly(query, research, production)
 
 
