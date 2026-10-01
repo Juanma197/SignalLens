@@ -16,9 +16,12 @@ import numpy as np
 import pandas as pd
 
 from .active_catalogue import select_active_catalogue
-from .model_readiness import ReadinessError, fingerprint
+from .model_readiness import ReadinessError, _same_file, fingerprint
+from .price_segments import detect_price_segments
 from .prospective_us_shadow import (CONFIGURATION_HASH, SPECIFICATION,
-                                    database_inputs, score_inputs)
+                                    REGISTRATION_AT, _dilution_from_facts, score_inputs)
+from .research_observations import ObservationPolicy, build_model_ready_observations
+from .research_scoring import prepare_cross_section
 
 MAX_EVENTS = 10
 MAX_TEXT = 240
@@ -94,17 +97,16 @@ def _selection(db: duckdb.DuckDBPyConnection, security_id: str,
     if "prospective_us_shadow_vintages" not in _tables(db):
         return {"exists": False, "reason": "no registered paper vintage exists at this decision time",
                 "first_permissible_vintage": "2026-10-31"}
-    rows = db.execute("""SELECT decision_at,selections_json,eligible_json FROM prospective_us_shadow_vintages
-        WHERE decision_at<=? ORDER BY decision_at DESC LIMIT 24""", [decision_at]).fetchall()
-    for vintage_at, raw, eligible_raw in rows:
-        members = json.loads(raw)
-        universe = json.loads(eligible_raw)
+    row = db.execute("""SELECT decision_at,selections_json,eligible_json FROM prospective_us_shadow_vintages
+        WHERE decision_at<=? ORDER BY decision_at DESC LIMIT 1""", [decision_at]).fetchone()
+    if row:
+        vintage_at, raw, eligible_raw = row
+        members, universe = json.loads(raw), json.loads(eligible_raw)
         for rank, member in enumerate(members, 1):
             if str(member.get("security_id")) == security_id:
-                price = float(member["price_percentile"])
-                dilution = float(member["dilution_percentile"])
+                price, dilution = float(member["price_percentile"]), float(member["dilution_percentile"])
                 final = float(member["prospective_score"])
-                return {"exists": True, "decision_at": vintage_at, "paper_group_rank": rank,
+                return {"exists": True, "vintage_exists": True, "decision_at": vintage_at, "paper_group_rank": rank,
                     "final_frozen_score": final, "price_contribution": .9 * price,
                     "dilution_contribution": .1 * dilution,
                     "eligible_universe_percentile": (sum(float(x["prospective_score"]) <= final for x in universe)
@@ -112,8 +114,59 @@ def _selection(db: duckdb.DuckDBPyConnection, security_id: str,
                     "tie_break": "qualified_symbol ascending when scores tie",
                     "reason": "Its frozen score placed it within the bounded zero-to-three paper group.",
                     "validated_recommendation": False}
-    return {"exists": False, "reason": "company was not in a registered zero-to-three paper group",
+        return {"exists": False, "vintage_exists": True, "decision_at": vintage_at,
+                "reason": "company was not selected in the latest registered paper vintage",
+                "validated_recommendation": False,
+                "first_permissible_vintage": "2026-10-31"}
+    return {"exists": False, "vintage_exists": False, "reason": "no registered paper vintage exists at this decision time",
             "first_permissible_vintage": "2026-10-31"}
+
+
+def _brief_inputs(*, research_db: Path, production_db: Path,
+                  decision_at: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build point-in-time evidence without applying prospective month-end gates."""
+    if (not research_db.is_file() or not production_db.is_file() or research_db.is_symlink()
+            or production_db.is_symlink() or _same_file(research_db, production_db)):
+        raise ReadinessError("distinct existing regular database files are required")
+    with duckdb.connect(str(production_db), read_only=True) as production:
+        production.execute("SELECT 1")
+    required = {"security_master_retrievals", "security_listings", "global_price_observations",
+        "global_fx_observations", "global_corporate_actions", "eodhd_ingestion_checkpoints",
+        "sec_issuers", "sec_checkpoints", "sec_facts"}
+    with duckdb.connect(str(research_db), read_only=True) as db:
+        missing = required - _tables(db)
+        if missing: raise ReadinessError("company research evidence schema is incomplete")
+        active = select_active_catalogue(db, as_of=decision_at.replace(tzinfo=None))
+        catalogue = active.listings
+        prices = db.execute("SELECT * FROM global_price_observations").fetchdf()
+        fx = db.execute("SELECT * FROM global_fx_observations").fetchdf()
+        actions = db.execute("SELECT * FROM global_corporate_actions").fetchdf()
+        failures = db.execute("SELECT qualified_symbol,error_code FROM eodhd_ingestion_checkpoints WHERE status='failed'").fetchdf()
+        facts = db.execute("SELECT * FROM sec_facts").fetchdf()
+        issuers = db.execute("SELECT security_id,mapped_at FROM sec_issuers").fetchdf()
+        checkpoints = db.execute("SELECT security_id,status,updated_at FROM sec_checkpoints").fetchdf()
+    us = catalogue.loc[catalogue.region.eq("US") & catalogue.eligible].copy()
+    dataset = build_model_ready_observations(catalogue=catalogue, prices=prices, fx=fx,
+        actions=actions, failures=failures, decision_at=decision_at, policy=ObservationPolicy())
+    observations = dataset.observations
+    us_obs = observations.loc[observations.security_id.isin(us.security_id)].copy()
+    visible = prices.loc[pd.to_datetime(prices.retrieved_at, utc=True).le(pd.Timestamp(decision_at))]
+    visible_actions = actions.loc[pd.to_datetime(actions.ex_date, errors="coerce").dt.date.le(decision_at.date())]
+    scores = prepare_cross_section(us_obs, prices, decision_at=decision_at,
+        segment_boundaries=detect_price_segments(visible, visible_actions))
+    if scores.empty: raise ReadinessError("no model-ready price evidence exists at the decision boundary")
+    scores["price_percentile"] = scores.composite_score.rank(method="average", pct=True)
+    latest = visible.loc[visible.status.eq("available")].sort_values(
+        ["qualified_symbol", "trading_date", "retrieved_at"]).drop_duplicates("qualified_symbol", keep="last")
+    price_rows = scores.merge(latest[["qualified_symbol", "adjusted_close", "trading_date"]], on="qualified_symbol")
+    price_rows = price_rows.rename(columns={"adjusted_close": "decision_price", "trading_date": "price_date"})
+    price_rows["model_ready"] = True
+    cp = checkpoints.copy(); cp["updated_at"] = pd.to_datetime(cp.updated_at, utc=True, errors="coerce")
+    cp = cp.loc[cp.updated_at.le(pd.Timestamp(decision_at))].sort_values("updated_at").drop_duplicates("security_id", keep="last")
+    mapped = set(issuers.loc[pd.to_datetime(issuers.mapped_at, utc=True).le(pd.Timestamp(decision_at)), "security_id"])
+    completed = set(cp.loc[cp.status.eq("completed"), "security_id"])
+    dilution = _dilution_from_facts(facts, us.loc[us.security_id.isin(mapped & completed)], decision_at)
+    return price_rows, dilution
 
 
 def company_research_brief(*, research_db: Path, production_db: Path,
@@ -121,18 +174,20 @@ def company_research_brief(*, research_db: Path, production_db: Path,
                            now: datetime | None = None, max_events: int = 6) -> dict[str, Any]:
     """Return one bounded brief from evidence known at ``decision_at``."""
     now = now or datetime.now(timezone.utc); decision_at = _utc(decision_at, now)
+    if decision_at <= REGISTRATION_AT:
+        raise ReadinessError("company research decision timestamp must be after strategy registration")
     if not qualified_symbol or "." not in qualified_symbol or qualified_symbol != qualified_symbol.upper():
         raise ReadinessError("a normalized exchange-qualified symbol is required")
     if not 1 <= max_events <= MAX_EVENTS: raise ReadinessError("event limit must be between 1 and 10")
     before = (fingerprint(research_db), fingerprint(production_db))
-    prices, dilution, _ = database_inputs(research_db=research_db, production_db=production_db,
-        decision_at=decision_at, session_date=decision_at.date())
+    prices, dilution = _brief_inputs(research_db=research_db, production_db=production_db,
+        decision_at=decision_at)
     matches = prices.loc[prices.qualified_symbol.eq(qualified_symbol)]
     if len(matches) != 1: raise ReadinessError("unknown, ambiguous, or non-model-ready qualified symbol")
     eligible, _ = score_inputs(prices, dilution, decision_at=decision_at)
     scored = eligible.loc[eligible.security_id.eq(matches.iloc[0].security_id)]
-    if len(scored) != 1: raise ReadinessError("observation is not model-ready with point-in-time dilution")
-    row = scored.iloc[0]; security_id = str(row.security_id)
+    row = matches.iloc[0] if scored.empty else scored.iloc[0]
+    security_id = str(row.security_id)
     with duckdb.connect(str(research_db), read_only=True) as db:
         active = select_active_catalogue(db, as_of=decision_at.replace(tzinfo=None))
         identities = db.execute("""SELECT company_name,ticker,primary_exchange,listing_country,currency
@@ -158,8 +213,9 @@ def company_research_brief(*, research_db: Path, production_db: Path,
             [security_id, decision_at]).fetchone()[0]))
     price_percentile = float(row.price_percentile)
     strength = "strong" if price_percentile >= .67 else "weak" if price_percentile <= .33 else "moderate"
-    growth = float(row.diluted_share_growth)
-    ownership = "diluted" if growth > .01 else "reduced" if growth < -.01 else "broadly stable"
+    has_dilution = not scored.empty
+    growth = float(row.diluted_share_growth) if has_dilution else None
+    ownership = ("diluted" if growth > .01 else "reduced" if growth < -.01 else "broadly stable") if has_dilution else "unavailable"
     risk_flags = ["current_membership_not_survivorship_free"]
     if (decision_at.date() - pd.Timestamp(row.price_date).date()).days > 7:
         risk_flags.append("stale_or_missing_data")
@@ -186,18 +242,25 @@ def company_research_brief(*, research_db: Path, production_db: Path,
         "history_quality": "model-ready", "peer_strength": strength, "price_percentile": price_percentile,
         "price_contribution": .9 * price_percentile},
       "dilution_share_count_evidence": {"year_over_year_change": growth, "ownership_effect": ownership,
-        "public_availability_date": row.filed_at, "period_end": row.period_end,
-        "source_filing_provenance": _safe(row.provenance, 80), "staleness_or_withholding": None,
-        "dilution_percentile": float(row.dilution_percentile),
-        "frozen_score_contribution": .1 * float(row.dilution_percentile), "weight": .10},
+        "public_availability_date": row.filed_at if has_dilution else None,
+        "period_end": row.period_end if has_dilution else None,
+        "source_filing_provenance": _safe(row.provenance, 80) if has_dilution else None,
+        "staleness_or_withholding": None if has_dilution else "dilution_evidence_unavailable",
+        "dilution_percentile": float(row.dilution_percentile) if has_dilution else None,
+        "frozen_score_contribution": .1 * float(row.dilution_percentile) if has_dilution else None, "weight": .10},
       "financial_context": _fundamental_context(facts), "recent_official_filings_events": events,
       "risks_and_warnings": risk_flags, "missing_information": missing,
-      "model_status": {"validated": False, "recommendation": False, "price_weight": .90,
+      "model_status": {"validated": False, "recommendation": False, "score_withheld": not has_dilution, "price_weight": .90,
         "dilution_weight": .10, "failed_fundamentals_composite_used": False,
         "configuration_matches_frozen_strategy": bool(CONFIGURATION_HASH)},
       "source_citations": {"price": "registered model-ready price observations",
-        "dilution": _safe(row.provenance, 80), "event_accessions": [e["citation"] for e in events]},
+        "dilution": _safe(row.provenance, 80) if has_dilution else None,
+        "event_accessions": [e["citation"] for e in events]},
       "bounds": {"event_limit": max_events, "text_character_limit": MAX_TEXT}}
+    if not has_dilution: result["missing_information"].append("dilution_score_evidence")
+    if selection.get("exists"):
+        result["price_behaviour"]["price_contribution"] = selection["price_contribution"]
+        result["dilution_share_count_evidence"]["frozen_score_contribution"] = selection["dilution_contribution"]
     if before != (fingerprint(research_db), fingerprint(production_db)):
         raise ReadinessError("database changed during read-only brief")
     result["database_immutability"] = {"verified": True}
