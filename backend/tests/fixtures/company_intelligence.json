@@ -1,0 +1,15 @@
+[
+  {
+    "security_id": "US:AMD",
+    "family": "growth",
+    "metric": "revenue",
+    "value": 7685000000,
+    "unit": "USD",
+    "currency": "USD",
+    "period_end": "2026-06-27T00:00:00Z",
+    "public_at": "2026-08-05T20:16:00Z",
+    "retrieved_at": "2026-08-06T00:00:00Z",
+    "provider": "sec-edgar",
+    "accession": "0000002488-26-000123"
+  }
+]

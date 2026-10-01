@@ -15,6 +15,13 @@ h1 span { color:#83918a; }
 .data-status b { color:var(--green); font-size:22px; }
 .data-status span { color:var(--muted); font-size:11px; }
 .panel { background:rgba(17,26,22,.84); border:1px solid var(--line); border-radius:22px; overflow:hidden; box-shadow:0 30px 80px #0007; }
+.horizon-evidence { margin-bottom:20px; }
+.horizon-grid { display:grid; grid-template-columns:repeat(4,1fr); border-top:1px solid var(--line); }
+.horizon-grid > div { padding:24px; border-right:1px solid var(--line); }
+.horizon-grid > div:last-child { border-right:0; }
+.horizon-grid b,.horizon-grid span { display:block; }
+.horizon-grid span { color:#ef8f8f; margin-top:7px; font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+.horizon-grid p { color:var(--muted); font-size:13px; line-height:1.5; margin:12px 0 0; }
 .panel > header { display:flex; justify-content:space-between; align-items:end; padding:28px 30px 20px; }
 h2 { margin:5px 0 0; font-size:27px; }
 .date,.company,footer { color:var(--muted); }
@@ -60,6 +67,7 @@ article p { color:#bac4be; line-height:1.5; }
 .risk { border-top:1px solid var(--line); padding-top:18px; margin-top:25px; font-size:13px; }
 .risk b { display:block; color:#e3b687; margin-bottom:5px; }
 footer { border-top:1px solid var(--line); padding:16px 30px; font-size:12px; overflow-wrap:anywhere; }
+@media (max-width: 800px) { .horizon-grid { grid-template-columns:1fr 1fr; } .horizon-grid > div { border-bottom:1px solid var(--line); } }
 .outcome-panel,.watchlist-panel,.history-panel { margin-top:20px; }
 .outcome-status { text-transform:uppercase; letter-spacing:.12em; font-size:11px; font-weight:800; border:1px solid var(--line); border-radius:20px; padding:8px 12px; }
 .outcome-status.pending { color:#e3b687; border-color:#60472e; background:#281f16; }

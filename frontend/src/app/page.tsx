@@ -388,6 +388,27 @@ export default async function Home() {
         <div><b>{status?.duplicate_rows ?? "—"}</b><span>duplicate rows</span></div>
       </section>
 
+      <section className="panel horizon-evidence">
+        <header>
+          <div>
+            <p className="eyebrow">FROZEN MULTI-HORIZON EVIDENCE</p>
+            <h2>Validation did not authorize a ranking</h2>
+          </div>
+          <span className="outcome-status unavailable">NO CANDIDATES GENERATED</span>
+        </header>
+        <p className="notice warning">
+          All four predeclared horizons failed the final gates. These are immutable
+          baseline findings—not a reason to tune thresholds or select the best-looking horizon.
+        </p>
+        <div className="horizon-grid">
+          <div><b>21 sessions</b><span>Failed</span><p>Short-horizon evidence did not clear the final validation gates.</p></div>
+          <div><b>63 sessions</b><span>Failed</span><p>Quarterly-horizon evidence did not clear the final validation gates.</p></div>
+          <div><b>126 sessions</b><span>Failed</span><p>Promising, but unstable across regions and not significant after testing four horizons.</p></div>
+          <div><b>252 sessions</b><span>Failed</span><p>Positive in all five regions, but confidence was insufficient and the adjusted significance test failed.</p></div>
+        </div>
+        <footer>No winning horizon selected · no thresholds changed · no candidates generated</footer>
+      </section>
+
       <section className="panel universe-panel">
         <header>
           <div>
