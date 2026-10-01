@@ -4,7 +4,10 @@ import duckdb
 import pytest
 
 from app.company_research import (NOTICE, CompanyEvidenceUnavailableError,
-                                  InvalidQualifiedSymbolError, company_research_brief,
+                                  CompanyIdentityAmbiguityError,
+                                  InvalidQualifiedSymbolError,
+                                  UnknownCompanySymbolError,
+                                  company_research_brief,
                                   prospective_selection_briefs)
 from app.company_research_cli import _reason_code
 from app.model_readiness import ReadinessError, fingerprint
@@ -81,7 +84,7 @@ def test_operator_shaped_october_pre_vintage_uses_only_visible_evidence(tmp_path
 
 def test_unknown_symbol_and_missing_dilution_are_explicit(tmp_path):
     research, production, decision = populated_databases(tmp_path)
-    with pytest.raises(ReadinessError, match="unknown"):
+    with pytest.raises(UnknownCompanySymbolError):
         company_research_brief(research_db=research, production_db=production,
             qualified_symbol="UNKNOWN.US", decision_at=decision, now=decision + timedelta(minutes=1))
     with duckdb.connect(str(research)) as db:
@@ -125,7 +128,10 @@ def test_registered_vintage_contributions_are_reconciled_exactly(tmp_path):
 def test_cli_reason_codes_are_stable_and_do_not_reflect_details():
     assert _reason_code(InvalidQualifiedSymbolError("details")) == "COMPANY_BRIEF_INVALID_SYMBOL"
     assert _reason_code(CompanyEvidenceUnavailableError("details")) == "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
-    assert _reason_code(ReadinessError("unknown, ambiguous, or non-model-ready qualified symbol")) == "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
+    assert _reason_code(UnknownCompanySymbolError("details")) == "COMPANY_BRIEF_UNKNOWN_SYMBOL"
+    assert _reason_code(CompanyIdentityAmbiguityError("details")) == "COMPANY_BRIEF_IDENTITY_AMBIGUITY"
+    # Readiness messages cannot accidentally change classifications.
+    assert _reason_code(ReadinessError("unknown qualified symbol with model-ready evidence")) == "COMPANY_BRIEF_NOT_READY"
     assert _reason_code(RuntimeError("provider raw response")) == "COMPANY_BRIEF_INTERNAL_ERROR"
 
 
@@ -134,13 +140,17 @@ def test_cli_symbol_reason_codes_cover_malformed_unknown_unscored_and_success(tm
     common = {"research_db": research, "production_db": production,
               "decision_at": decision, "now": decision + timedelta(minutes=1)}
 
-    with pytest.raises(InvalidQualifiedSymbolError) as malformed:
-        company_research_brief(**common, qualified_symbol="a")
-    assert _reason_code(malformed.value) == "COMPANY_BRIEF_INVALID_SYMBOL"
+    before = fingerprint(research), fingerprint(production)
+    for value in ("", "A", "a.us"):
+        with pytest.raises(InvalidQualifiedSymbolError) as malformed:
+            company_research_brief(**common, qualified_symbol=value)
+        assert _reason_code(malformed.value) == "COMPANY_BRIEF_INVALID_SYMBOL"
+        assert before == (fingerprint(research), fingerprint(production))
 
-    with pytest.raises(CompanyEvidenceUnavailableError) as unknown:
+    with pytest.raises(UnknownCompanySymbolError) as unknown:
         company_research_brief(**common, qualified_symbol="UNKNOWN.US")
-    assert _reason_code(unknown.value) == "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
+    assert _reason_code(unknown.value) == "COMPANY_BRIEF_UNKNOWN_SYMBOL"
+    assert before == (fingerprint(research), fingerprint(production))
 
     # A.US remains an eligible member of the active catalogue, but no longer
     # has enough history to enter frozen price-score reconstruction.
@@ -150,9 +160,27 @@ def test_cli_symbol_reason_codes_cover_malformed_unknown_unscored_and_success(tm
         active_count = db.execute("""SELECT count(*) FROM security_listings
             WHERE retrieval_id='r' AND qualified_symbol='A.US' AND active""").fetchone()[0]
     assert active_count == 1
+    before_unscored = fingerprint(research), fingerprint(production)
     with pytest.raises(CompanyEvidenceUnavailableError) as unscored:
         company_research_brief(**common, qualified_symbol="A.US")
     assert _reason_code(unscored.value) == "COMPANY_BRIEF_EVIDENCE_UNAVAILABLE"
+    assert before_unscored == (fingerprint(research), fingerprint(production))
 
+    before_success = fingerprint(research), fingerprint(production)
     brief = company_research_brief(**common, qualified_symbol="B.US")
     assert brief["company_identity"]["qualified_symbol"] == "B.US"
+    assert brief["dilution_share_count_evidence"]["dilution_percentile"] is not None
+    assert before_success == (fingerprint(research), fingerprint(production))
+
+
+def test_identity_ambiguity_has_bounded_code_and_is_read_only(tmp_path):
+    research, production, decision = populated_databases(tmp_path)
+    with duckdb.connect(str(research)) as db:
+        db.execute("UPDATE security_listings SET qualified_symbol='A.US' WHERE security_id='b'")
+    before = fingerprint(research), fingerprint(production)
+    with pytest.raises(CompanyIdentityAmbiguityError) as ambiguous:
+        company_research_brief(research_db=research, production_db=production,
+            qualified_symbol="A.US", decision_at=decision,
+            now=decision + timedelta(minutes=1))
+    assert _reason_code(ambiguous.value) == "COMPANY_BRIEF_IDENTITY_AMBIGUITY"
+    assert before == (fingerprint(research), fingerprint(production))

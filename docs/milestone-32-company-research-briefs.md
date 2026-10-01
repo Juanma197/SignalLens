@@ -6,6 +6,16 @@ Briefs are deterministic, read-only descriptions of evidence known at an explici
 
 Both explicit database files are validated as distinct regular files and fingerprinted before and after every operation. Responses expose only the immutability result—not paths or hashes. Unknown/unqualified/ambiguous symbols, ticker reuse without effective-date resolution, future timestamps, non-model-ready prices, and unsafe aliases fail closed. Missing dilution remains viewable only with explicit score withholding and missing-data output.
 
+Symbol failures have typed, stable public classifications; neither the CLI nor API inspects exception text. `COMPANY_BRIEF_INVALID_SYMBOL` is reserved for malformed syntax (including empty, non-normalized/lowercase, or missing exchange suffix input). A normalized symbol absent from the active catalogue returns `COMPANY_BRIEF_UNKNOWN_SYMBOL`. More than one active identity, including unresolved ticker reuse, returns `COMPANY_BRIEF_IDENTITY_AMBIGUITY`. A unique active-catalogue identity that is absent from the frozen scored cross-section returns `COMPANY_BRIEF_EVIDENCE_UNAVAILABLE`. All responses redact database paths, SQL, tracebacks, provider payloads, and internal exception details.
+
+Three distinct readiness sets must not be conflated:
+
+1. **Catalogue-valid** means the normalized symbol resolves uniquely in the active catalogue snapshot. It establishes identity, not score eligibility.
+2. **Generally model-ready** means the security passes the broader observation-readiness policy at the decision boundary. General readiness totals can therefore exceed a particular frozen cross-section.
+3. **Frozen-score-ready** means the security actually has the evidence required by the registered score reconstruction and appears in that exact frozen scored cross-section.
+
+A security can be catalogue-valid and have visible price rows, or even be generally model-ready, without being frozen-score-ready. In that case the brief is withheld as `COMPANY_BRIEF_EVIDENCE_UNAVAILABLE`; the adapter never fills the gap with a current, neutral, inferred, or otherwise manufactured score.
+
 ## Pre-vintage repair (October 2026)
 
 The initially merged adapter incorrectly sent an individual brief's calendar date to the prospective-vintage database input path. That path intentionally accepts only a completed US month-end session, so the valid `2026-10-01T12:00:00Z` operator request failed before a brief could be assembled. The correction separates brief evidence lookup from vintage planning; the prospective plan/create path and its completed-month-end gates remain unchanged.
