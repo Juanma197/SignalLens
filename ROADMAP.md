@@ -420,3 +420,10 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Add authenticated bounded APIs and a responsive `/model` mathematics dashboard.
 - [x] Keep prospective vintages, validation observations, recommendations, publication, and scheduling unchanged.
 - [ ] Run against operator-held data after merge; no real preview or reconstruction was created here.
+
+## Milestone 37 — complete: comparable-universe repair
+
+- Added auditable point-in-time security classification and an ordinary-company-only Track B universe.
+- Added read-only durable-CIK mapping repair, audited debt/cash/interest taxonomy contracts, independent raw value and financial-strength calculations, and explicit corporate-action coverage states.
+- Corrected repair aggregates to precede sample truncation; added readiness/factor-preview CLI and authenticated API surfaces.
+- Track A remains frozen. Track B remains an unevaluated foundation; freezing, backtesting, ranking, recommendations, and validation are future gated work.

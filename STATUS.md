@@ -650,3 +650,7 @@ The point-in-time SEC selector, frozen US factors, matched 126/252-session compa
 ## Milestone 34 — Model Laboratory
 
 Implementation complete. The frozen `prospective-us-dilution-1.0.0` specification is unchanged. A strictly read-only CLI/API/dashboard can produce a bounded indicative preview and assess September reconstruction feasibility using point-in-time evidence. No operator database or provider was accessed; no preview, reconstruction, vintage, validation credit, recommendation, or production ranking was persisted. Scheduler and production publication remain disabled.
+
+## Milestone 37 status
+
+Comparable-universe and evidence repair is implemented offline. Security-type exclusions are disclosed, issuer mapping is read-only and effective-dated, aliases are semantic contracts, market-cap value factors survive unavailable EV, missing debt stays unknown, and corporate-action coverage is explicit. The dashboard contains no experimental Top 3. Track B produces zero recommendations, candidates, rankings, selections, vintages, validation observations, and validation credit. Operator/provider execution, mapping writes, production publication, deployment, and model evaluation were not performed.

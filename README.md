@@ -336,3 +336,7 @@ The live ranking is the historically encouraging 126-trading-day momentum benchm
 ## Milestone 26 US point-in-time fundamentals
 
 A deterministic, read-only, **US-only** comparison now tests the unchanged price model against a pre-registered fundamental enhancement. See the [Milestone 26 runbook](docs/milestone-26-us-fundamentals.md) for frozen formulas, weights, safeguards and the operator command. International markets remain on the price-only baseline; no candidates or recommendations are generated.
+
+## Milestone 37: comparable-universe evidence repair
+
+Track B now separates ordinary US operating companies from special security/economic types and exposes read-only, point-in-time raw value and financial-strength capabilities. It remains **TRACK B RESEARCH FOUNDATION — NOT A MODEL**, with no candidates, rankings, recommendations, selections, vintages, or validation credit. See [the Milestone 37 runbook](docs/milestone-37-comparable-universe-repair.md).
