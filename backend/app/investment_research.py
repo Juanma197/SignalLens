@@ -20,6 +20,9 @@ from .active_catalogue import select_active_catalogue
 from .model_readiness import fingerprint
 from .sec_ingestion import validate_paths
 from .prospective_us_shadow import CONFIGURATION_HASH, REGISTRATION_AT, STRATEGY_VERSION
+from .comparable_universe import (ORDINARY, Classification, aggregate_repair_plan,
+    book_to_market, classify_security, construct_enterprise_value, earnings_yield,
+    fcf_yield, financial_strength)
 
 MAX_SAMPLES = 10
 TRACK_B_LABELS = ["TRACK B RESEARCH FOUNDATION — NOT A MODEL",
@@ -196,17 +199,76 @@ def repair_plan(**kwargs) -> dict[str, Any]:
              "provider_or_ingestion_failure":"automatic","insufficient_history":"automatic",
              "missing_liquidity":"automatic","unsupported_taxonomy":"review_required",
              "incompatible_units":"review_required","currency_mismatch":"review_required",
-             "evidence_unavailable":"permanently_unavailable"}
-    for field,detail in report["field_coverage"].items():
-        for symbol in detail["affected_symbol_samples"]:
-            reason=report["security_evidence"][symbol][field]
+             "evidence_unavailable":"unavailable_with_current_evidence"}
+    # Aggregate the complete defect population. Samples are bounded only after
+    # every item has contributed to the counters.
+    for symbol,evidence in report["security_evidence"].items():
+        for field,reason in evidence.items():
+            if reason == "available": continue
             work.append({"symbol":symbol,"field":field,"reason_code":reason,
                          "disposition":routing.get(reason,"review_required"),
                          "estimated_provider_requests":1 if routing.get(reason)=="automatic" else 0,
-                         "status":"unrepaired"})
-    report.update({"command":"plan-investment-data-repair","work_items":work[:100],"work_item_limit":100,
+                         "security_type":"classification_unavailable","status":"unrepaired"})
+    report.update({"command":"plan-investment-data-repair",**aggregate_repair_plan(work,100),
                    "estimates_are_planning_only":True,"ingestion_performed":False,"mappings_mutated":False})
     return report
+
+def _classification_for(db, security_id: str, decision: datetime) -> Classification:
+    rows=[r for r in _rows(db,"security_classification_evidence") if str(r.get("security_id"))==security_id]
+    return classify_security(rows,decision)
+
+def comparable_universe_readiness(*, research_db: Path, production_db: Path,
+                                  decision_at: datetime, max_samples: int=MAX_SAMPLES) -> dict[str,Any]:
+    decision=_utc(decision_at); max_samples=max(0,min(MAX_SAMPLES,int(max_samples)))
+    def build(db):
+        active=select_active_catalogue(db,as_of=decision.replace(tzinfo=None))
+        if active is None: raise InvestmentResearchError("catalogue unavailable")
+        securities=active.listings
+        securities=securities.loc[securities.region.eq("US") & securities.eligible].sort_values("qualified_symbol")
+        types=Counter(); exclusions:dict[str,list[str]]={}; included=[]
+        for sec in securities.itertuples(index=False):
+            classification=_classification_for(db,str(sec.security_id),decision)
+            types[classification.security_type]+=1
+            if classification.included: included.append(str(sec.qualified_symbol))
+            else: exclusions.setdefault(classification.reason_code or "excluded",[]).append(str(sec.qualified_symbol))
+        audit=coverage_audit(research_db=research_db,production_db=production_db,decision_at=decision,max_samples=max_samples)
+        comparable=set(included); evidence=audit["security_evidence"]
+        fields={f:{"available":sum(evidence.get(s,{}).get(f)=="available" for s in comparable),"total":len(comparable)} for f in FIELDS}
+        families={name:{"ready":sum(all(evidence.get(s,{}).get(f)=="available" for f in req) for s in comparable),"total":len(comparable)} for name,req in FAMILIES.items()}
+        return {"command":"comparable-universe-research-readiness","decision_at":decision.isoformat(),
+          "labels":TRACK_B_LABELS,"active_us_labelled_catalogue_count":len(securities),
+          "counts_by_security_type":dict(sorted(types.items())),"ordinary_operating_company_universe_count":len(included),
+          "ordinary_company_symbol_samples":included[:max_samples],
+          "exclusions_by_reason":{k:{"count":len(v),"symbol_samples":v[:max_samples]} for k,v in sorted(exclusions.items())},
+          "mapping_readiness":fields["sec_issuer_mapping"],"field_coverage":fields,"factor_capability":families,
+          "at_least_one_value_factor":sum(any(evidence.get(s,{}).get(x)=="available" for x in ("net_income","free_cash_flow","shareholders_equity")) for s in comparable),
+          "at_least_two_value_factors":sum(sum(evidence.get(s,{}).get(x)=="available" for x in ("net_income","free_cash_flow","shareholders_equity"))>=2 for s in comparable),
+          "at_least_one_financial_strength_factor":sum(any(evidence.get(s,{}).get(x)=="available" for x in ("assets","shareholders_equity","non_current_debt","interest_expense")) for s in comparable),
+          "at_least_four_valid_factor_families":sum(sum(all(evidence.get(s,{}).get(f)=="available" for f in req) for req in FAMILIES.values())>=4 for s in comparable),
+          "remaining_blockers":sorted({r for s in comparable for r in evidence.get(s,{}).values() if r!="available"}),
+          "current_membership_survivorship_warning":True,"read_only":True,
+          "recommendations":[],"candidates":[],"rankings":[],"paper_selections":[],"prospective_vintages":[],"validation_observations":[],"validation_credit":0}
+    return _immutable(research_db,production_db,build)
+
+def company_factor_preview(*, research_db: Path, production_db: Path, decision_at: datetime,
+                           qualified_symbol: str) -> dict[str,Any]:
+    decision=_utc(decision_at)
+    if "." not in qualified_symbol or len(qualified_symbol)>40: raise InvestmentResearchError("exchange-qualified symbol required")
+    def build(db):
+        rows=[r for r in _rows(db,"company_factor_evidence") if r.get("qualified_symbol")==qualified_symbol and _visible(r,decision) is None]
+        if not rows: raise InvestmentResearchError("factor evidence unavailable")
+        r=max(rows,key=lambda x:x.get("retrieved_at")); kind=r.get("security_type",ORDINARY)
+        market=r.get("market_capitalisation")
+        values={"earnings_yield":earnings_yield(r.get("net_income_ttm"),market,currency_compatible=r.get("currency_compatible",True)),
+          "fcf_yield":fcf_yield(r.get("operating_cash_flow_ttm"),r.get("capital_expenditure_ttm"),market,capex_sign=r.get("capex_sign","positive_outflow"),periods_compatible=r.get("periods_compatible",True)),
+          "book_to_market":book_to_market(r.get("shareholders_equity"),market,security_type=kind,reliable=r.get("equity_reliable",True)),
+          "enterprise_value":construct_enterprise_value(market,r.get("debt_components"),r.get("eligible_cash"),currency_compatible=r.get("currency_compatible",True),confirmed_debt_free=r.get("confirmed_debt_free",False)),
+          "financial_strength":financial_strength(current_debt=r.get("current_debt"),non_current_debt=r.get("non_current_debt"),confirmed_debt_free=r.get("confirmed_debt_free",False),assets=r.get("assets"),equity=r.get("shareholders_equity"),cash=r.get("eligible_cash"),operating_income=r.get("operating_income_ttm"),interest_expense=r.get("interest_expense_ttm"),security_type=kind)}
+        return {"command":"company-investment-factor-preview","qualified_symbol":qualified_symbol,
+          "decision_at":decision.isoformat(),"inputs":{k:v for k,v in r.items() if k not in {"debt_components"}},
+          "calculations":values,"provenance":{"public_at":str(r.get("public_at")),"retrieved_at":str(r.get("retrieved_at")),"source":r.get("source")},
+          "percentiles":[],"composite_scores":[],"rankings":[],"candidates":[],"recommendations":[],"read_only":True}
+    return _immutable(research_db,production_db,build)
 
 @dataclass(frozen=True)
 class CostAssumptions:
