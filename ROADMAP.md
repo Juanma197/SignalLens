@@ -427,3 +427,6 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - Added read-only durable-CIK mapping repair, audited debt/cash/interest taxonomy contracts, independent raw value and financial-strength calculations, and explicit corporate-action coverage states.
 - Corrected repair aggregates to precede sample truncation; added readiness/factor-preview CLI and authenticated API surfaces.
 - Track A remains frozen. Track B remains an unevaluated foundation; freezing, backtesting, ranking, recommendations, and validation are future gated work.
+# Milestone 38 — complete
+
+Added authorized, transactional stored-evidence materialization, fail-closed classification, canonical SEC factor lineage, explicit corporate-action coverage, read-only enrichment planning, and a bounded SEC capability. Track B remains a research foundation and produces no ranking or recommendation.

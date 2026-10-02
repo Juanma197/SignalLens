@@ -73,6 +73,8 @@ from .model_laboratory import (assess_september_reconstruction, public_error_cod
 from .investment_research import (coverage_audit, execution_cost_capability,
     repair_plan as investment_repair_plan, research_readiness,
     comparable_universe_readiness, company_factor_preview)
+from .investment_evidence import (status as investment_evidence_status,
+                                   enrichment_plan as investment_enrichment_plan)
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
@@ -240,6 +242,16 @@ def individual_company_factor_preview(decision_at: datetime = Query(...),
                                       qualified_symbol: str = Query(...,min_length=3,max_length=40)) -> dict:
     return _redacted(lambda: company_factor_preview(research_db=settings.research_database_path,
         production_db=settings.database_path, decision_at=decision_at,qualified_symbol=qualified_symbol))
+
+@app.get("/api/v1/research/investment-evidence-materialization-status")
+def evidence_materialization_status(decision_at: datetime = Query(...)) -> dict:
+    return _redacted(lambda: investment_evidence_status(research_db=settings.research_database_path,
+        production_db=settings.database_path, decision_at=decision_at))
+
+@app.get("/api/v1/research/investment-evidence-enrichment-plan")
+def evidence_enrichment_plan(decision_at: datetime = Query(...)) -> dict:
+    return _redacted(lambda: investment_enrichment_plan(research_db=settings.research_database_path,
+        production_db=settings.database_path, decision_at=decision_at))
 
 
 @app.get("/api/v1/ready")

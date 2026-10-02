@@ -654,3 +654,6 @@ Implementation complete. The frozen `prospective-us-dilution-1.0.0` specificatio
 ## Milestone 37 status
 
 Comparable-universe and evidence repair is implemented offline. Security-type exclusions are disclosed, issuer mapping is read-only and effective-dated, aliases are semantic contracts, market-cap value factors survive unavailable EV, missing debt stays unknown, and corporate-action coverage is explicit. The dashboard contains no experimental Top 3. Track B produces zero recommendations, candidates, rankings, selections, vintages, validation observations, and validation credit. Operator/provider execution, mapping writes, production publication, deployment, and model evaluation were not performed.
+# Milestone 38
+
+Research classification and factor-evidence stores can now be populated from stored evidence with explicit authorization. Status and enrichment planning remain bounded and read-only; production is fingerprint-protected. Track A is frozen unchanged and Track B has zero recommendations, candidates, rankings, selections, vintages, or validation credit.

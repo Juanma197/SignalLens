@@ -340,3 +340,6 @@ A deterministic, read-only, **US-only** comparison now tests the unchanged price
 ## Milestone 37: comparable-universe evidence repair
 
 Track B now separates ordinary US operating companies from special security/economic types and exposes read-only, point-in-time raw value and financial-strength capabilities. It remains **TRACK B RESEARCH FOUNDATION — NOT A MODEL**, with no candidates, rankings, recommendations, selections, vintages, or validation credit. See [the Milestone 37 runbook](docs/milestone-37-comparable-universe-repair.md).
+# Milestone 38
+
+Authorized research-only classification and canonical factor-evidence materialization is documented in [the Milestone 38 runbook](docs/milestone-38-investment-evidence-materialization.md). It preserves original point-in-time availability, production isolation, and the strict Track B no-model/no-recommendation boundary.

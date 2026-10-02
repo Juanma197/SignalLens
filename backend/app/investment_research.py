@@ -89,6 +89,9 @@ def _utc(value: datetime) -> datetime:
         raise InvestmentResearchError("timezone-aware decision timestamp required")
     return value.astimezone(timezone.utc)
 
+def _aware_for_preview(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
 def _json_hash(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -256,6 +259,34 @@ def company_factor_preview(*, research_db: Path, production_db: Path, decision_a
     if "." not in qualified_symbol or len(qualified_symbol)>40: raise InvestmentResearchError("exchange-qualified symbol required")
     def build(db):
         rows=[r for r in _rows(db,"company_factor_evidence") if r.get("qualified_symbol")==qualified_symbol and _visible(r,decision) is None]
+        # Milestone 38 stores atomic canonical evidence.  Build the preview on
+        # read so no derived metric can predate its latest component.
+        if not rows and "canonical_factor_evidence" in _tables(db):
+            evidence=[r for r in _rows(db,"canonical_factor_evidence") if r.get("qualified_symbol")==qualified_symbol
+                      and r.get("reliability_state")=="usable" and r.get("available_at") is not None
+                      and (r["available_at"].replace(tzinfo=timezone.utc) if r["available_at"].tzinfo is None else r["available_at"])<=decision]
+            latest={}
+            for item in evidence:
+                field=item.get("canonical_field")
+                if field not in latest or item["available_at"]>latest[field]["available_at"]: latest[field]=item
+            if latest:
+                get=lambda name: latest.get(name,{}).get("value")
+                classification=_classification_for(db,str(next(iter(latest.values()))["security_id"]),decision)
+                current=get("current_debt"); noncurrent=get("non_current_debt")
+                rows=[{"qualified_symbol":qualified_symbol,"security_type":classification.security_type,
+                  "classification":asdict(classification),"market_capitalisation":get("market_capitalisation"),
+                  "net_income_ttm":get("net_income"),"operating_cash_flow_ttm":get("operating_cash_flow"),
+                  "capital_expenditure_ttm":get("capital_expenditure"),"shareholders_equity":get("shareholders_equity"),
+                  "current_debt":current,"non_current_debt":noncurrent,"eligible_cash":get("cash"),
+                  "assets":get("assets"),"operating_income_ttm":get("operating_income"),"interest_expense_ttm":get("interest_expense"),
+                  "confirmed_debt_free":current==0 and noncurrent==0,"debt_components":[x for x in
+                    ({"value":current,"double_count_group":"current_debt"},{"value":noncurrent,"double_count_group":"non_current_debt"}) if x["value"] is not None],
+                  "currency_compatible":len({x.get("currency") for x in latest.values() if x.get("currency")})<=1,
+                  "periods_compatible":True,"capex_sign":"positive_outflow","equity_reliable":True,
+                  "public_at":max(x["public_at"] for x in latest.values()),"retrieved_at":max(x["retrieved_at"] for x in latest.values()),
+                  "available_at":max(x["available_at"] for x in latest.values()),"source":"canonical_factor_evidence",
+                  "canonical_inputs":{k:{"value":v.get("value"),"unit":v.get("unit"),"currency":v.get("currency"),"available_at":str(v.get("available_at")),"provenance":v.get("provenance")} for k,v in latest.items()},
+                  "missing_evidence":[x for x in ("decision_price","diluted_shares","net_income","operating_cash_flow","capital_expenditure","shareholders_equity","assets","current_debt","non_current_debt","interest_expense") if x not in latest]}]
         if not rows: raise InvestmentResearchError("factor evidence unavailable")
         r=max(rows,key=lambda x:x.get("retrieved_at")); kind=r.get("security_type",ORDINARY)
         market=r.get("market_capitalisation")
@@ -267,7 +298,9 @@ def company_factor_preview(*, research_db: Path, production_db: Path, decision_a
         return {"command":"company-investment-factor-preview","qualified_symbol":qualified_symbol,
           "decision_at":decision.isoformat(),"inputs":{k:v for k,v in r.items() if k not in {"debt_components"}},
           "calculations":values,"provenance":{"public_at":str(r.get("public_at")),"retrieved_at":str(r.get("retrieved_at")),"source":r.get("source")},
-          "percentiles":[],"composite_scores":[],"rankings":[],"candidates":[],"recommendations":[],"read_only":True}
+          "classification":r.get("classification"),"comparable_universe_eligible":kind==ORDINARY,
+          "corporate_action_state":next((x.get("coverage_state") for x in _rows(db,"corporate_action_coverage_evidence") if x.get("qualified_symbol")==qualified_symbol and _aware_for_preview(x.get("available_at"))<=decision),"coverage_missing"),
+          "missing_evidence":r.get("missing_evidence",[]),"percentiles":[],"composite_scores":[],"rankings":[],"candidates":[],"recommendations":[],"read_only":True}
     return _immutable(research_db,production_db,build)
 
 @dataclass(frozen=True)
