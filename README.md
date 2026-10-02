@@ -1,5 +1,19 @@
 # SignalLens
 
+## Prospective paper-portfolio cycle (Milestone 35)
+
+SignalLens now exposes an operator-controlled, read-only month-end plan, immutable
+official paper vintages, exact-session mark-to-market reports, and an aggregate
+prospective validation ledger at `/validation`. The registered model remains
+`prospective-us-dilution-1.0.0` (90% price / 10% dilution). Interim 21/63-session
+returns receive zero validation credit; only complete exact 126/252-session
+outcomes can enter the ledger. Creation still requires the immediately preceding,
+database-bound expiring plan and the exact separate authorization phrase. See the
+[Milestone 35 runbook](docs/milestone-35-prospective-validation.md).
+
+**PAPER RESEARCH ONLY · NO BROKER ACTIVITY · INTERIM RETURNS ARE NOT VALIDATION ·
+INSUFFICIENT PROSPECTIVE EVIDENCE.**
+
 ## Read-only Model Laboratory (Milestone 34)
 
 The authenticated `/model` laboratory exposes the exact frozen 90/10 mathematics and a bounded, non-persistent indicative Top-3 preview. It also fails closed when September 2026 cannot be reconstructed from strictly point-in-time evidence. This is **NOT VALIDATION**, **NOT A PAPER SELECTION**, and **NOT INVESTMENT ADVICE**. See the [Milestone 34 runbook](docs/milestone-34-model-laboratory.md).
