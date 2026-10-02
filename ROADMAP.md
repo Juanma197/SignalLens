@@ -1,5 +1,13 @@
 # SignalLens Roadmap
 
+## Milestone 36 — complete
+
+- Added deterministic point-in-time coverage auditing and safe repair planning.
+- Added provider-neutral total-return/cost capability and research-only gates.
+- Added the versioned Track B draft specification, aggregate API, and dashboard disclosure.
+- A future Track B model remains contingent on preregistration, holdout evaluation,
+  multiple-testing controls, and genuinely prospective evidence.
+
 ## Milestone 35 — operator-controlled prospective validation cycle (complete)
 
 - [x] Read-only, expiring and database-bound official month-end planning.

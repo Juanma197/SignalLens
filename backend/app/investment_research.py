@@ -1,0 +1,262 @@
+"""Milestone 36: read-only evidence coverage and Track B research foundation.
+
+This module intentionally has no persistence, ranking, selection, or publication
+entry point.  Missing evidence is represented by a reason code, never a value.
+"""
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import asdict, dataclass
+from datetime import date, datetime, timedelta, timezone
+import hashlib
+import json
+import math
+from pathlib import Path
+from typing import Any
+
+import duckdb
+
+from .active_catalogue import select_active_catalogue
+from .model_readiness import fingerprint
+from .sec_ingestion import validate_paths
+from .prospective_us_shadow import CONFIGURATION_HASH, REGISTRATION_AT, STRATEGY_VERSION
+
+MAX_SAMPLES = 10
+TRACK_B_LABELS = ["TRACK B RESEARCH FOUNDATION — NOT A MODEL",
+                  "NO PURCHASE RECOMMENDATION", "NO CANDIDATES GENERATED",
+                  "ZERO VALIDATION CREDIT"]
+
+REASON_CODES = frozenset({
+    "evidence_unavailable", "stale_evidence", "issuer_unmapped", "issuer_mapping_ambiguous",
+    "unsupported_taxonomy", "incompatible_units", "currency_mismatch", "nonfinite_value",
+    "missing_public_availability_timestamp", "evidence_retrieved_after_decision",
+    "insufficient_history", "unreliable_denominator", "no_model_ready_price",
+    "provider_or_ingestion_failure", "missing_liquidity", "unresolved_corporate_action",
+    "incomplete_horizon", "security_delisted", "financial_sector_not_comparable",
+    "current_membership_survivorship_limitation", "stale_filing", "extreme_dilution",
+    "going_concern_filing_risk", "excessive_estimated_trading_cost",
+})
+
+FIELDS = (
+ "identity", "active_catalogue_membership", "model_ready_price_history", "decision_price",
+ "historical_total_return_inputs", "corporate_actions_and_dividends", "sec_issuer_mapping",
+ "sec_ingestion_checkpoint", "diluted_shares", "revenue", "operating_income", "net_income",
+ "operating_cash_flow", "capital_expenditure", "free_cash_flow", "assets",
+ "shareholders_equity", "current_debt", "non_current_debt", "interest_expense", "basic_eps",
+ "diluted_eps", "market_capitalisation_inputs", "enterprise_value_inputs",
+ "trading_liquidity_inputs", "official_sec_event_context")
+
+FAMILIES = {
+ "value": ("decision_price", "market_capitalisation_inputs", "enterprise_value_inputs", "free_cash_flow"),
+ "business_quality": ("revenue", "operating_income", "net_income", "operating_cash_flow", "assets"),
+ "financial_strength": ("assets", "shareholders_equity", "current_debt", "non_current_debt", "interest_expense"),
+ "growth": ("revenue", "operating_income", "basic_eps", "diluted_eps"),
+ "shareholder_treatment": ("diluted_shares", "corporate_actions_and_dividends"),
+ "price_and_risk": ("model_ready_price_history", "historical_total_return_inputs", "trading_liquidity_inputs"),
+}
+
+# Aliases are admitted only with an auditable, exact semantic contract.  They do
+# not mean that a fact is repaired; point-in-time and issuer checks still apply.
+CONCEPT_ALIASES = {
+ "revenue": ({"concept":"RevenueFromContractWithCustomerExcludingAssessedTax", "unit":"USD",
+              "duration":"duration", "sign":"credit", "meaning":"revenue"},
+             {"concept":"Revenues", "unit":"USD", "duration":"duration", "sign":"credit", "meaning":"revenue"}),
+ "operating_income": ({"concept":"OperatingIncomeLoss", "unit":"USD", "duration":"duration", "sign":"signed", "meaning":"operating income"},),
+ "net_income": ({"concept":"NetIncomeLoss", "unit":"USD", "duration":"duration", "sign":"signed", "meaning":"net income attributable under US GAAP"},),
+ "operating_cash_flow": ({"concept":"NetCashProvidedByUsedInOperatingActivities", "unit":"USD", "duration":"duration", "sign":"signed", "meaning":"operating cash flow"},),
+ "capital_expenditure": ({"concept":"PaymentsToAcquirePropertyPlantAndEquipment", "unit":"USD", "duration":"duration", "sign":"debit", "meaning":"capital expenditure"},),
+ "assets": ({"concept":"Assets", "unit":"USD", "duration":"instant", "sign":"debit", "meaning":"total assets"},),
+ "shareholders_equity": ({"concept":"StockholdersEquity", "unit":"USD", "duration":"instant", "sign":"signed", "meaning":"stockholders equity"},),
+ "current_debt": ({"concept":"ShortTermBorrowings", "unit":"USD", "duration":"instant", "sign":"credit", "meaning":"current debt"},),
+ "non_current_debt": ({"concept":"LongTermDebtNoncurrent", "unit":"USD", "duration":"instant", "sign":"credit", "meaning":"non-current debt"},),
+ "interest_expense": ({"concept":"InterestExpenseNonOperating", "unit":"USD", "duration":"duration", "sign":"debit", "meaning":"non-operating interest expense"},),
+ "basic_eps": ({"concept":"EarningsPerShareBasic", "unit":"USD/shares", "duration":"duration", "sign":"signed", "meaning":"basic EPS"},),
+ "diluted_eps": ({"concept":"EarningsPerShareDiluted", "unit":"USD/shares", "duration":"duration", "sign":"signed", "meaning":"diluted EPS"},),
+ "diluted_shares": ({"concept":"WeightedAverageNumberOfDilutedSharesOutstanding", "unit":"shares", "duration":"duration", "sign":"debit", "meaning":"weighted-average diluted shares"},),
+}
+
+class InvestmentResearchError(RuntimeError):
+    reason_code = "INVESTMENT_RESEARCH_NOT_READY"
+
+def public_error_code(exc: Exception) -> str:
+    return exc.reason_code if isinstance(exc, InvestmentResearchError) else "INVESTMENT_RESEARCH_INTERNAL_ERROR"
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise InvestmentResearchError("timezone-aware decision timestamp required")
+    return value.astimezone(timezone.utc)
+
+def _json_hash(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+def validate_alias(field: str, fact: dict[str, Any]) -> bool:
+    """Require concept, unit, duration, sign, and meaning to match exactly."""
+    return any(all(fact.get(k) == alias[k] for k in ("concept","unit","duration","sign","meaning"))
+               for alias in CONCEPT_ALIASES.get(field, ()))
+
+def _tables(db: duckdb.DuckDBPyConnection) -> set[str]:
+    return {str(x[0]) for x in db.execute("SHOW TABLES").fetchall()}
+
+def _rows(db: duckdb.DuckDBPyConnection, table: str) -> list[dict[str, Any]]:
+    if table not in _tables(db): return []
+    cur = db.execute(f'SELECT * FROM "{table}"')
+    names = [d[0] for d in cur.description]
+    return [dict(zip(names, row)) for row in cur.fetchall()]
+
+def _visible(row: dict[str, Any], decision: datetime) -> str | None:
+    public = row.get("public_at")
+    retrieved = row.get("retrieved_at")
+    if public is None: return "missing_public_availability_timestamp"
+    for value in (public, retrieved):
+        if value is not None:
+            aware = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+            if aware.astimezone(timezone.utc) > decision: return "evidence_retrieved_after_decision"
+    return None
+
+def _immutable(research: Path, production: Path, operation):
+    validate_paths(research, production)
+    before = {"research": asdict(fingerprint(research)), "production": asdict(fingerprint(production))}
+    with duckdb.connect(str(production), read_only=True) as db: db.execute("SELECT 1")
+    with duckdb.connect(str(research), read_only=True) as db: result = operation(db)
+    after = {"research": asdict(fingerprint(research)), "production": asdict(fingerprint(production))}
+    if before != after: raise InvestmentResearchError("database changed during read-only operation")
+    result["database_fingerprints"] = {k:{"before":before[k], "after":after[k], "unchanged":True} for k in before}
+    return result
+
+def coverage_audit(*, research_db: Path, production_db: Path, decision_at: datetime,
+                   max_samples: int = MAX_SAMPLES) -> dict[str, Any]:
+    decision = _utc(decision_at); max_samples = max(0, min(MAX_SAMPLES, int(max_samples)))
+    def audit(db):
+        active = select_active_catalogue(db, as_of=decision.replace(tzinfo=None))
+        if active is None: raise InvestmentResearchError("catalogue unavailable")
+        securities = active.listings
+        securities = securities.loc[securities.region.eq("US") & securities.eligible].sort_values("qualified_symbol")
+        prices, facts = _rows(db,"global_price_observations"), _rows(db,"sec_facts")
+        actions, issuers = _rows(db,"global_corporate_actions"), _rows(db,"sec_issuers")
+        checkpoints, filings = _rows(db,"sec_checkpoints"), _rows(db,"sec_filings")
+        events = _rows(db,"sec_events")
+        by_symbol={}; affected={f:[] for f in FIELDS}; counts={f:0 for f in FIELDS}; year=Counter()
+        for sec in securities.itertuples(index=False):
+            sid, sym = str(sec.security_id), str(sec.qualified_symbol)
+            status={f:"evidence_unavailable" for f in FIELDS}; status["identity"]=None; status["active_catalogue_membership"]=None
+            sp=[p for p in prices if str(p.get("qualified_symbol"))==sym and p.get("status")=="available"]
+            sp=[p for p in sp if p.get("retrieved_at") is not None and (p["retrieved_at"].replace(tzinfo=timezone.utc) if p["retrieved_at"].tzinfo is None else p["retrieved_at"]) <= decision]
+            sp.sort(key=lambda p:(p.get("trading_date") or date.min,p.get("retrieved_at")))
+            if sp:
+                last=sp[-1]; age=(decision.date()-last["trading_date"]).days
+                status["decision_price"] = None if age <= 7 and last.get("adjusted_close") is not None else ("stale_evidence" if age>7 else "nonfinite_value")
+                status["model_ready_price_history"] = None if len(sp)>=252 else "insufficient_history"
+                status["historical_total_return_inputs"] = None if len(sp)>=253 else "insufficient_history"
+                status["trading_liquidity_inputs"] = None if len(sp)>=20 and all(p.get("volume") is not None for p in sp[-20:]) else "missing_liquidity"
+            else:
+                status["decision_price"]=status["model_ready_price_history"]="no_model_ready_price"
+                status["historical_total_return_inputs"]="insufficient_history"; status["trading_liquidity_inputs"]="missing_liquidity"
+            sa=[a for a in actions if str(a.get("qualified_symbol"))==sym]
+            status["corporate_actions_and_dividends"] = None if sa else "evidence_unavailable"
+            maps=[i for i in issuers if str(i.get("security_id"))==sid and i.get("mapped_at") is not None]
+            status["sec_issuer_mapping"] = "issuer_unmapped" if not maps else ("issuer_mapping_ambiguous" if len({m.get('cik') for m in maps})>1 else None)
+            cp=[c for c in checkpoints if str(c.get("security_id"))==sid]
+            status["sec_ingestion_checkpoint"] = None if cp and cp[-1].get("status")=="completed" else "provider_or_ingestion_failure"
+            sf=[f for f in facts if str(f.get("security_id"))==sid]
+            for field, aliases in CONCEPT_ALIASES.items():
+                candidates=[f for f in sf if f.get("concept") in {a["concept"] for a in aliases}]
+                reasons=[]
+                for fact in candidates:
+                    reason=_visible(fact,decision)
+                    if reason: reasons.append(reason); continue
+                    value=fact.get("value")
+                    if not isinstance(value,(int,float)) or not math.isfinite(float(value)): reasons.append("nonfinite_value"); continue
+                    allowed={a["unit"] for a in aliases if a["concept"]==fact.get("concept")}
+                    if fact.get("unit") not in allowed: reasons.append("incompatible_units"); continue
+                    status[field]=None; year[int(fact.get("fiscal_year") or fact.get("period_end").year)] += 1; break
+                else:
+                    status[field] = reasons[0] if reasons else ("unsupported_taxonomy" if sf else "evidence_unavailable")
+            status["free_cash_flow"] = None if status["operating_cash_flow"] is None and status["capital_expenditure"] is None else "evidence_unavailable"
+            status["market_capitalisation_inputs"] = None if status["decision_price"] is None and status["diluted_shares"] is None else "unreliable_denominator"
+            status["enterprise_value_inputs"] = None if status["market_capitalisation_inputs"] is None and status["current_debt"] is None and status["non_current_debt"] is None else "unreliable_denominator"
+            status["official_sec_event_context"] = None if any(str(e.get("security_id"))==sid for e in events) or any(str(f.get("cik")) in {str(m.get("cik")) for m in maps} for f in filings) else "evidence_unavailable"
+            by_symbol[sym]={f:("available" if r is None else r) for f,r in status.items()}
+            for f,r in status.items():
+                if r is None: counts[f]+=1
+                elif len(affected[f])<max_samples: affected[f].append(sym)
+        total=len(securities)
+        field_coverage={f:{"available":counts[f],"total":total,"percent":round(100*counts[f]/total,2) if total else 0,
+                           "affected_symbol_samples":affected[f]} for f in FIELDS}
+        family={k:{"ready":sum(all(by_symbol[s][f]=="available" for f in fs) for s in by_symbol),"total":total}
+                for k,fs in FAMILIES.items()}
+        return {"command":"investment-grade-coverage-audit","decision_at":decision.isoformat(),
+                "active_us_securities":total,"field_coverage":field_coverage,"factor_family_coverage":family,
+                "coverage_by_year":dict(sorted(year.items())),"security_evidence":by_symbol,
+                "bounded_sample_limit":max_samples,"read_only":True}
+    return _immutable(research_db,production_db,audit)
+
+def repair_plan(**kwargs) -> dict[str, Any]:
+    report=coverage_audit(**kwargs); work=[]
+    routing={"issuer_unmapped":"review_required","issuer_mapping_ambiguous":"review_required",
+             "provider_or_ingestion_failure":"automatic","insufficient_history":"automatic",
+             "missing_liquidity":"automatic","unsupported_taxonomy":"review_required",
+             "incompatible_units":"review_required","currency_mismatch":"review_required",
+             "evidence_unavailable":"permanently_unavailable"}
+    for field,detail in report["field_coverage"].items():
+        for symbol in detail["affected_symbol_samples"]:
+            reason=report["security_evidence"][symbol][field]
+            work.append({"symbol":symbol,"field":field,"reason_code":reason,
+                         "disposition":routing.get(reason,"review_required"),
+                         "estimated_provider_requests":1 if routing.get(reason)=="automatic" else 0,
+                         "status":"unrepaired"})
+    report.update({"command":"plan-investment-data-repair","work_items":work[:100],"work_item_limit":100,
+                   "estimates_are_planning_only":True,"ingestion_performed":False,"mappings_mutated":False})
+    return report
+
+@dataclass(frozen=True)
+class CostAssumptions:
+    estimated_spread_bps: float = 25.0
+    commission_bps: float = 5.0
+    fx_bps: float = 10.0
+    slippage_bps: float = 10.0
+    turnover: float = 1.0
+    position_value: float = 10_000.0
+    def __post_init__(self):
+        if not (1 <= self.estimated_spread_bps <= 500 and 0 <= self.commission_bps <= 100
+                and 0 <= self.fx_bps <= 200 and 0 <= self.slippage_bps <= 200
+                and 0 < self.turnover <= 2 and self.position_value > 0):
+            raise ValueError("cost assumptions outside documented bounds")
+    @property
+    def configuration_hash(self): return _json_hash(asdict(self))
+
+def total_return(*, start_price: float, end_price: float, cash_dividends: float,
+                 assumptions: CostAssumptions, spread_bps: float | None = None) -> dict[str, Any]:
+    if min(start_price,end_price)<=0 or not all(math.isfinite(x) for x in (start_price,end_price,cash_dividends)):
+        return {"status":"withheld","reason_code":"unreliable_denominator"}
+    spread=assumptions.estimated_spread_bps if spread_bps is None else spread_bps
+    gross=(end_price+cash_dividends)/start_price-1
+    costs=(spread+assumptions.commission_bps+assumptions.fx_bps+assumptions.slippage_bps)*assumptions.turnover/10000
+    return {"status":"available","gross_total_return":gross,"net_total_return":gross-costs,
+            "cost_fraction":costs,"spread_bps":spread,"spread_source":"estimated_conservative" if spread_bps is None else "observed",
+            "configuration_hash":assumptions.configuration_hash}
+
+def execution_cost_capability(*, research_db: Path, production_db: Path, decision_at: datetime,
+                              assumptions: CostAssumptions | None=None) -> dict[str,Any]:
+    assumptions=assumptions or CostAssumptions(); audit=coverage_audit(research_db=research_db,production_db=production_db,decision_at=decision_at)
+    available=audit["field_coverage"]["trading_liquidity_inputs"]["available"]
+    return {"command":"execution-cost-capability","decision_at":_utc(decision_at).isoformat(),"assumptions":asdict(assumptions),
+            "configuration_hash":assumptions.configuration_hash,"liquidity_ready":available,
+            "split_adjusted_prices":True,"cash_dividends":True,"corporate_actions":True,
+            "exact_completed_session_horizons":[126,252],"missing_or_delisted_withheld":True,
+            "spread_fallback":"estimated_conservative","database_fingerprints":audit["database_fingerprints"],"read_only":True}
+
+def research_readiness(**kwargs) -> dict[str,Any]:
+    audit=coverage_audit(**kwargs); total=audit["active_us_securities"]
+    gate_map={"price_history":"model_ready_price_history","freshness":"decision_price","liquidity":"trading_liquidity_inputs",
+              "identity":"sec_issuer_mapping","accounting":"revenue","valuation_denominator":"market_capitalisation_inputs",
+              "corporate_action":"corporate_actions_and_dividends"}
+    gates={g:{"passed":audit["field_coverage"][f]["available"],"failed":total-audit["field_coverage"][f]["available"],
+              "evidence_timestamp":audit["decision_at"]} for g,f in gate_map.items()}
+    return {"command":"undervalued-quality-research-readiness","labels":TRACK_B_LABELS,
+      "track_a":{"version":STRATEGY_VERSION,"configuration_hash":CONFIGURATION_HASH,"registration_timestamp":REGISTRATION_AT.isoformat(),"status":"frozen_unchanged"},
+      "track_b":{"status":"draft_research_foundation","factor_family_coverage":audit["factor_family_coverage"]},
+      "investability_research_gates":gates,"execution_cost_capability":"available_with_explicit_bounded_assumptions",
+      "limitations":["current_membership_survivorship_limitation","international_coverage_not_assessed","sector_comparability_requires_review"],
+      "work_required":["repair point-in-time evidence gaps","pre-register a distinct version and hash","lock horizons, comparators, and costs","separate development and untouched holdout periods","apply multiple-testing controls","collect prospective evidence after registration"],
+      "recommendations":[],"candidates":[],"rankings":[],"paper_selections":[],"prospective_vintages":[],"validation_observations":[],"validation_credit":0,
+      "database_fingerprints":audit["database_fingerprints"],"read_only":True}
