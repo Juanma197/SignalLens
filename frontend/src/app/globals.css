@@ -170,3 +170,4 @@ dl { display:grid; grid-template-columns:1fr auto; gap:10px 16px; }
 dt { color:var(--muted); } dd { margin:0; text-align:right; }
 .result { margin-top:20px; }.result pre { max-height:520px; margin:0; padding:24px; overflow:auto; border-top:1px solid var(--line); font-size:12px; color:#b9d8c5; }
 @media (max-width:760px) { .ops-grid { grid-template-columns:1fr; } .operations { padding-inline:16px; } dl { grid-template-columns:1fr; } dd { text-align:left; margin-bottom:8px; } }
+.model-table{overflow-x:auto}.model-table table{width:100%;border-collapse:collapse;min-width:680px}.model-table th,.model-table td{text-align:left;padding:1rem;border-bottom:1px solid #28342f;vertical-align:top}.model-table small{display:block;margin-top:.4rem;color:#9aaba3}@media(max-width:700px){.model-table table{min-width:600px}.model-table th,.model-table td{padding:.7rem}}

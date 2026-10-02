@@ -393,3 +393,12 @@ Each milestone must end with passing tests, a production frontend build, an upda
 - [x] Enforce artifact identity, Milestone 33 schema, alias isolation, capacity, locking, maintenance, atomic publication, durability, and automatic recovery.
 - [x] Preserve scheduler/publication disablement and production fingerprints.
 - [ ] Perform the operator-controlled staging upload and verification after review; deployment is out of scope.
+
+
+## Milestone 34 — Read-only Model Laboratory (implementation complete)
+
+- [x] Reuse the frozen prospective configuration and exact 90/10 score.
+- [x] Add fingerprinted, read-only indicative Top-3 and fail-closed September assessment commands.
+- [x] Add authenticated bounded APIs and a responsive `/model` mathematics dashboard.
+- [x] Keep prospective vintages, validation observations, recommendations, publication, and scheduling unchanged.
+- [ ] Run against operator-held data after merge; no real preview or reconstruction was created here.

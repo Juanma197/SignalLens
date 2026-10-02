@@ -624,3 +624,8 @@ The point-in-time SEC selector, frozen US factors, matched 126/252-session compa
   Railway and providers were not accessed.
 - Scope remains US-only current membership and not survivorship-free.
   International fundamentals and defensible point-in-time classifications are unavailable.
+
+
+## Milestone 34 — Model Laboratory
+
+Implementation complete. The frozen `prospective-us-dilution-1.0.0` specification is unchanged. A strictly read-only CLI/API/dashboard can produce a bounded indicative preview and assess September reconstruction feasibility using point-in-time evidence. No operator database or provider was accessed; no preview, reconstruction, vintage, validation credit, recommendation, or production ranking was persisted. Scheduler and production publication remain disabled.
