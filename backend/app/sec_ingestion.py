@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import stat
 import time
 import uuid
 from dataclasses import dataclass
@@ -91,6 +92,10 @@ def validate_paths(research: Path, production: Path) -> None:
     if not research.exists() or not production.exists(): raise ValueError("both database paths must exist")
     if research.is_symlink() or production.is_symlink(): raise ValueError("symlinked database paths prohibited")
     rs, ps = research.stat(), production.stat()
+    if not stat.S_ISREG(rs.st_mode) or not stat.S_ISREG(ps.st_mode):
+        raise ValueError("database paths must be regular files")
+    if rs.st_nlink != 1 or ps.st_nlink != 1:
+        raise ValueError("hard-linked database paths or aliases prohibited")
     if research.resolve() == production.resolve() or (rs.st_dev, rs.st_ino) == (ps.st_dev, ps.st_ino):
         raise ValueError("research and production databases must be distinct and not hard-linked")
 
