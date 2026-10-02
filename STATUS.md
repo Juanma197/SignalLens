@@ -1,5 +1,18 @@
 # SignalLens Status
 
+## Milestone 35 — implemented; first official vintage not created
+
+- Added the fingerprinted, read-only `plan-prospective-monthly-cycle` workflow and
+  preserved the separate exact authorization plus immediately preceding plan token.
+- Added immutable paper-vintage presentation, identical-timing comparators,
+  exact-session 21/63 descriptive monitoring, 126/252 confirmatory reporting, and
+  an aggregate ledger that remains `INSUFFICIENT PROSPECTIVE EVIDENCE`.
+- Added authenticated read-only validation APIs and a responsive `/validation`
+  dashboard with links to existing company research briefs.
+- Scheduler creation remains prohibited and scheduling remains disabled by default.
+  No real vintage, deployment, provider request, Railway access, operator-database
+  access, recommendation, trade, or broker action occurred.
+
 ## Milestone 33 — implementation complete; Railway operation not performed
 
 - Added fail-closed, expiring-plan research synchronization with an explicit

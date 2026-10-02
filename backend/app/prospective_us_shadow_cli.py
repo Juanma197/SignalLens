@@ -10,6 +10,8 @@ import pandas as pd
 
 from .prospective_us_shadow import (AUTHORIZATION_PHRASE, build_plan,
     create_from_database_plan, plan_from_databases, readiness, status)
+from .paper_portfolio import (mark_to_market, plan_monthly_cycle,
+                              validation_ledger, vintage_detail, vintage_list)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -18,7 +20,9 @@ def parser() -> argparse.ArgumentParser:
     for name in ("plan-prospective-us-shadow-offline-fixture",
                  "plan-prospective-us-shadow-from-db", "prospective-us-shadow-readiness",
                  "prospective-us-shadow-status", "evaluate-prospective-us-shadows",
-                 "create-prospective-us-shadow"):
+                 "create-prospective-us-shadow", "plan-prospective-monthly-cycle",
+                 "paper-vintage-status", "paper-vintage-detail",
+                 "paper-mark-to-market", "prospective-validation-ledger"):
         command = commands.add_parser(name)
         command.add_argument("--research-db", type=Path, required=True)
         command.add_argument("--production-db", type=Path, required=True)
@@ -26,9 +30,11 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--fixture", type=Path, required=True,
                 help="OFFLINE/TEST-ONLY input bundle; prohibited as an operational source")
         if name in {"plan-prospective-us-shadow-offline-fixture",
-                    "plan-prospective-us-shadow-from-db", "prospective-us-shadow-readiness"}:
+                    "plan-prospective-us-shadow-from-db", "prospective-us-shadow-readiness",
+                    "plan-prospective-monthly-cycle"}:
             command.add_argument("--decision-at", type=datetime.fromisoformat, required=True)
-        if name in {"plan-prospective-us-shadow-from-db", "prospective-us-shadow-readiness"}:
+        if name in {"plan-prospective-us-shadow-from-db", "prospective-us-shadow-readiness",
+                    "plan-prospective-monthly-cycle"}:
             command.add_argument("--us-session-date", type=date.fromisoformat, required=True)
             command.add_argument("--require-fx", action="store_true",
                 help="Require session-date FX only when the catalogue genuinely needs it")
@@ -39,6 +45,10 @@ def parser() -> argparse.ArgumentParser:
                 help=f"exactly: {AUTHORIZATION_PHRASE}")
         if name == "evaluate-prospective-us-shadows":
             command.add_argument("--as-of", type=datetime.fromisoformat, required=True)
+        if name in {"paper-mark-to-market", "prospective-validation-ledger"}:
+            command.add_argument("--as-of", type=datetime.fromisoformat)
+        if name in {"paper-vintage-detail", "paper-mark-to-market"}:
+            command.add_argument("--vintage-id")
     return root
 
 
@@ -49,6 +59,21 @@ def _fixture(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
 
 def execute(args: argparse.Namespace, *, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
+    if args.command == "plan-prospective-monthly-cycle":
+        return plan_monthly_cycle(research_db=args.research_db, production_db=args.production_db,
+            decision_at=args.decision_at, session_date=args.us_session_date, now=now)
+    if args.command == "paper-vintage-status":
+        return vintage_list(research_db=args.research_db, production_db=args.production_db)
+    if args.command == "paper-vintage-detail":
+        if not args.vintage_id: raise ValueError("--vintage-id is required")
+        return vintage_detail(research_db=args.research_db, production_db=args.production_db,
+                              vintage_id=args.vintage_id)
+    if args.command == "paper-mark-to-market":
+        return mark_to_market(research_db=args.research_db, production_db=args.production_db,
+            vintage_id=args.vintage_id, as_of=args.as_of)
+    if args.command == "prospective-validation-ledger":
+        return validation_ledger(research_db=args.research_db, production_db=args.production_db,
+                                 as_of=args.as_of)
     if args.command == "prospective-us-shadow-status":
         return status(research_db=args.research_db, production_db=args.production_db)
     if args.command == "evaluate-prospective-us-shadows":

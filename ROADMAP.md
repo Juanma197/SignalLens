@@ -1,5 +1,15 @@
 # SignalLens Roadmap
 
+## Milestone 35 — operator-controlled prospective validation cycle (complete)
+
+- [x] Read-only, expiring and database-bound official month-end planning.
+- [x] Separately authorized transactional/idempotent research-only creation.
+- [x] Immutable paper records with frozen selections and both comparators.
+- [x] Exact completed-session mark-to-market and prospective validation ledger.
+- [x] Authenticated read-only API and responsive `/validation` dashboard.
+- [ ] Create the first official vintage only after the complete October 2026 US
+  month-end refresh and a deliberate operator review (not performed in implementation).
+
 ## Milestone 32 — explainable company research briefs (complete)
 
 Delivered the bounded read-only adapter, CLI/API surfaces, user-facing research page, offline safety tests, and operator runbook. The first permissible paper vintage remains October 2026 month-end and must be created only by the separately authorized prospective workflow. Future work may integrate the page in Railway after review; it must not relax authentication, point-in-time filtering, output bounds, or the frozen score.

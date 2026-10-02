@@ -63,6 +63,9 @@ from .us_fundamentals import (FACTOR_FAMILIES, FAMILY_WEIGHTS, LOCKED_HORIZONS,
                               configuration_hash)
 from .prospective_us_shadow import (readiness as prospective_us_shadow_readiness,
                                     status as prospective_us_shadow_status)
+from .paper_portfolio import (mark_to_market as paper_mark_to_market,
+    plan_monthly_cycle as prospective_monthly_cycle, validation_ledger,
+    vintage_detail as paper_vintage_detail, vintage_list as paper_vintage_list)
 from .company_research import (company_brief_reason_code, company_research_brief,
                                prospective_selection_briefs)
 from .model_laboratory import (assess_september_reconstruction, public_error_code as model_lab_error_code,
@@ -504,6 +507,38 @@ def operations_prospective_us_shadow_readiness(
     return _redacted(lambda: prospective_us_shadow_readiness(
         research_db=settings.research_database_path, production_db=settings.database_path,
         decision_at=decision_at, session_date=us_session_date, require_fx=require_fx))
+
+
+@app.get("/api/v1/research/validation/readiness")
+def validation_readiness(decision_at: datetime = Query(...),
+                         us_session_date: date = Query(...)) -> dict:
+    return _redacted(lambda: prospective_monthly_cycle(research_db=settings.research_database_path,
+        production_db=settings.database_path, decision_at=decision_at, session_date=us_session_date))
+
+
+@app.get("/api/v1/research/validation/vintages")
+def validation_vintages() -> dict:
+    return _redacted(lambda: paper_vintage_list(research_db=settings.research_database_path,
+                                                 production_db=settings.database_path))
+
+
+@app.get("/api/v1/research/validation/vintages/{vintage_id}")
+def validation_vintage(vintage_id: str) -> dict:
+    return _redacted(lambda: paper_vintage_detail(research_db=settings.research_database_path,
+        production_db=settings.database_path, vintage_id=vintage_id))
+
+
+@app.get("/api/v1/research/validation/mark-to-market")
+def validation_mark_to_market(vintage_id: str | None = Query(None),
+                              as_of: datetime | None = Query(None)) -> dict:
+    return _redacted(lambda: paper_mark_to_market(research_db=settings.research_database_path,
+        production_db=settings.database_path, vintage_id=vintage_id, as_of=as_of))
+
+
+@app.get("/api/v1/research/validation/ledger")
+def validation_ledger_api(as_of: datetime | None = Query(None)) -> dict:
+    return _redacted(lambda: validation_ledger(research_db=settings.research_database_path,
+        production_db=settings.database_path, as_of=as_of))
 
 
 @app.post("/api/v1/operations/shadow/evaluate-matured")

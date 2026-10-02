@@ -271,6 +271,12 @@ def database_inputs(*, research_db: Path, production_db: Path, decision_at: date
         raise ReadinessError("database changed during read-only planning")
     readiness = {"complete_month_end_session": True, "fx_ready": fx_ready,
         "permanently_unmapped": len(permanent), "missing_dilution": int(len(price_rows) - len(dilution)),
+        "latest_required_timestamps": {
+          "price_retrieved_at": str(pd.to_datetime(visible.retrieved_at, utc=True).max()),
+          "session_retrieved_at": str(pd.to_datetime(sessions.retrieved_at, utc=True).max()),
+          "fx_available_at": (str(pd.to_datetime(fx.available_at, utc=True).max()) if not fx.empty else None),
+          "sec_mapping_at": (str(pd.to_datetime(issuers.mapped_at, utc=True).max()) if not issuers.empty else None),
+          "sec_checkpoint_at": (str(pd.to_datetime(cp.updated_at, utc=True).max()) if not cp.empty else None)},
         "database_fingerprints": {"research": {"before": asdict(before[0]), "after": asdict(after[0]), "unchanged": True},
           "production": {"before": asdict(before[1]), "after": asdict(after[1]), "unchanged": True}}}
     return price_rows, dilution, readiness
@@ -359,21 +365,28 @@ def create_from_plan(*, research_db: Path, production_db: Path, plan: dict[str, 
     price_only = eligible.sort_values(["price_percentile", "qualified_symbol"], ascending=[False, True]).head(3)
     vintage_id = f"{STRATEGY_VERSION}:{decision_at:%Y-%m}"
     with duckdb.connect(str(research_db)) as db:
-        _schema(db)
-        incompatible = db.execute("SELECT configuration_hash FROM prospective_us_shadow_vintages WHERE strategy_version=? AND configuration_hash<>? LIMIT 1",
-                                  [STRATEGY_VERSION, CONFIGURATION_HASH]).fetchone()
-        if incompatible:
-            raise ReadinessError("strategy version configuration is immutable; register a new version")
-        existing = db.execute("SELECT configuration_hash FROM prospective_us_shadow_vintages WHERE strategy_version=? AND vintage_month=?",
-                              [STRATEGY_VERSION, decision_at.strftime("%Y-%m")]).fetchone()
-        if existing:
-            if existing[0] != CONFIGURATION_HASH: raise ReadinessError("strategy version configuration is immutable")
-            return {"command": "create-prospective-us-shadow", "status": "already_exists", "mutated": False}
-        if db.execute("SELECT count(*) FROM prospective_us_shadow_vintages WHERE plan_id=?", [plan["plan_id"]]).fetchone()[0]:
-            raise ReadinessError("plan has already been used")
         db.begin()
         try:
-            manifest = {"specification": SPECIFICATION, "configuration_hash": CONFIGURATION_HASH}
+            _schema(db)
+            incompatible = db.execute("SELECT configuration_hash FROM prospective_us_shadow_vintages WHERE strategy_version=? AND configuration_hash<>? LIMIT 1",
+                                      [STRATEGY_VERSION, CONFIGURATION_HASH]).fetchone()
+            if incompatible:
+                raise ReadinessError("strategy version configuration is immutable; register a new version")
+            existing = db.execute("SELECT configuration_hash FROM prospective_us_shadow_vintages WHERE strategy_version=? AND vintage_month=?",
+                                  [STRATEGY_VERSION, decision_at.strftime("%Y-%m")]).fetchone()
+            if existing:
+                if existing[0] != CONFIGURATION_HASH: raise ReadinessError("strategy version configuration is immutable")
+                db.rollback()
+                return {"command": "create-prospective-us-shadow", "status": "already_exists", "mutated": False}
+            if db.execute("SELECT count(*) FROM prospective_us_shadow_vintages WHERE plan_id=?", [plan["plan_id"]]).fetchone()[0]:
+                raise ReadinessError("plan has already been used")
+            manifest = {"specification": SPECIFICATION, "configuration_hash": CONFIGURATION_HASH,
+                "decision_session_date": decision_at.date().isoformat(),
+                "input_fingerprints": plan.get("database_fingerprints", {}),
+                "bounded_provenance": sorted(set(str(x) for x in eligible.get("provenance", [])))[:100],
+                "designation": "zero-cash/no-broker/no-trade paper research",
+                "cash": 0, "broker": None, "trades": [],
+                "decision_timing": "identical for selection and both comparators"}
             db.execute("INSERT INTO prospective_us_shadow_vintages VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 [vintage_id, STRATEGY_VERSION, decision_at.strftime("%Y-%m"), decision_at,
                  CONFIGURATION_HASH, plan["plan_id"], json.dumps(manifest),
