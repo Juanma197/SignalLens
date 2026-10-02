@@ -1,5 +1,14 @@
 # SignalLens
 
+## Milestone 36: investment-grade research foundation
+
+SignalLens now provides strictly read-only investment coverage, repair-planning,
+execution-cost capability, and future undervalued-quality readiness reports. The
+existing 90/10 prospective hypothesis remains frozen as Track A. Track B is
+explicitly **not a model** and produces zero recommendations, candidates, rankings,
+paper selections, prospective vintages, or validation credit. See
+[`docs/milestone-36-investment-grade-research.md`](docs/milestone-36-investment-grade-research.md).
+
 ## Prospective paper-portfolio cycle (Milestone 35)
 
 SignalLens now exposes an operator-controlled, read-only month-end plan, immutable

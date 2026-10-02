@@ -70,6 +70,8 @@ from .company_research import (company_brief_reason_code, company_research_brief
                                prospective_selection_briefs)
 from .model_laboratory import (assess_september_reconstruction, public_error_code as model_lab_error_code,
                                top3_preview)
+from .investment_research import (coverage_audit, execution_cost_capability,
+    repair_plan as investment_repair_plan, research_readiness)
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
@@ -201,6 +203,26 @@ async def authenticate_private_api(request: Request, call_next):
 @app.get("/api/v1/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", service=settings.app_name, environment=settings.environment)
+
+@app.get("/api/v1/research/investment-grade-coverage")
+def investment_grade_coverage(decision_at: datetime = Query(...)) -> dict:
+    return _redacted(lambda: coverage_audit(research_db=settings.research_database_path,
+        production_db=settings.database_path, decision_at=decision_at))
+
+@app.get("/api/v1/research/investment-data-repair-plan")
+def investment_data_repair_plan(decision_at: datetime = Query(...)) -> dict:
+    return _redacted(lambda: investment_repair_plan(research_db=settings.research_database_path,
+        production_db=settings.database_path, decision_at=decision_at))
+
+@app.get("/api/v1/research/execution-cost-capability")
+def investment_execution_costs(decision_at: datetime = Query(...)) -> dict:
+    return _redacted(lambda: execution_cost_capability(research_db=settings.research_database_path,
+        production_db=settings.database_path, decision_at=decision_at))
+
+@app.get("/api/v1/research/undervalued-quality-readiness")
+def undervalued_quality_readiness(decision_at: datetime = Query(...)) -> dict:
+    return _redacted(lambda: research_readiness(research_db=settings.research_database_path,
+        production_db=settings.database_path, decision_at=decision_at))
 
 
 @app.get("/api/v1/ready")

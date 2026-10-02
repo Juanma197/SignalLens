@@ -1,5 +1,13 @@
 # SignalLens Status
 
+## Milestone 36
+
+Track A remains frozen and unchanged. Track B is a read-only research foundation,
+not a model: no weights, rankings, candidates, recommendations, selections,
+vintages, validation credit, production publication, or broker activity. Four new
+CLI reports and four authenticated aggregate API endpoints expose coverage,
+repair planning, execution costs, and readiness with immutable database checks.
+
 ## Milestone 35 — implemented; first official vintage not created
 
 - Added the fingerprinted, read-only `plan-prospective-monthly-cycle` workflow and
