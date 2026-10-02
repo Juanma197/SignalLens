@@ -68,6 +68,23 @@ Failures expose stable redacted codes. `/model` displays the equation, row-level
 components, counts, validation ledger, September feasibility, zero evidence
 counters, comparator definitions, and 126/252-session maturity timeline.
 
+### Railway integration repair (2 October 2026)
+
+The deployed backend preview was observed returning HTTP 200 with the expected
+NEU/OPLN/PGEN Top 3, while the same preview took approximately 17 seconds in the
+local CLI. The frontend research proxy's former 15-second deadline therefore
+withheld a successful response. Model Laboratory proxy requests now have a
+bounded 60-second deadline; unrelated research endpoints retain their 15-second
+limit.
+
+The dashboard now completes preview before requesting September reconstruction
+and maintains independent states for both operations. A successful Top-3 remains
+visible when reconstruction is unavailable or fails. Loading, unavailable, and
+redacted error messages are bounded, submission is disabled while work is in
+flight, and malformed decision timestamps are rejected before serialization.
+This integration-only repair does not modify the frozen model, ranking,
+databases, API calculations, prospective rules, or evidence boundaries.
+
 ## Validation interpretation
 
 The failed retrospective 40% fundamentals experiment, exploratory diagnostics,
