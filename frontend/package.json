@@ -8,6 +8,7 @@
     "npm": ">=11 <12"
   },
   "scripts": {
+    "test": "tsx --test src/app/model/model-laboratory-client.test.ts src/app/api/research/research-proxy.test.ts",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -25,6 +26,7 @@
     "@types/react-dom": "^19.3.0",
     "eslint": "^9.39.2",
     "eslint-config-next": "^16.3.5",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
   "optionalDependencies": {
