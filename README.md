@@ -1,5 +1,9 @@
 # SignalLens
 
+## Read-only Model Laboratory (Milestone 34)
+
+The authenticated `/model` laboratory exposes the exact frozen 90/10 mathematics and a bounded, non-persistent indicative Top-3 preview. It also fails closed when September 2026 cannot be reconstructed from strictly point-in-time evidence. This is **NOT VALIDATION**, **NOT A PAPER SELECTION**, and **NOT INVESTMENT ADVICE**. See the [Milestone 34 runbook](docs/milestone-34-model-laboratory.md).
+
 ## Safe Railway research synchronization (Milestone 33)
 
 An operator-controlled staging workflow now validates an uploaded research

@@ -65,6 +65,8 @@ from .prospective_us_shadow import (readiness as prospective_us_shadow_readiness
                                     status as prospective_us_shadow_status)
 from .company_research import (company_brief_reason_code, company_research_brief,
                                prospective_selection_briefs)
+from .model_laboratory import (assess_september_reconstruction, public_error_code as model_lab_error_code,
+                               top3_preview)
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
@@ -312,6 +314,28 @@ def research_prospective_selection_briefs(decision_at: datetime = Query(...)) ->
     return _company_brief_redacted(lambda: prospective_selection_briefs(
         research_db=settings.research_database_path, production_db=settings.database_path,
         decision_at=decision_at))
+
+
+@app.get("/api/v1/research/model-laboratory/preview")
+def research_model_laboratory_preview(decision_at: datetime = Query(...)) -> dict:
+    """Authenticated, bounded, non-persistent indicative preview."""
+    try:
+        return top3_preview(research_db=settings.research_database_path,
+            production_db=settings.database_path, decision_at=decision_at)
+    except Exception as exc:
+        raise HTTPException(409, detail={"code": model_lab_error_code(exc),
+            "message":"model laboratory request failed; details redacted"}) from None
+
+
+@app.get("/api/v1/research/model-laboratory/september-reconstruction")
+def research_model_laboratory_reconstruction(decision_at: datetime = Query(...)) -> dict:
+    """Authenticated fail-closed September feasibility assessment."""
+    try:
+        return assess_september_reconstruction(research_db=settings.research_database_path,
+            production_db=settings.database_path, decision_at=decision_at)
+    except Exception as exc:
+        raise HTTPException(409, detail={"code": model_lab_error_code(exc),
+            "message":"model laboratory request failed; details redacted"}) from None
 
 
 @app.get("/api/v1/operations/summary")
