@@ -7,6 +7,41 @@ import sys
 import duckdb
 import pytest
 
+from app.canonical_units import normalize_unit
+from app.investment_research import family_readiness
+
+
+def test_eps_unit_normalization_is_exact_and_preserves_source_semantics():
+    rule = normalize_unit(canonical_field="basic_eps", source_unit="USD/shares",
+        concept="EarningsPerShareBasic", currency="USD", scale_factor=1,
+        period_nature="duration")
+    assert rule is not None
+    assert rule.source_unit == "USD/shares"
+    assert rule.canonical_unit == "USD/share"
+    assert rule.scale_factor == 1
+    assert rule.rule_version == "1.0.0"
+    for change in (
+        {"canonical_field":"revenue"}, {"source_unit":"EUR/shares"},
+        {"source_unit":"USD/units"}, {"scale_factor":1000},
+        {"currency":None},
+        {"concept":"EarningsPerShareDiluted"}, {"period_nature":"instant"},
+    ):
+        args={"canonical_field":"basic_eps","source_unit":"USD/shares",
+              "concept":"EarningsPerShareBasic","currency":"USD",
+              "scale_factor":1,"period_nature":"duration"}
+        args.update(change)
+        assert normalize_unit(**args) is None
+
+
+def test_family_readiness_distinguishes_partial_minimum_and_full():
+    partial=family_readiness({"assets":"available"},"financial_strength")
+    assert partial["any_input_available"]
+    assert not partial["minimum_calculable"]
+    assert not partial["full_family_ready"]
+    assert "shareholders_equity" in partial["missing_required_inputs"]
+    full=family_readiness({x:"available" for x in partial["required_factors"]},"financial_strength")
+    assert full["minimum_calculable"] and full["full_family_ready"]
+
 import app.investment_evidence as investment_evidence
 from app.investment_evidence import (MATERIALIZE_AUTHORIZATION, SCHEMA, availability,
     enrichment_plan, initialize_schema, materialize_stored, status)

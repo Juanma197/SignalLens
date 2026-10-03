@@ -19,6 +19,7 @@ import duckdb
 from .active_catalogue import select_active_catalogue
 from .model_readiness import fingerprint
 from .sec_ingestion import validate_paths
+from .canonical_units import normalize_unit
 from .prospective_us_shadow import CONFIGURATION_HASH, REGISTRATION_AT, STRATEGY_VERSION
 from .comparable_universe import (ORDINARY, Classification, aggregate_repair_plan,
     book_to_market, classify_security, construct_enterprise_value, earnings_yield,
@@ -57,6 +58,43 @@ FAMILIES = {
  "shareholder_treatment": ("diluted_shares", "corporate_actions_and_dividends"),
  "price_and_risk": ("model_ready_price_history", "historical_total_return_inputs", "trading_liquidity_inputs"),
 }
+FAMILY_OPTIONAL = {
+ "value": ("net_income", "shareholders_equity"),
+ "business_quality": (), "financial_strength": ("cash",),
+ "growth": (), "shareholder_treatment": (), "price_and_risk": (),
+}
+
+def family_readiness(field_states: dict[str,str], family: str) -> dict[str,Any]:
+    """The single family-readiness definition used by aggregates and previews."""
+    required=FAMILIES[family]; optional=FAMILY_OPTIONAL[family]
+    available=lambda field: field_states.get(field)=="available"
+    any_input=any(available(x) for x in required+optional)
+    if family=="value":
+        minimum=available("decision_price") and available("market_capitalisation_inputs") and any(available(x) for x in ("free_cash_flow","net_income","shareholders_equity"))
+    elif family=="financial_strength":
+        minimum=available("assets") and (available("shareholders_equity") or (available("current_debt") and available("non_current_debt")))
+    elif family=="shareholder_treatment": minimum=available("diluted_shares")
+    else: minimum=any_input
+    missing=[x for x in required if not available(x)]
+    reasons=sorted({field_states.get(x,"evidence_unavailable") for x in missing})
+    return {"any_input_available":any_input,"minimum_calculable":minimum,
+      "full_family_ready":not missing,"required_factors":list(required),
+      "optional_factors":list(optional),"missing_required_inputs":missing,
+      "withholding_reasons":reasons}
+
+def _family_aggregate(evidence: dict[str,dict[str,str]], symbols) -> dict[str,Any]:
+    result={}
+    for family in FAMILIES:
+        rows=[family_readiness(evidence.get(s,{}),family) for s in symbols]
+        missing=Counter(x for row in rows for x in row["missing_required_inputs"])
+        reasons=Counter(x for row in rows for x in row["withholding_reasons"])
+        result[family]={"any_input_available":sum(x["any_input_available"] for x in rows),
+          "minimum_calculable":sum(x["minimum_calculable"] for x in rows),
+          "full_family_ready":sum(x["full_family_ready"] for x in rows),"total":len(rows),
+          "required_factors":list(FAMILIES[family]),"optional_factors":list(FAMILY_OPTIONAL[family]),
+          "withholding_reasons":dict(sorted(reasons.items())),
+          "missing_required_inputs":dict(sorted(missing.items()))}
+    return result
 
 # Aliases are admitted only with an auditable, exact semantic contract.  They do
 # not mean that a fact is repaired; point-in-time and issuer checks still apply.
@@ -212,7 +250,10 @@ def coverage_audit(*, research_db: Path, production_db: Path, decision_at: datet
                     value=fact.get("value")
                     if not isinstance(value,(int,float)) or not math.isfinite(float(value)): reasons.append("nonfinite_value"); continue
                     allowed={a["unit"] for a in aliases if a["concept"]==fact.get("concept")}
-                    if fact.get("unit") not in allowed: reasons.append("incompatible_units"); continue
+                    normalized=normalize_unit(canonical_field=field,source_unit=str(fact.get("unit") or ""),
+                      concept=str(fact.get("concept") or ""),currency=fact.get("currency"),scale_factor=1,
+                      period_nature="duration" if fact.get("period_start") is not None else "instant")
+                    if fact.get("unit") not in allowed and normalized is None: reasons.append("incompatible_units"); continue
                     status[field]=None; year[int(fact.get("fiscal_year") or fact.get("period_end").year)] += 1; break
                 else:
                     status[field] = reasons[0] if reasons else ("unsupported_taxonomy" if sf else "evidence_unavailable")
@@ -235,8 +276,7 @@ def coverage_audit(*, research_db: Path, production_db: Path, decision_at: datet
         total=len(securities)
         field_coverage={f:{"available":counts[f],"total":total,"percent":round(100*counts[f]/total,2) if total else 0,
                            "affected_symbol_samples":affected[f]} for f in FIELDS}
-        family={k:{"ready":sum(all(by_symbol[s][f]=="available" for f in fs) for s in by_symbol),"total":total}
-                for k,fs in FAMILIES.items()}
+        family=_family_aggregate(by_symbol,by_symbol)
         incompatible=Counter((str(x.get("canonical_field") or "unknown"),str(x.get("unit") or "missing"))
           for x in canonical if x.get("withholding_reason")=="incompatible_units")
         unit_audit={"total":sum(incompatible.values()),"by_canonical_field_and_source_unit":[
@@ -293,7 +333,7 @@ def comparable_universe_readiness(*, research_db: Path, production_db: Path,
         audit=coverage_audit(research_db=research_db,production_db=production_db,decision_at=decision,max_samples=max_samples)
         comparable=set(included); evidence=audit["security_evidence"]
         fields={f:{"available":sum(evidence.get(s,{}).get(f)=="available" for s in comparable),"total":len(comparable)} for f in FIELDS}
-        families={name:{"ready":sum(all(evidence.get(s,{}).get(f)=="available" for f in req) for s in comparable),"total":len(comparable)} for name,req in FAMILIES.items()}
+        families=_family_aggregate(evidence,sorted(comparable))
         return {"command":"comparable-universe-research-readiness","decision_at":decision.isoformat(),
           "labels":TRACK_B_LABELS,"active_us_labelled_catalogue_count":len(securities),
           "counts_by_security_type":dict(sorted(types.items())),"ordinary_operating_company_universe_count":len(included),
@@ -301,9 +341,9 @@ def comparable_universe_readiness(*, research_db: Path, production_db: Path,
           "ordinary_company_symbol_samples":included[:max_samples],
           "exclusions_by_reason":{k:{"count":len(v),"symbol_samples":v[:max_samples]} for k,v in sorted(exclusions.items())},
           "mapping_readiness":fields["sec_issuer_mapping"],"field_coverage":fields,"factor_capability":families,
-          "at_least_one_value_factor":sum(any(evidence.get(s,{}).get(x)=="available" for x in ("net_income","free_cash_flow","shareholders_equity")) for s in comparable),
-          "at_least_two_value_factors":sum(sum(evidence.get(s,{}).get(x)=="available" for x in ("net_income","free_cash_flow","shareholders_equity"))>=2 for s in comparable),
-          "at_least_one_financial_strength_factor":sum(any(evidence.get(s,{}).get(x)=="available" for x in ("assets","shareholders_equity","non_current_debt","interest_expense")) for s in comparable),
+          "companies_with_any_value_input":families["value"]["any_input_available"],
+          "companies_with_minimum_calculable_value":families["value"]["minimum_calculable"],
+          "companies_with_any_financial_strength_input":families["financial_strength"]["any_input_available"],
           "at_least_four_valid_factor_families":sum(sum(all(evidence.get(s,{}).get(f)=="available" for f in req) for req in FAMILIES.values())>=4 for s in comparable),
           "remaining_blockers":sorted({r for s in comparable for r in evidence.get(s,{}).values() if r!="available"}),
           "current_membership_survivorship_warning":True,"read_only":True,
@@ -362,13 +402,43 @@ def company_factor_preview(*, research_db: Path, production_db: Path, decision_a
           "book_to_market":book_to_market(r.get("shareholders_equity"),market,security_type=kind,reliable=r.get("equity_reliable",True)),
           "enterprise_value":construct_enterprise_value(market,r.get("debt_components"),r.get("eligible_cash"),currency_compatible=r.get("currency_compatible",True),confirmed_debt_free=r.get("confirmed_debt_free",False)),
           "financial_strength":financial_strength(current_debt=r.get("current_debt"),non_current_debt=r.get("non_current_debt"),confirmed_debt_free=r.get("confirmed_debt_free",False),assets=r.get("assets"),equity=r.get("shareholders_equity"),cash=r.get("eligible_cash"),operating_income=r.get("operating_income_ttm"),interest_expense=r.get("interest_expense_ttm"),security_type=kind)}
+        states={field:("available" if field in (r.get("canonical_inputs") or {}) else "evidence_unavailable") for field in FIELDS}
+        # Derived readiness aliases use the same conditions as the coverage audit.
+        states["free_cash_flow"]="available" if {"operating_cash_flow","capital_expenditure"}<=(r.get("canonical_inputs") or {}).keys() else "evidence_unavailable"
+        states["market_capitalisation_inputs"]="available" if {"decision_price","diluted_shares"}<=(r.get("canonical_inputs") or {}).keys() else "unreliable_denominator"
+        states["enterprise_value_inputs"]="available" if states["market_capitalisation_inputs"]=="available" and {"current_debt","non_current_debt"}<=(r.get("canonical_inputs") or {}).keys() else "unreliable_denominator"
+        readiness={name:family_readiness(states,name) for name in FAMILIES}
         return {"command":"company-investment-factor-preview","qualified_symbol":qualified_symbol,
           "decision_at":decision.isoformat(),"inputs":{k:v for k,v in r.items() if k not in {"debt_components"}},
           "calculations":values,"provenance":{"public_at":str(r.get("public_at")),"retrieved_at":str(r.get("retrieved_at")),"source":r.get("source")},
           "classification":r.get("classification"),"comparable_universe_eligible":classification.included,
           "corporate_action_state":next((x.get("coverage_state") for x in _rows(db,"corporate_action_coverage_evidence") if x.get("qualified_symbol")==qualified_symbol and _aware_for_preview(x.get("available_at"))<=decision),"coverage_missing"),
-          "missing_evidence":r.get("missing_evidence",[]),"percentiles":[],"composite_scores":[],"rankings":[],"candidates":[],"recommendations":[],"read_only":True}
+          "missing_evidence":r.get("missing_evidence",[]),"factor_family_readiness":readiness,
+          "percentiles":[],"composite_scores":[],"rankings":[],"candidates":[],"recommendations":[],"read_only":True}
     return _immutable(research_db,production_db,build)
+
+def track_b_panel_feasibility(*,research_db:Path,production_db:Path,decision_at:datetime,max_samples:int=MAX_SAMPLES):
+    report=comparable_universe_readiness(research_db=research_db,production_db=production_db,decision_at=decision_at,max_samples=max_samples)
+    symbols=report.get("ordinary_company_symbol_samples",[])
+    # Counts are derived from the complete aggregate; samples remain bounded.
+    full={name:data["full_family_ready"] for name,data in report["factor_capability"].items()}
+    audit=coverage_audit(research_db=research_db,production_db=production_db,decision_at=decision_at,max_samples=max_samples)
+    distribution=Counter()
+    patterns=Counter()
+    for symbol,states in audit["security_evidence"].items():
+        rows={name:family_readiness(states,name) for name in FAMILIES}
+        distribution[sum(x["full_family_ready"] for x in rows.values())]+=1
+        patterns["|".join(sorted(name for name,x in rows.items() if not x["full_family_ready"])) or "none"]+=1
+    total=report["ordinary_operating_company_universe_count"]
+    return {"command":"track-b-panel-feasibility","decision_at":report["decision_at"],"labels":TRACK_B_LABELS,
+      "comparable_universe_size":total,"per_family_availability":report["factor_capability"],
+      "companies_by_usable_family_count":{str(k):distribution.get(k,0) for k in (3,4,5,6)},
+      "cross_sectional_sample_sizes":full,"classification_exclusions":report["exclusions_by_reason"],
+      "missingness_patterns":[{"pattern":k,"count":v} for k,v in patterns.most_common(max(0,min(MAX_SAMPLES,max_samples)))],
+      "future_panel_feasible":total>0 and distribution.get(4,0)+distribution.get(5,0)+distribution.get(6,0)>0,
+      "feasibility_is_not_model_approval":True,"read_only":True,
+      "recommendations":[],"candidates":[],"rankings":[],"paper_selections":[],"prospective_vintages":[],"validation_observations":[],"validation_credit":0,
+      "database_fingerprints":report["database_fingerprints"]}
 
 @dataclass(frozen=True)
 class CostAssumptions:

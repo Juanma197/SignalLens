@@ -24,11 +24,13 @@ from .model_readiness import fingerprint
 from .sec_ingestion import validate_paths, valid_user_agent
 from .prospective_us_shadow import CONFIGURATION_HASH, STRATEGY_VERSION
 from .investment_research import CONCEPT_ALIASES, InvestmentResearchError
+from .canonical_units import normalize_unit
 
 MATERIALIZE_AUTHORIZATION = "I AUTHORIZE RESEARCH-ONLY INVESTMENT EVIDENCE MATERIALIZATION"
 ENRICH_AUTHORIZATION = "I AUTHORIZE RESEARCH-ONLY SEC INVESTMENT EVIDENCE ENRICHMENT"
 ALIAS_VERSION = "milestone-37-audited-alias-contracts-1"
 MAX_SAMPLES = 10
+UNIT_REPAIR_AUTHORIZATION = "I AUTHORIZE RESEARCH-ONLY CANONICAL EPS UNIT REPAIR 1.0.0"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS investment_evidence_runs(
@@ -125,6 +127,16 @@ def availability(public_at: Any, retrieved_at: Any) -> datetime:
 
 def initialize_schema(db: duckdb.DuckDBPyConnection) -> None: db.execute(SCHEMA)
 
+def _initialize_repair_schema(db: duckdb.DuckDBPyConnection) -> None:
+    initialize_schema(db)
+    db.execute("""CREATE TABLE IF NOT EXISTS canonical_unit_repair_runs(
+      repair_run_id VARCHAR PRIMARY KEY, decision_at TIMESTAMPTZ NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL, finished_at TIMESTAMPTZ,
+      research_database_identity VARCHAR NOT NULL, production_fingerprint VARCHAR NOT NULL,
+      rule_version VARCHAR NOT NULL, planned_count INTEGER NOT NULL,
+      inserted_count INTEGER NOT NULL DEFAULT 0, unchanged_count INTEGER NOT NULL DEFAULT 0,
+      status VARCHAR NOT NULL, failure_reason VARCHAR)""")
+
 def _catalogue(db, decision):
     if not {"security_master_retrievals","security_listings"} <= _tables(db): return []
     active=select_active_catalogue(db,as_of=decision.replace(tzinfo=None))
@@ -190,13 +202,16 @@ def _canonical_rows(db, security, decision, now):
             if avail>decision: continue
             unit=str(r.get("unit") or ""); currency=r.get("currency")
             expected="shares" if "shares" in field else "USD"
-            reliable=(unit==expected or (expected=="USD" and unit in {"monetary",str(currency or "")}))
             period_start=r.get("period_start"); period_end=r.get("period_end")
             nature="duration" if period_start else "instant"
+            normalization=normalize_unit(canonical_field=field,source_unit=unit,concept=str(r.get("concept")),
+              currency=currency,scale_factor=1,period_nature=nature)
+            reliable=(unit==expected or (expected=="USD" and unit in {"monetary",str(currency or "")}) or normalization is not None)
+            canonical_unit=normalization.canonical_unit if normalization else unit
             sign="positive_outflow" if field=="capital_expenditure" else "reported_signed"
-            key=_key(sid,field,r.get("fact_key") or r.get("accession_number"),period_start,period_end,r.get("public_at"))
+            key=_key(sid,field,r.get("fact_key") or r.get("accession_number"),period_start,period_end,r.get("public_at"),normalization.rule_version if normalization else "source-unit")
             candidates.append({"evidence_key":key,"security_id":sid,"qualified_symbol":security["qualified_symbol"],"canonical_field":field,
-              "value":float(r["value"]) if reliable and r.get("value") is not None else None,"unit":unit,"currency":currency,
+              "value":float(r["value"]) if reliable and r.get("value") is not None else None,"unit":canonical_unit,"source_unit":unit,"normalization":normalization.provenance() if normalization else None,"currency":currency,
               "period_start":period_start,"period_end":period_end,"instant_date":period_end if nature=="instant" else None,
               "fiscal_period":r.get("fiscal_period"),"form":r.get("form"),"source":str(r.get("accession_number") or r.get("fact_key")),
               "public_at":_aware(r.get("public_at")),"retrieved_at":_aware(r.get("retrieved_at")),"available_at":avail,"materialized_at":now,
@@ -213,10 +228,89 @@ def _canonical_rows(db, security, decision, now):
 def _insert_factor(db,r):
     exists=db.execute("SELECT count(*) FROM canonical_factor_evidence WHERE evidence_key=?",[r["evidence_key"]]).fetchone()[0]
     if exists: return False
-    provenance=json.dumps({"source_table":"sec_facts","source_fact_key":r["source_fact_key"]},sort_keys=True)
+    provenance=json.dumps({"source_table":"sec_facts","source_fact_key":r["source_fact_key"],
+      "source_unit":r.get("source_unit",r.get("unit")),"canonical_unit":r.get("unit"),
+      "unit_normalization":r.get("normalization")},sort_keys=True)
     db.execute("""INSERT INTO canonical_factor_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",[
       r["evidence_key"],r["security_id"],r["qualified_symbol"],r["canonical_field"],r["value"],r["unit"],r["currency"],r["period_start"],r["period_end"],r["instant_date"],r["fiscal_period"],r["form"],r["source"],r["public_at"],r["retrieved_at"],r["available_at"],r["materialized_at"],r["concept"],ALIAS_VERSION,r["sign"],r["reliability"],r["withholding"],provenance,r["source_fact_key"],json.dumps({"latest_visible_revision":True,"period_nature":r["period_nature"]}),])
     return True
+
+def _repair_candidates(db, decision):
+    if "canonical_factor_evidence" not in _tables(db): return []
+    result=[]
+    for row in _rows(db,"canonical_factor_evidence"):
+        if row.get("reliability_state")!="withheld" or row.get("withholding_reason")!="incompatible_units": continue
+        if _aware(row.get("available_at")) is None or _aware(row.get("available_at"))>decision: continue
+        source_unit=str(row.get("unit") or "")
+        rule=normalize_unit(canonical_field=str(row.get("canonical_field")),source_unit=source_unit,
+          concept=str(row.get("original_concept_or_field")),currency=row.get("currency"),scale_factor=1,
+          period_nature="duration" if row.get("period_start") is not None else "instant")
+        if rule:
+            # Milestone 38 intentionally nulled withheld values. Recover only the
+            # exact immutable source fact identified by its durable fact key.
+            if row.get("value") is None and row.get("source_fact_key") and "sec_facts" in _tables(db):
+                source=db.execute("SELECT value FROM sec_facts WHERE fact_key=?",[row["source_fact_key"]]).fetchall()
+                if len(source)==1: row={**row,"value":source[0][0]}
+            if row.get("value") is not None: result.append((row,rule))
+    return sorted(result,key=lambda x:x[0]["evidence_key"])
+
+def _database_binding(path: Path) -> str:
+    """A non-secret stable binding prevents a plan being applied to another path."""
+    return hashlib.sha256(str(path.resolve()).encode()).hexdigest()
+
+def plan_canonical_unit_repair(*,research_db:Path,production_db:Path,decision_at:datetime,max_samples:int=MAX_SAMPLES):
+    decision=_utc(decision_at); validate_paths(research_db,production_db)
+    before={"research":fingerprint(research_db),"production":fingerprint(production_db)}
+    with duckdb.connect(str(production_db),read_only=True):
+      with duckdb.connect(str(research_db),read_only=True) as db: candidates=_repair_candidates(db,decision)
+    after={"research":fingerprint(research_db),"production":fingerprint(production_db)}
+    if before!=after: raise InvestmentResearchError("database changed during read-only operation")
+    return {"command":"plan-canonical-unit-repair","decision_at":decision.isoformat(),"rule_version":"1.0.0",
+      "eligible_revision_count":len(candidates),"source_unit_counts":dict(Counter(x[0]["unit"] for x in candidates)),
+      "canonical_unit":"USD/share","evidence_key_samples":[x[0]["evidence_key"] for x in candidates[:max(0,min(MAX_SAMPLES,max_samples))]],
+      "research_database_identity":_database_binding(research_db),"production_fingerprint":before["production"],
+      "read_only":True,"database_immutability":{"verified":True,"before":before,"after":after},**ZERO}
+
+def apply_canonical_unit_repair(*,research_db:Path,production_db:Path,decision_at:datetime,authorization:str):
+    if authorization!=UNIT_REPAIR_AUTHORIZATION: raise InvestmentResearchError("exact canonical unit repair authorization required")
+    decision=_utc(decision_at); validate_paths(research_db,production_db)
+    prod_before=fingerprint(production_db); binding=_database_binding(research_db); now=datetime.now(timezone.utc)
+    run_id=_key("canonical-unit-repair",binding,decision,"1.0.0")
+    inserted=unchanged=0
+    with duckdb.connect(str(production_db),read_only=True): pass
+    with duckdb.connect(str(research_db)) as db:
+      db.execute("BEGIN")
+      try:
+        _initialize_repair_schema(db); candidates=_repair_candidates(db,decision)
+        existing=db.execute("SELECT status FROM canonical_unit_repair_runs WHERE repair_run_id=?",[run_id]).fetchone()
+        if existing and existing[0]=="completed":
+            db.execute("ROLLBACK"); return {"command":"apply-canonical-unit-repair","repair_run_id":run_id,"status":"completed","inserted":0,"unchanged":len(candidates),"idempotent_retry":True,"production_unchanged":prod_before==fingerprint(production_db),**ZERO}
+        db.execute("INSERT OR REPLACE INTO canonical_unit_repair_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+          [run_id,decision,now,None,binding,json.dumps(prod_before,default=str),"1.0.0",len(candidates),0,0,"running",None])
+        for old,rule in candidates:
+          new_key=_key("canonical-unit-revision",binding,old["evidence_key"],rule.rule_version)
+          if db.execute("SELECT count(*) FROM canonical_factor_evidence WHERE evidence_key=?",[new_key]).fetchone()[0]: unchanged+=1; continue
+          provenance=old.get("provenance"); provenance=json.loads(provenance) if isinstance(provenance,str) else dict(provenance or {})
+          provenance.update({"unit_normalization":rule.provenance(),"supersedes_evidence_key":old["evidence_key"],"historical_source_preserved":True,"research_database_identity":binding})
+          lineage=old.get("lineage"); lineage=json.loads(lineage) if isinstance(lineage,str) else dict(lineage or {})
+          lineage.update({"revision_type":"canonical_unit_normalization","supersedes_evidence_key":old["evidence_key"],"rule_version":rule.rule_version})
+          values=[new_key,old["security_id"],old["qualified_symbol"],old["canonical_field"],old["value"],rule.canonical_unit,old["currency"],old["period_start"],old["period_end"],old["instant_date"],old["fiscal_period"],old["form"],old["accession_or_source_identifier"],old["public_at"],old["retrieved_at"],old["available_at"],now,old["original_concept_or_field"],old["alias_contract_version"],old["sign_convention"],"usable",None,json.dumps(provenance,sort_keys=True),old["source_fact_key"],json.dumps(lineage,sort_keys=True)]
+          db.execute("INSERT INTO canonical_factor_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",values); inserted+=1
+        db.execute("UPDATE canonical_unit_repair_runs SET finished_at=?,inserted_count=?,unchanged_count=?,status='completed' WHERE repair_run_id=?",[datetime.now(timezone.utc),inserted,unchanged,run_id]); db.execute("COMMIT")
+      except Exception: db.execute("ROLLBACK"); raise
+    if fingerprint(production_db)!=prod_before: raise InvestmentResearchError("production database changed")
+    return {"command":"apply-canonical-unit-repair","repair_run_id":run_id,"status":"completed","inserted":inserted,"unchanged":unchanged,"idempotent_retry":False,"production_unchanged":True,**ZERO}
+
+def canonical_unit_repair_status(*,research_db:Path,production_db:Path,decision_at:datetime,max_samples:int=MAX_SAMPLES):
+    decision=_utc(decision_at); validate_paths(research_db,production_db); before={"research":fingerprint(research_db),"production":fingerprint(production_db)}
+    with duckdb.connect(str(production_db),read_only=True):
+      with duckdb.connect(str(research_db),read_only=True) as db:
+        runs=_rows(db,"canonical_unit_repair_runs") if "canonical_unit_repair_runs" in _tables(db) else []
+        pending=len(_repair_candidates(db,decision))
+    after={"research":fingerprint(research_db),"production":fingerprint(production_db)}
+    if before!=after: raise InvestmentResearchError("database changed during read-only operation")
+    return {"command":"canonical-unit-repair-status","decision_at":decision.isoformat(),"pending_eligible_revisions":pending,
+      "recent_runs":runs[-max(0,min(MAX_SAMPLES,max_samples)):],"read_only":True,"database_immutability":{"verified":True,"before":before,"after":after},**ZERO}
 
 def _market_and_action_rows(db, security, decision, now):
     """Normalize price and explicit action coverage without treating absence as proof."""

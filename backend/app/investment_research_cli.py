@@ -4,9 +4,10 @@ from datetime import datetime
 from pathlib import Path
 from .investment_research import (coverage_audit, repair_plan, execution_cost_capability,
     research_readiness, comparable_universe_readiness, company_factor_preview,
-    public_error_code)
+    public_error_code, track_b_panel_feasibility)
 from .investment_evidence import (plan_materialization, materialize_stored,
-    status as materialization_status, enrichment_plan, enrich_from_sec)
+    status as materialization_status, enrichment_plan, enrich_from_sec,
+    plan_canonical_unit_repair, apply_canonical_unit_repair, canonical_unit_repair_status)
 
 COMMANDS={"investment-grade-coverage-audit":coverage_audit,
           "plan-investment-data-repair":repair_plan,
@@ -18,7 +19,11 @@ COMMANDS={"investment-grade-coverage-audit":coverage_audit,
           "materialize-stored-investment-evidence":materialize_stored,
           "investment-evidence-materialization-status":materialization_status,
           "plan-investment-evidence-enrichment":enrichment_plan,
-          "enrich-investment-evidence-from-sec":enrich_from_sec}
+          "enrich-investment-evidence-from-sec":enrich_from_sec,
+          "plan-canonical-unit-repair":plan_canonical_unit_repair,
+          "apply-canonical-unit-repair":apply_canonical_unit_repair,
+          "canonical-unit-repair-status":canonical_unit_repair_status,
+          "track-b-panel-feasibility":track_b_panel_feasibility}
 def parser():
     root=argparse.ArgumentParser(description="Read-only investment research foundation")
     subs=root.add_subparsers(dest="command",required=True)
@@ -26,7 +31,7 @@ def parser():
         p=subs.add_parser(name); p.add_argument("--research-db",required=True,type=Path)
         p.add_argument("--production-db",required=True,type=Path); p.add_argument("--decision-at",required=True,type=datetime.fromisoformat)
         if name == "company-investment-factor-preview": p.add_argument("--qualified-symbol",required=True)
-        if name == "materialize-stored-investment-evidence": p.add_argument("--authorization",required=True)
+        if name in {"materialize-stored-investment-evidence","apply-canonical-unit-repair"}: p.add_argument("--authorization",required=True)
         if name == "enrich-investment-evidence-from-sec":
             p.add_argument("--authorization",required=True); p.add_argument("--user-agent",required=True)
             p.add_argument("--request-budget",required=True,type=int); p.add_argument("--runtime-budget-seconds",type=float,default=60)
