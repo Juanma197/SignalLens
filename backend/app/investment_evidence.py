@@ -258,7 +258,13 @@ def plan_materialization(*,research_db:Path,production_db:Path,decision_at:datet
 
 def materialize_stored(*,research_db:Path,production_db:Path,decision_at:datetime,authorization:str):
     if authorization!=MATERIALIZE_AUTHORIZATION: raise InvestmentResearchError("exact materialization authorization required")
-    decision=_utc(decision_at); validate_paths(research_db,production_db); prod_before=fingerprint(production_db); now=datetime.now(timezone.utc); run_id=str(uuid.uuid4())
+    decision=_utc(decision_at); validate_paths(research_db,production_db)
+    # Fingerprint database files only while no DuckDB connection to that file is
+    # open.  Windows denies a second filesystem handle while DuckDB owns its
+    # writable handle, even though POSIX hosts commonly allow it.
+    prod_before=fingerprint(production_db)
+    research_before=fingerprint(research_db)
+    now=datetime.now(timezone.utc); run_id=str(uuid.uuid4())
     with duckdb.connect(str(production_db),read_only=True) as p: p.execute("SELECT 1")
     inserted=unchanged=withheld=failures=0
     with duckdb.connect(str(research_db)) as db:
@@ -266,7 +272,7 @@ def materialize_stored(*,research_db:Path,production_db:Path,decision_at:datetim
       try:
         initialize_schema(db); securities=_catalogue(db,decision)
         db.execute("""INSERT INTO investment_evidence_runs(run_id,command,mode,started_at,decision_at,request_budget,research_database_identity,production_database_identity,configuration_version,configuration_hash,selected_security_count) VALUES (?,?,?,?,?,0,?,?,?,?,?)""",
-          [run_id,"materialize-stored-investment-evidence","stored-evidence",now,decision,json.dumps(fingerprint(research_db),default=str),json.dumps(prod_before,default=str),STRATEGY_VERSION,CONFIGURATION_HASH,len(securities)])
+          [run_id,"materialize-stored-investment-evidence","stored-evidence",now,decision,json.dumps(research_before,default=str),json.dumps(prod_before,default=str),STRATEGY_VERSION,CONFIGURATION_HASH,len(securities)])
         for sec in securities:
           try:
             cs=_classification_candidates(db,sec,decision); kinds={x[0] for x in cs}

@@ -38,3 +38,59 @@ The enrichment planner recalculates submissions, company-facts, mapping-review, 
 Authenticated reads: `/api/v1/research/investment-evidence-materialization-status`, `/api/v1/research/investment-evidence-enrichment-plan`, `/api/v1/research/comparable-universe-readiness`, and `/api/v1/research/company-factor-preview`.
 
 Track A remains frozen. Track B emits no score, percentile, rank, candidate, selection, vintage, validation observation, recommendation, allocation, or Top 3.
+
+## Windows file-locking repair
+
+The first authorized operator attempt exposed a Windows-specific ordering defect:
+the materializer opened the research DuckDB for writing and then tried to hash
+the same file for the run manifest. Windows correctly rejected the second file
+handle with `PermissionError: [Errno 13]`, which the public CLI reported only as
+the redacted `INVESTMENT_RESEARCH_INTERNAL_ERROR`. The transaction rolled back.
+The failed attempt changed neither the research nor production database, left no
+materialization schema or rows, and left no WAL or side file.
+
+The corrected order is deliberately strict:
+
+1. validate the distinct regular-file paths and alias/hard-link protections;
+2. fingerprint production, then fingerprint research, with no database connection open;
+3. open and close production read-only;
+4. open research writable, initialize the schema and insert all evidence in one transaction,
+   storing the captured pre-write research fingerprint as `research_database_identity`;
+5. commit or roll back the entire transaction, and completely close research; and
+6. fingerprint production again with no production connection open and fail closed if it changed.
+
+No post-materialization research fingerprint is required. If one is collected
+operationally, it must be collected only after the writable connection has
+closed and the commit has succeeded.
+
+## Windows repair: exact post-merge retry and verification
+
+Run these commands from the `backend` directory in a fresh PowerShell session.
+The paths intentionally demonstrate supported Windows paths containing spaces.
+The first command is the read-only plan; only the second command is authorized
+to write the research database.
+
+```powershell
+$Research = "C:\SignalLens\Research Data\research.duckdb"
+$Production = "C:\SignalLens\Production Data\production.duckdb"
+$Decision = "2026-10-01T00:00:00+00:00"
+
+$ResearchBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$ProductionBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+
+python -m app.investment_research_cli plan-investment-evidence-materialization --research-db $Research --production-db $Production --decision-at $Decision
+python -m app.investment_research_cli materialize-stored-investment-evidence --research-db $Research --production-db $Production --decision-at $Decision --authorization "I AUTHORIZE RESEARCH-ONLY INVESTMENT EVIDENCE MATERIALIZATION"
+python -m app.investment_research_cli investment-evidence-materialization-status --research-db $Research --production-db $Production --decision-at $Decision
+
+$ResearchAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$ProductionAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+[pscustomobject]@{
+    ResearchBefore = $ResearchBefore
+    ResearchAfter = $ResearchAfter
+    ResearchChanged = ($ResearchBefore -ne $ResearchAfter)
+    ProductionBefore = $ProductionBefore
+    ProductionAfter = $ProductionAfter
+    ProductionUnchanged = ($ProductionBefore -eq $ProductionAfter)
+} | Format-List
+if ($ProductionBefore -ne $ProductionAfter) { throw "Production database fingerprint changed" }
+```
