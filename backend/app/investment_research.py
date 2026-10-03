@@ -19,7 +19,7 @@ import duckdb
 from .active_catalogue import select_active_catalogue
 from .model_readiness import fingerprint
 from .sec_ingestion import validate_paths
-from .canonical_units import normalize_unit
+from .canonical_units import EPS_UNIT_RULE_ID, EPS_UNIT_RULE_VERSION, normalize_unit
 from .prospective_us_shadow import CONFIGURATION_HASH, REGISTRATION_AT, STRATEGY_VERSION
 from .comparable_universe import (ORDINARY, Classification, aggregate_repair_plan,
     book_to_market, classify_security, construct_enterprise_value, earnings_yield,
@@ -95,6 +95,52 @@ def _family_aggregate(evidence: dict[str,dict[str,str]], symbols) -> dict[str,An
           "withholding_reasons":dict(sorted(reasons.items())),
           "missing_required_inputs":dict(sorted(missing.items()))}
     return result
+
+def _json_dict(value: Any) -> dict[str,Any]:
+    if isinstance(value,str):
+        try: value=json.loads(value)
+        except (TypeError,ValueError): return {}
+    return dict(value) if isinstance(value,dict) else {}
+
+def _canonical_repair_visible(row: dict[str,Any], decision: datetime,
+                              completed_repairs: list[datetime]) -> bool:
+    provenance=_json_dict(row.get("provenance")); lineage=_json_dict(row.get("lineage"))
+    if lineage.get("revision_type")!="canonical_unit_normalization": return True
+    normalization=_json_dict(provenance.get("unit_normalization"))
+    exact=normalize_unit(canonical_field=str(row.get("canonical_field") or ""),
+      source_unit=str(normalization.get("source_unit") or ""),
+      concept=str(row.get("original_concept_or_field") or ""),currency=row.get("currency"),
+      scale_factor=normalization.get("scale_factor"),
+      period_nature="duration" if row.get("period_start") is not None else "instant")
+    if not (lineage.get("rule_version")==EPS_UNIT_RULE_VERSION
+            and row.get("unit")=="USD/share" and exact is not None
+            and normalization.get("normalization_rule_identifier")==EPS_UNIT_RULE_ID
+            and normalization.get("rule_version")==EPS_UNIT_RULE_VERSION): return False
+    stamp=lineage.get("repair_decision_at") or provenance.get("repair_decision_at")
+    if stamp:
+        if isinstance(stamp,str): stamp=datetime.fromisoformat(stamp.replace("Z","+00:00"))
+        return _aware_for_preview(stamp)<=decision
+    return any(stamp<=decision for stamp in completed_repairs)
+
+def _visible_canonical_rows(db, decision: datetime) -> list[dict[str,Any]]:
+    """Return usable point-in-time rows, with an exact repair winning its source."""
+    completed=[]
+    if "canonical_unit_repair_runs" in _tables(db):
+        completed=[_aware_for_preview(x[0]) for x in db.execute(
+          "SELECT decision_at FROM canonical_unit_repair_runs WHERE status='completed' AND rule_version=?",
+          [EPS_UNIT_RULE_VERSION]).fetchall()]
+    rows=[r for r in _rows(db,"canonical_factor_evidence")
+          if r.get("reliability_state")=="usable" and _visible(r,decision) is None
+          and r.get("available_at") is not None
+          and _aware_for_preview(r["available_at"])<=decision
+          and _canonical_repair_visible(r,decision,completed)]
+    # Revisions sort ahead of source rows at equal source timestamps. This avoids
+    # dependence on DuckDB row order or JSON serialization.
+    def revision_rank(row):
+        lineage=_json_dict(row.get("lineage"))
+        return (row.get("available_at"),row.get("retrieved_at"),
+          lineage.get("revision_type")=="canonical_unit_normalization",row.get("evidence_key"))
+    return sorted(rows,key=revision_rank)
 
 # Aliases are admitted only with an auditable, exact semantic contract.  They do
 # not mean that a fact is repaired; point-in-time and issuer checks still apply.
@@ -214,11 +260,12 @@ def coverage_audit(*, research_db: Path, production_db: Path, decision_at: datet
                          for sec in securities.itertuples(index=False)}
         securities=securities.loc[securities.qualified_symbol.map(lambda s: classifications[str(s)].included)]
         prices, facts = _rows(db,"global_price_observations"), _rows(db,"sec_facts")
-        canonical=_rows(db,"canonical_factor_evidence")
+        canonical=_visible_canonical_rows(db,decision)
         actions, issuers = _rows(db,"global_corporate_actions"), _rows(db,"sec_issuers")
         checkpoints, filings = _rows(db,"sec_checkpoints"), _rows(db,"sec_filings")
         events = _rows(db,"sec_events")
         by_symbol={}; affected={f:[] for f in FIELDS}; counts={f:0 for f in FIELDS}; year=Counter()
+        eps_diagnostics=Counter()
         for sec in securities.itertuples(index=False):
             sid, sym = str(sec.security_id), str(sec.qualified_symbol)
             status={f:"evidence_unavailable" for f in FIELDS}; status["identity"]=None; status["active_catalogue_membership"]=None
@@ -261,10 +308,22 @@ def coverage_audit(*, research_db: Path, production_db: Path, decision_at: datet
             # fact audit.  It is still point-in-time filtered and only explicitly
             # usable rows can make a field available.
             cf=[f for f in canonical if str(f.get("security_id"))==sid
-                and f.get("reliability_state")=="usable" and _visible(f,decision) is None
-                and f.get("available_at") is not None and _aware_for_preview(f["available_at"])<=decision]
+                and f.get("reliability_state")=="usable"]
             for field in {str(f.get("canonical_field")) for f in cf}:
                 if field in status: status[field]=None
+            repaired_eps=[f for f in cf if f.get("canonical_field") in {"basic_eps","diluted_eps"}
+              and _json_dict(f.get("lineage")).get("revision_type")=="canonical_unit_normalization"]
+            raw_usable_eps=any(status[x] is None for x in ("basic_eps","diluted_eps")) and not repaired_eps
+            qualifying_source=any(f.get("concept") in {"EarningsPerShareBasic","EarningsPerShareDiluted"}
+              and f.get("unit")=="USD/shares" for f in sf)
+            other_withheld=any(f.get("canonical_field") in {"basic_eps","diluted_eps"}
+              and f.get("reliability_state")=="withheld" and f.get("withholding_reason")!="incompatible_units"
+              for f in _rows(db,"canonical_factor_evidence") if str(f.get("security_id"))==sid)
+            if repaired_eps: eps_diagnostics["repaired_historical_observations_now_usable"]+=len(repaired_eps)
+            if raw_usable_eps: eps_diagnostics["companies_eps_already_satisfied_before_repair"]+=1
+            if not qualifying_source and not any(status[x] is None for x in ("basic_eps","diluted_eps")):
+                eps_diagnostics["companies_missing_eps_no_qualifying_source"]+=1
+            if other_withheld: eps_diagnostics["companies_eps_withheld_other_reason"]+=1
             status["free_cash_flow"] = None if status["operating_cash_flow"] is None and status["capital_expenditure"] is None else "evidence_unavailable"
             status["market_capitalisation_inputs"] = None if status["decision_price"] is None and status["diluted_shares"] is None else "unreliable_denominator"
             status["enterprise_value_inputs"] = None if status["market_capitalisation_inputs"] is None and status["current_debt"] is None and status["non_current_debt"] is None else "unreliable_denominator"
@@ -288,6 +347,9 @@ def coverage_audit(*, research_db: Path, production_db: Path, decision_at: datet
                 "classification_counts":dict(sorted(Counter(x.security_type for x in classifications.values()).items())),
                 "classification_samples":{s:_classification_payload(classifications[s]) for s in list(classifications)[:max_samples]},
                 "incompatible_unit_audit":unit_audit,
+                "canonical_eps_repair_diagnostics":{k:eps_diagnostics.get(k,0) for k in (
+                  "repaired_historical_observations_now_usable","companies_eps_already_satisfied_before_repair",
+                  "companies_missing_eps_no_qualifying_source","companies_eps_withheld_other_reason")},
                 "field_coverage":field_coverage,"factor_family_coverage":family,
                 "coverage_by_year":dict(sorted(year.items())),"security_evidence":by_symbol,
                 "bounded_sample_limit":max_samples,"read_only":True}
@@ -359,13 +421,12 @@ def company_factor_preview(*, research_db: Path, production_db: Path, decision_a
         # Milestone 38 stores atomic canonical evidence.  Build the preview on
         # read so no derived metric can predate its latest component.
         if not rows and "canonical_factor_evidence" in _tables(db):
-            evidence=[r for r in _rows(db,"canonical_factor_evidence") if r.get("qualified_symbol")==qualified_symbol
-                      and r.get("reliability_state")=="usable" and r.get("available_at") is not None
-                      and (r["available_at"].replace(tzinfo=timezone.utc) if r["available_at"].tzinfo is None else r["available_at"])<=decision]
+            evidence=[r for r in _visible_canonical_rows(db,decision)
+                      if r.get("qualified_symbol")==qualified_symbol]
             latest={}
             for item in evidence:
                 field=item.get("canonical_field")
-                if field not in latest or item["available_at"]>latest[field]["available_at"]: latest[field]=item
+                if field not in latest or (item["available_at"],item.get("retrieved_at"),item["evidence_key"])>(latest[field]["available_at"],latest[field].get("retrieved_at"),latest[field]["evidence_key"]): latest[field]=item
             if latest:
                 get=lambda name: latest.get(name,{}).get("value")
                 classification=_classification_for(db,str(next(iter(latest.values()))["security_id"]),decision)
