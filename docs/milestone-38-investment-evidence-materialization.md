@@ -39,6 +39,57 @@ Authenticated reads: `/api/v1/research/investment-evidence-materialization-statu
 
 Track A remains frozen. Track B emits no score, percentile, rank, candidate, selection, vintage, validation observation, recommendation, allocation, or Top 3.
 
+## Post-materialization classification-consumer repair
+
+The first complete stored-evidence run correctly selected 100 securities, inserted
+44,563 immutable records with no failures, completed all 100 checkpoints, and
+materialized 71 `us_operating_company` plus 29 `classification_unavailable`
+classifications.  Production remained byte-for-byte unchanged, research changed
+as authorized, and the post-run backup hash matched and validated.  The subsequent
+zero-company readiness result was a consumer-integration defect, **not** a
+materialization defect: the legacy reader looked for `source` while the canonical
+schema stores `evidence_source_family`.
+
+All Track B readiness and preview reads now share one precedence rule.  If
+`security_classification_evidence` exists, only its matching durable
+`security_id`, current, non-conflicting, supported rows whose `public_at`,
+`retrieved_at`, and `available_at` are no later than the decision timestamp are
+eligible.  The latest visible revision wins, with `evidence_key` as the stable
+final tie-break.  A stored unavailable reason is preserved; any unresolved
+conflict fails closed.  Materialized evidence is never replaced by catalogue
+inference.  Only when the materialized table is absent may an explicit legacy
+security type or exact catalogue instrument type be used; ticker/name inference
+is forbidden.
+
+The coverage response also reports `incompatible_unit_audit`, grouped by canonical
+field and original source unit.  This is accounting-only: the repair does not
+relax unit validation or reinterpret scale.  The operator-observed 7,957 rows
+must be reconciled from this report before any separately reviewed normalization
+change; equivalent spellings are not assumed equivalent.
+
+### Exact read-only post-merge verification (PowerShell)
+
+Run from `backend`.  These commands perform no ingestion, enrichment, or
+materialization and require both database hashes to remain identical.
+
+```powershell
+$Research = "C:\SignalLens\Research Data\research.duckdb"
+$Production = "C:\SignalLens\Production Data\production.duckdb"
+$Decision = "2026-10-01T00:00:00+00:00"
+$ResearchBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$ProductionBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+
+python -m app.investment_research_cli investment-evidence-materialization-status --research-db $Research --production-db $Production --decision-at $Decision
+python -m app.investment_research_cli investment-grade-coverage-audit --research-db $Research --production-db $Production --decision-at $Decision
+python -m app.investment_research_cli comparable-universe-research-readiness --research-db $Research --production-db $Production --decision-at $Decision
+python -m app.investment_research_cli company-investment-factor-preview --research-db $Research --production-db $Production --decision-at $Decision --qualified-symbol "NEU.US"
+
+$ResearchAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$ProductionAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+if ($ResearchBefore -ne $ResearchAfter) { throw "Read-only verification changed research database" }
+if ($ProductionBefore -ne $ProductionAfter) { throw "Read-only verification changed production database" }
+```
+
 ## Windows file-locking repair
 
 The first authorized operator attempt exposed a Windows-specific ordering defect:

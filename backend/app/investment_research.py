@@ -129,6 +129,41 @@ def _immutable(research: Path, production: Path, operation):
     result["database_fingerprints"] = {k:{"before":before[k], "after":after[k], "unchanged":True} for k in before}
     return result
 
+def _classification_payload(value: Classification) -> dict[str, Any]:
+    payload=asdict(value)
+    payload.update({"inclusion_status":"included" if value.included else "withheld",
+                    "withholding_reason":value.reason_code})
+    return payload
+
+def _classification_for(db, security_id: str, decision: datetime,
+                        legacy_rows: list[dict[str,Any]] | None=None) -> Classification:
+    """Apply one classification precedence rule to every Track B reader.
+
+    Once the materialized table exists it is authoritative, including an empty
+    or withheld result.  Before Milestone 38 only an explicit legacy
+    ``security_type`` or catalogue instrument type is defensible; names and
+    ticker shapes are deliberately ignored.
+    """
+    tables=_tables(db)
+    if "security_classification_evidence" in tables:
+        rows=[r for r in _rows(db,"security_classification_evidence")
+              if str(r.get("security_id"))==security_id]
+        return classify_security(rows,decision,security_id=security_id)
+    rows=list(legacy_rows or [])
+    mapping={"common_stock":ORDINARY,"common stock":ORDINARY,"bank":"bank",
+             "insurance":"insurance","reit":"reit","bdc":"bdc",
+             "fund":"investment_fund","etf":"investment_fund","spac":"spac",
+             "spac_unit":"spac_unit","spac unit":"spac_unit","adr":"foreign_issuer_or_adr"}
+    for item in _rows(db,"security_listings"):
+        if str(item.get("security_id"))!=security_id: continue
+        kind=mapping.get(str(item.get("instrument_type") or "").lower())
+        if kind:
+            stamp=item.get("retrieved_at") or decision
+            rows.append({"security_id":security_id,"security_type":kind,
+              "durable_identifier":security_id,"source":"legacy_catalogue_instrument_type",
+              "public_at":stamp,"retrieved_at":stamp,"available_at":stamp})
+    return classify_security(rows,decision,security_id=security_id)
+
 def coverage_audit(*, research_db: Path, production_db: Path, decision_at: datetime,
                    max_samples: int = MAX_SAMPLES) -> dict[str, Any]:
     decision = _utc(decision_at); max_samples = max(0, min(MAX_SAMPLES, int(max_samples)))
@@ -137,7 +172,11 @@ def coverage_audit(*, research_db: Path, production_db: Path, decision_at: datet
         if active is None: raise InvestmentResearchError("catalogue unavailable")
         securities = active.listings
         securities = securities.loc[securities.region.eq("US") & securities.eligible].sort_values("qualified_symbol")
+        classifications={str(sec.qualified_symbol):_classification_for(db,str(sec.security_id),decision)
+                         for sec in securities.itertuples(index=False)}
+        securities=securities.loc[securities.qualified_symbol.map(lambda s: classifications[str(s)].included)]
         prices, facts = _rows(db,"global_price_observations"), _rows(db,"sec_facts")
+        canonical=_rows(db,"canonical_factor_evidence")
         actions, issuers = _rows(db,"global_corporate_actions"), _rows(db,"sec_issuers")
         checkpoints, filings = _rows(db,"sec_checkpoints"), _rows(db,"sec_filings")
         events = _rows(db,"sec_events")
@@ -177,6 +216,14 @@ def coverage_audit(*, research_db: Path, production_db: Path, decision_at: datet
                     status[field]=None; year[int(fact.get("fiscal_year") or fact.get("period_end").year)] += 1; break
                 else:
                     status[field] = reasons[0] if reasons else ("unsupported_taxonomy" if sf else "evidence_unavailable")
+            # Materialized canonical evidence has precedence over the legacy raw
+            # fact audit.  It is still point-in-time filtered and only explicitly
+            # usable rows can make a field available.
+            cf=[f for f in canonical if str(f.get("security_id"))==sid
+                and f.get("reliability_state")=="usable" and _visible(f,decision) is None
+                and f.get("available_at") is not None and _aware_for_preview(f["available_at"])<=decision]
+            for field in {str(f.get("canonical_field")) for f in cf}:
+                if field in status: status[field]=None
             status["free_cash_flow"] = None if status["operating_cash_flow"] is None and status["capital_expenditure"] is None else "evidence_unavailable"
             status["market_capitalisation_inputs"] = None if status["decision_price"] is None and status["diluted_shares"] is None else "unreliable_denominator"
             status["enterprise_value_inputs"] = None if status["market_capitalisation_inputs"] is None and status["current_debt"] is None and status["non_current_debt"] is None else "unreliable_denominator"
@@ -190,8 +237,18 @@ def coverage_audit(*, research_db: Path, production_db: Path, decision_at: datet
                            "affected_symbol_samples":affected[f]} for f in FIELDS}
         family={k:{"ready":sum(all(by_symbol[s][f]=="available" for f in fs) for s in by_symbol),"total":total}
                 for k,fs in FAMILIES.items()}
+        incompatible=Counter((str(x.get("canonical_field") or "unknown"),str(x.get("unit") or "missing"))
+          for x in canonical if x.get("withholding_reason")=="incompatible_units")
+        unit_audit={"total":sum(incompatible.values()),"by_canonical_field_and_source_unit":[
+          {"canonical_field":field,"source_unit":unit,"count":count}
+          for (field,unit),count in sorted(incompatible.items())[:100]],
+          "combination_limit":100,"truncated":len(incompatible)>100,"unit_validation_changed":False}
         return {"command":"investment-grade-coverage-audit","decision_at":decision.isoformat(),
-                "active_us_securities":total,"field_coverage":field_coverage,"factor_family_coverage":family,
+                "active_us_securities":len(classifications),"comparable_universe_count":total,
+                "classification_counts":dict(sorted(Counter(x.security_type for x in classifications.values()).items())),
+                "classification_samples":{s:_classification_payload(classifications[s]) for s in list(classifications)[:max_samples]},
+                "incompatible_unit_audit":unit_audit,
+                "field_coverage":field_coverage,"factor_family_coverage":family,
                 "coverage_by_year":dict(sorted(year.items())),"security_evidence":by_symbol,
                 "bounded_sample_limit":max_samples,"read_only":True}
     return _immutable(research_db,production_db,audit)
@@ -216,10 +273,6 @@ def repair_plan(**kwargs) -> dict[str, Any]:
                    "estimates_are_planning_only":True,"ingestion_performed":False,"mappings_mutated":False})
     return report
 
-def _classification_for(db, security_id: str, decision: datetime) -> Classification:
-    rows=[r for r in _rows(db,"security_classification_evidence") if str(r.get("security_id"))==security_id]
-    return classify_security(rows,decision)
-
 def comparable_universe_readiness(*, research_db: Path, production_db: Path,
                                   decision_at: datetime, max_samples: int=MAX_SAMPLES) -> dict[str,Any]:
     decision=_utc(decision_at); max_samples=max(0,min(MAX_SAMPLES,int(max_samples)))
@@ -229,8 +282,11 @@ def comparable_universe_readiness(*, research_db: Path, production_db: Path,
         securities=active.listings
         securities=securities.loc[securities.region.eq("US") & securities.eligible].sort_values("qualified_symbol")
         types=Counter(); exclusions:dict[str,list[str]]={}; included=[]
+        classification_samples={}
         for sec in securities.itertuples(index=False):
             classification=_classification_for(db,str(sec.security_id),decision)
+            if len(classification_samples)<max_samples:
+                classification_samples[str(sec.qualified_symbol)]=_classification_payload(classification)
             types[classification.security_type]+=1
             if classification.included: included.append(str(sec.qualified_symbol))
             else: exclusions.setdefault(classification.reason_code or "excluded",[]).append(str(sec.qualified_symbol))
@@ -241,6 +297,7 @@ def comparable_universe_readiness(*, research_db: Path, production_db: Path,
         return {"command":"comparable-universe-research-readiness","decision_at":decision.isoformat(),
           "labels":TRACK_B_LABELS,"active_us_labelled_catalogue_count":len(securities),
           "counts_by_security_type":dict(sorted(types.items())),"ordinary_operating_company_universe_count":len(included),
+          "classification_samples":classification_samples,
           "ordinary_company_symbol_samples":included[:max_samples],
           "exclusions_by_reason":{k:{"count":len(v),"symbol_samples":v[:max_samples]} for k,v in sorted(exclusions.items())},
           "mapping_readiness":fields["sec_issuer_mapping"],"field_coverage":fields,"factor_capability":families,
@@ -288,7 +345,17 @@ def company_factor_preview(*, research_db: Path, production_db: Path, decision_a
                   "canonical_inputs":{k:{"value":v.get("value"),"unit":v.get("unit"),"currency":v.get("currency"),"available_at":str(v.get("available_at")),"provenance":v.get("provenance")} for k,v in latest.items()},
                   "missing_evidence":[x for x in ("decision_price","diluted_shares","net_income","operating_cash_flow","capital_expenditure","shareholders_equity","assets","current_debt","non_current_debt","interest_expense") if x not in latest]}]
         if not rows: raise InvestmentResearchError("factor evidence unavailable")
-        r=max(rows,key=lambda x:x.get("retrieved_at")); kind=r.get("security_type",ORDINARY)
+        r=max(rows,key=lambda x:x.get("retrieved_at")); sid=str(r.get("security_id") or "")
+        if not sid:
+            listings=[x for x in _rows(db,"security_listings") if x.get("qualified_symbol")==qualified_symbol]
+            sid=str(listings[0].get("security_id")) if len(listings)==1 else ""
+        legacy=[]
+        if r.get("security_type") in {ORDINARY,"bank","insurance","reit","bdc","investment_fund","spac","spac_unit","foreign_issuer_or_adr","pre_revenue_development_stage","other_special_structure","classification_unavailable"}:
+            legacy=[{"security_id":sid,"security_type":r.get("security_type"),"durable_identifier":sid,
+              "source":"legacy_company_factor_evidence","public_at":r.get("public_at"),
+              "retrieved_at":r.get("retrieved_at"),"available_at":r.get("available_at") or r.get("retrieved_at")}]
+        classification=_classification_for(db,sid,decision,legacy); kind=classification.security_type
+        r={**r,"security_type":kind,"classification":_classification_payload(classification)}
         market=r.get("market_capitalisation")
         values={"earnings_yield":earnings_yield(r.get("net_income_ttm"),market,currency_compatible=r.get("currency_compatible",True)),
           "fcf_yield":fcf_yield(r.get("operating_cash_flow_ttm"),r.get("capital_expenditure_ttm"),market,capex_sign=r.get("capex_sign","positive_outflow"),periods_compatible=r.get("periods_compatible",True)),
@@ -298,7 +365,7 @@ def company_factor_preview(*, research_db: Path, production_db: Path, decision_a
         return {"command":"company-investment-factor-preview","qualified_symbol":qualified_symbol,
           "decision_at":decision.isoformat(),"inputs":{k:v for k,v in r.items() if k not in {"debt_components"}},
           "calculations":values,"provenance":{"public_at":str(r.get("public_at")),"retrieved_at":str(r.get("retrieved_at")),"source":r.get("source")},
-          "classification":r.get("classification"),"comparable_universe_eligible":kind==ORDINARY,
+          "classification":r.get("classification"),"comparable_universe_eligible":classification.included,
           "corporate_action_state":next((x.get("coverage_state") for x in _rows(db,"corporate_action_coverage_evidence") if x.get("qualified_symbol")==qualified_symbol and _aware_for_preview(x.get("available_at"))<=decision),"coverage_missing"),
           "missing_evidence":r.get("missing_evidence",[]),"percentiles":[],"composite_scores":[],"rankings":[],"candidates":[],"recommendations":[],"read_only":True}
     return _immutable(research_db,production_db,build)
@@ -341,7 +408,7 @@ def execution_cost_capability(*, research_db: Path, production_db: Path, decisio
             "spread_fallback":"estimated_conservative","database_fingerprints":audit["database_fingerprints"],"read_only":True}
 
 def research_readiness(**kwargs) -> dict[str,Any]:
-    audit=coverage_audit(**kwargs); total=audit["active_us_securities"]
+    audit=coverage_audit(**kwargs); total=audit["comparable_universe_count"]
     gate_map={"price_history":"model_ready_price_history","freshness":"decision_price","liquidity":"trading_liquidity_inputs",
               "identity":"sec_issuer_mapping","accounting":"revenue","valuation_denominator":"market_capitalisation_inputs",
               "corporate_action":"corporate_actions_and_dividends"}
