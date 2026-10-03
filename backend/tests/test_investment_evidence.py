@@ -9,6 +9,7 @@ import pytest
 
 from app.canonical_units import normalize_unit
 from app.investment_research import family_readiness
+import app.investment_research as investment_research
 
 
 def test_eps_unit_normalization_is_exact_and_preserves_source_semantics():
@@ -44,7 +45,9 @@ def test_family_readiness_distinguishes_partial_minimum_and_full():
 
 import app.investment_evidence as investment_evidence
 from app.investment_evidence import (MATERIALIZE_AUTHORIZATION, SCHEMA, availability,
-    enrichment_plan, initialize_schema, materialize_stored, status)
+    UNIT_REPAIR_AUTHORIZATION, apply_canonical_unit_repair,
+    canonical_unit_repair_status, enrichment_plan, initialize_schema,
+    materialize_stored, plan_canonical_unit_repair, status)
 from app.investment_research import InvestmentResearchError
 from app.model_readiness import fingerprint
 
@@ -177,3 +180,97 @@ def test_enrichment_plan_is_read_only_and_empty(tmp_path):
     result=enrichment_plan(research_db=research,production_db=production,decision_at=DECISION)
     assert result["read_only"] and result["estimated_request_count"]==0
     assert research.read_bytes()==before
+
+def _repair_fixture(tmp_path):
+    root=tmp_path/"operator data with spaces"; root.mkdir()
+    research,production=databases(root)
+    available=datetime(2026,9,1,tzinfo=timezone.utc)
+    with duckdb.connect(str(research)) as db:
+        initialize_schema(db)
+        db.execute("""CREATE TABLE sec_facts(fact_key VARCHAR, value DOUBLE)""")
+        db.execute("INSERT INTO sec_facts VALUES ('fact-1',2.5)")
+        db.execute("""INSERT INTO canonical_factor_evidence(
+          evidence_key,security_id,qualified_symbol,canonical_field,value,unit,currency,
+          period_start,period_end,accession_or_source_identifier,public_at,retrieved_at,
+          available_at,materialized_at,original_concept_or_field,alias_contract_version,
+          sign_convention,reliability_state,withholding_reason,provenance,source_fact_key,lineage)
+          VALUES ('source-1','sid-1','SPACE.US','basic_eps',NULL,'USD/shares','USD',
+          DATE '2025-01-01',DATE '2025-12-31','accession-1',?,?,?,?,
+          'EarningsPerShareBasic','alias-v1','reported_signed','withheld','incompatible_units',
+          ?, 'fact-1', ?)""",[available,available,available,available,
+          json.dumps({"source_unit":"USD/shares"}),json.dumps({"latest_visible_revision":True})])
+    return research,production
+
+def test_canonical_unit_repair_is_append_only_visible_and_idempotent(tmp_path):
+    research,production=_repair_fixture(tmp_path); production_before=production.read_bytes()
+    initial=plan_canonical_unit_repair(research_db=research,production_db=production,decision_at=DECISION)
+    assert initial["eligible_revision_count"]==1
+    assert initial["source_unit_counts"]=={"USD/shares":1}
+    assert initial["evidence_key_samples"]==["source-1"]
+    first=apply_canonical_unit_repair(research_db=research,production_db=production,
+      decision_at=DECISION,authorization=UNIT_REPAIR_AUTHORIZATION)
+    assert first["inserted"]==1 and first["unchanged"]==0 and not first["idempotent_retry"]
+    assert production.read_bytes()==production_before
+
+    post=plan_canonical_unit_repair(research_db=research,production_db=production,decision_at=DECISION)
+    assert post["eligible_revision_count"]==0 and post["source_unit_counts"]=={}
+    assert post["evidence_key_samples"]==[]
+    report=canonical_unit_repair_status(research_db=research,production_db=production,decision_at=DECISION)
+    assert report["pending_eligible_revisions"]==0
+    assert report["recent_runs"][-1]["planned_count"]==1
+    assert report["recent_runs"][-1]["inserted_count"]==1
+    assert report["visible_repaired_revision_counts"]==[
+      {"canonical_field":"basic_eps","rule_version":"1.0.0","count":1}]
+    assert all(not report[key] for key in ("rankings","candidates","recommendations",
+      "paper_selections","prospective_vintages","validation_observations"))
+    assert report["validation_credit"]==0
+
+    before_retry=research.read_bytes()
+    retry=apply_canonical_unit_repair(research_db=research,production_db=production,
+      decision_at=DECISION,authorization=UNIT_REPAIR_AUTHORIZATION)
+    assert retry["inserted"]==0 and retry["unchanged"]==1 and retry["idempotent_retry"]
+    assert research.read_bytes()==before_retry and production.read_bytes()==production_before
+    with duckdb.connect(str(research),read_only=True) as db:
+        rows=db.execute("SELECT evidence_key,unit,reliability_state,lineage FROM canonical_factor_evidence ORDER BY evidence_key").fetchall()
+        assert len(rows)==2 and sum(r[2]=="usable" for r in rows)==1
+        assert next(r for r in rows if r[0]=="source-1")[1:3]==("USD/shares","withheld")
+        assert len({r[0] for r in rows})==2
+        visible=investment_evidence._matching_repairs(db,DECISION)
+        assert visible["source-1"]["unit"]=="USD/share"
+        consumer=investment_research._visible_canonical_rows(db,DECISION)
+        assert [(r["unit"],r["reliability_state"]) for r in consumer]==[("USD/share","usable")]
+    # The source remains eligible before the repair decision, proving that a
+    # post-boundary revision is not leaked backwards in time.
+    earlier=plan_canonical_unit_repair(research_db=research,production_db=production,
+      decision_at=datetime(2026,9,15,tzinfo=timezone.utc))
+    assert earlier["eligible_revision_count"]==1
+
+def test_later_rule_version_does_not_suppress_exact_repair(tmp_path):
+    research,production=_repair_fixture(tmp_path)
+    with duckdb.connect(str(research)) as db:
+        source=db.execute("SELECT * FROM canonical_factor_evidence WHERE evidence_key='source-1'").fetchone()
+        columns=[x[0] for x in db.description]; row=dict(zip(columns,source))
+        row.update(evidence_key="future",unit="USD/share",reliability_state="usable",withholding_reason=None,
+          provenance=json.dumps({"unit_normalization":{"source_unit":"USD/shares","canonical_unit":"USD/share",
+            "normalization_rule_identifier":"eps-usd-per-share-lossless","rule_version":"2.0.0","scale_factor":1},
+            "supersedes_evidence_key":"source-1"}),
+          lineage=json.dumps({"revision_type":"canonical_unit_normalization","supersedes_evidence_key":"source-1","rule_version":"2.0.0","repair_decision_at":DECISION.isoformat()}))
+        db.execute("INSERT INTO canonical_factor_evidence VALUES ("+",".join("?" for _ in columns)+")",[row[x] for x in columns])
+    assert plan_canonical_unit_repair(research_db=research,production_db=production,
+      decision_at=DECISION)["eligible_revision_count"]==1
+
+def test_unit_repair_failure_rolls_back_and_cli_error_is_redacted(monkeypatch,tmp_path):
+    research,production=_repair_fixture(tmp_path); before=(research.read_bytes(),production.read_bytes())
+    real=investment_evidence._initialize_repair_schema
+    def fail(db): real(db); raise RuntimeError("secret repair failure")
+    monkeypatch.setattr(investment_evidence,"_initialize_repair_schema",fail)
+    with pytest.raises(RuntimeError,match="secret repair failure"):
+        apply_canonical_unit_repair(research_db=research,production_db=production,
+          decision_at=DECISION,authorization=UNIT_REPAIR_AUTHORIZATION)
+    assert (research.read_bytes(),production.read_bytes())==before
+    command=[sys.executable,"-m","app.investment_research_cli","apply-canonical-unit-repair",
+      "--research-db",str(research),"--production-db",str(production),
+      "--decision-at",DECISION.isoformat(),"--authorization","wrong"]
+    completed=subprocess.run(command,cwd=Path(__file__).parents[1],text=True,capture_output=True)
+    assert completed.returncode==1 and "wrong" not in completed.stderr
+    assert json.loads(completed.stderr)["error"]["message"]=="investment research request failed; details redacted"

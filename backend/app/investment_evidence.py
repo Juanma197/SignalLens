@@ -24,7 +24,8 @@ from .model_readiness import fingerprint
 from .sec_ingestion import validate_paths, valid_user_agent
 from .prospective_us_shadow import CONFIGURATION_HASH, STRATEGY_VERSION
 from .investment_research import CONCEPT_ALIASES, InvestmentResearchError
-from .canonical_units import normalize_unit
+from .canonical_units import (EPS_UNIT_RULE_ID, EPS_UNIT_RULE_VERSION,
+    normalize_unit)
 
 MATERIALIZE_AUTHORIZATION = "I AUTHORIZE RESEARCH-ONLY INVESTMENT EVIDENCE MATERIALIZATION"
 ENRICH_AUTHORIZATION = "I AUTHORIZE RESEARCH-ONLY SEC INVESTMENT EVIDENCE ENRICHMENT"
@@ -235,12 +236,59 @@ def _insert_factor(db,r):
       r["evidence_key"],r["security_id"],r["qualified_symbol"],r["canonical_field"],r["value"],r["unit"],r["currency"],r["period_start"],r["period_end"],r["instant_date"],r["fiscal_period"],r["form"],r["source"],r["public_at"],r["retrieved_at"],r["available_at"],r["materialized_at"],r["concept"],ALIAS_VERSION,r["sign"],r["reliability"],r["withholding"],provenance,r["source_fact_key"],json.dumps({"latest_visible_revision":True,"period_nature":r["period_nature"]}),])
     return True
 
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try: value=json.loads(value)
+        except (TypeError, ValueError): return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+def _completed_repair_decisions(db) -> list[datetime]:
+    if "canonical_unit_repair_runs" not in _tables(db): return []
+    return [_aware(r[0]) for r in db.execute(
+        "SELECT decision_at FROM canonical_unit_repair_runs "
+        "WHERE status='completed' AND rule_version=?",[EPS_UNIT_RULE_VERSION]).fetchall()]
+
+def _matching_repairs(db, decision: datetime) -> dict[str, dict[str, Any]]:
+    """Index exact, visible canonical revisions by the source they supersede.
+
+    Early 1.0.0 revisions did not serialize ``repair_decision_at``.  A completed
+    1.0.0 run at or before the requested boundary is therefore the authoritative
+    visibility fallback for those rows; this makes the deployed append-only data
+    discoverable without rewriting it.
+    """
+    completed=[x for x in _completed_repair_decisions(db) if x and x<=decision]
+    result={}
+    for row in _rows(db,"canonical_factor_evidence"):
+        provenance=_json_object(row.get("provenance")); lineage=_json_object(row.get("lineage"))
+        normalization=_json_object(provenance.get("unit_normalization"))
+        source=str(lineage.get("supersedes_evidence_key") or provenance.get("supersedes_evidence_key") or "")
+        repair_at=_aware(lineage.get("repair_decision_at") or provenance.get("repair_decision_at"))
+        visible=(repair_at<=decision) if repair_at else bool(completed)
+        exact_rule=normalize_unit(canonical_field=str(row.get("canonical_field")),
+          source_unit=str(normalization.get("source_unit") or ""),
+          concept=str(row.get("original_concept_or_field") or ""),currency=row.get("currency"),
+          scale_factor=normalization.get("scale_factor"),
+          period_nature="duration" if row.get("period_start") is not None else "instant")
+        if (source and visible and row.get("reliability_state")=="usable"
+                and row.get("unit")=="USD/share"
+                and exact_rule is not None
+                and normalization.get("source_unit")=="USD/shares"
+                and normalization.get("canonical_unit")=="USD/share"
+                and normalization.get("normalization_rule_identifier")==EPS_UNIT_RULE_ID
+                and normalization.get("rule_version")==EPS_UNIT_RULE_VERSION
+                and normalization.get("scale_factor")==1
+                and lineage.get("revision_type")=="canonical_unit_normalization"
+                and lineage.get("rule_version")==EPS_UNIT_RULE_VERSION):
+            result[source]=row
+    return result
+
 def _repair_candidates(db, decision):
     if "canonical_factor_evidence" not in _tables(db): return []
-    result=[]
+    result=[]; repaired=_matching_repairs(db,decision)
     for row in _rows(db,"canonical_factor_evidence"):
         if row.get("reliability_state")!="withheld" or row.get("withholding_reason")!="incompatible_units": continue
         if _aware(row.get("available_at")) is None or _aware(row.get("available_at"))>decision: continue
+        if row["evidence_key"] in repaired: continue
         source_unit=str(row.get("unit") or "")
         rule=normalize_unit(canonical_field=str(row.get("canonical_field")),source_unit=source_unit,
           concept=str(row.get("original_concept_or_field")),currency=row.get("currency"),scale_factor=1,
@@ -282,18 +330,18 @@ def apply_canonical_unit_repair(*,research_db:Path,production_db:Path,decision_a
       db.execute("BEGIN")
       try:
         _initialize_repair_schema(db); candidates=_repair_candidates(db,decision)
-        existing=db.execute("SELECT status FROM canonical_unit_repair_runs WHERE repair_run_id=?",[run_id]).fetchone()
+        existing=db.execute("SELECT status,planned_count,inserted_count FROM canonical_unit_repair_runs WHERE repair_run_id=?",[run_id]).fetchone()
         if existing and existing[0]=="completed":
-            db.execute("ROLLBACK"); return {"command":"apply-canonical-unit-repair","repair_run_id":run_id,"status":"completed","inserted":0,"unchanged":len(candidates),"idempotent_retry":True,"production_unchanged":prod_before==fingerprint(production_db),**ZERO}
+            db.execute("ROLLBACK"); return {"command":"apply-canonical-unit-repair","repair_run_id":run_id,"status":"completed","inserted":0,"unchanged":existing[1],"idempotent_retry":True,"production_unchanged":prod_before==fingerprint(production_db),**ZERO}
         db.execute("INSERT OR REPLACE INTO canonical_unit_repair_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
           [run_id,decision,now,None,binding,json.dumps(prod_before,default=str),"1.0.0",len(candidates),0,0,"running",None])
         for old,rule in candidates:
           new_key=_key("canonical-unit-revision",binding,old["evidence_key"],rule.rule_version)
           if db.execute("SELECT count(*) FROM canonical_factor_evidence WHERE evidence_key=?",[new_key]).fetchone()[0]: unchanged+=1; continue
           provenance=old.get("provenance"); provenance=json.loads(provenance) if isinstance(provenance,str) else dict(provenance or {})
-          provenance.update({"unit_normalization":rule.provenance(),"supersedes_evidence_key":old["evidence_key"],"historical_source_preserved":True,"research_database_identity":binding})
+          provenance.update({"unit_normalization":rule.provenance(),"supersedes_evidence_key":old["evidence_key"],"repair_decision_at":decision.isoformat(),"historical_source_preserved":True,"research_database_identity":binding})
           lineage=old.get("lineage"); lineage=json.loads(lineage) if isinstance(lineage,str) else dict(lineage or {})
-          lineage.update({"revision_type":"canonical_unit_normalization","supersedes_evidence_key":old["evidence_key"],"rule_version":rule.rule_version})
+          lineage.update({"revision_type":"canonical_unit_normalization","supersedes_evidence_key":old["evidence_key"],"rule_version":rule.rule_version,"repair_decision_at":decision.isoformat()})
           values=[new_key,old["security_id"],old["qualified_symbol"],old["canonical_field"],old["value"],rule.canonical_unit,old["currency"],old["period_start"],old["period_end"],old["instant_date"],old["fiscal_period"],old["form"],old["accession_or_source_identifier"],old["public_at"],old["retrieved_at"],old["available_at"],now,old["original_concept_or_field"],old["alias_contract_version"],old["sign_convention"],"usable",None,json.dumps(provenance,sort_keys=True),old["source_fact_key"],json.dumps(lineage,sort_keys=True)]
           db.execute("INSERT INTO canonical_factor_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",values); inserted+=1
         db.execute("UPDATE canonical_unit_repair_runs SET finished_at=?,inserted_count=?,unchanged_count=?,status='completed' WHERE repair_run_id=?",[datetime.now(timezone.utc),inserted,unchanged,run_id]); db.execute("COMMIT")
@@ -306,11 +354,16 @@ def canonical_unit_repair_status(*,research_db:Path,production_db:Path,decision_
     with duckdb.connect(str(production_db),read_only=True):
       with duckdb.connect(str(research_db),read_only=True) as db:
         runs=_rows(db,"canonical_unit_repair_runs") if "canonical_unit_repair_runs" in _tables(db) else []
-        pending=len(_repair_candidates(db,decision))
+        pending=len(_repair_candidates(db,decision)); repairs=list(_matching_repairs(db,decision).values())
+        repaired_counts=Counter((str(r.get("canonical_field")),
+          _json_object(_json_object(r.get("provenance")).get("unit_normalization")).get("rule_version")) for r in repairs)
     after={"research":fingerprint(research_db),"production":fingerprint(production_db)}
     if before!=after: raise InvestmentResearchError("database changed during read-only operation")
     return {"command":"canonical-unit-repair-status","decision_at":decision.isoformat(),"pending_eligible_revisions":pending,
-      "recent_runs":runs[-max(0,min(MAX_SAMPLES,max_samples)):],"read_only":True,"database_immutability":{"verified":True,"before":before,"after":after},**ZERO}
+      "recent_runs":runs[-max(0,min(MAX_SAMPLES,max_samples)):],
+      "visible_repaired_revision_counts":[{"canonical_field":field,"rule_version":version,"count":count}
+        for (field,version),count in sorted(repaired_counts.items())],
+      "read_only":True,"database_immutability":{"verified":True,"before":before,"after":after},**ZERO}
 
 def _market_and_action_rows(db, security, decision, now):
     """Normalize price and explicit action coverage without treating absence as proof."""

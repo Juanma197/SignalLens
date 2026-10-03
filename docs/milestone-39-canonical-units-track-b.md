@@ -32,6 +32,30 @@ row. It appends a usable revision whose deterministic key binds the source
 evidence, rule version, and research database identity. The revision identifies
 the evidence it supersedes; retries are idempotent.
 
+## Operator defect and corrected semantics
+
+The first production-authorized research run appended 7,957 correct revisions,
+but the planner continued to scan each original withheld row without resolving
+its `supersedes_evidence_key` to the appended revision. Consequently plan and
+status again reported all 7,957 sources. The preview consumer also chose rows by
+`available_at` alone, so equal-timestamp revisions depended on physical row
+order. This was a lineage-resolution defect, not a failure of the locked unit
+rule or of the append-only writes.
+
+Plan, status, and consumers now share the exact 1.0.0 lineage contract: source
+evidence key, revision type, rule identifier/version, exact source and canonical
+units, and scale must all match. JSON key ordering is irrelevant. A matching
+completed repair is visible at its declared repair decision boundary, including
+the already-written 1.0.0 rows whose original provenance predates the explicit
+`repair_decision_at` field. Earlier decision boundaries cannot see that repair,
+and later or unknown rule versions cannot silently supersede it. Consumers sort
+a matching usable canonical revision ahead of its preserved withheld source.
+
+An identical authorized retry finds the completed deterministic run, rolls back
+without writing, and reports `inserted: 0`, `unchanged: <planned_count>`, and
+`idempotent_retry: true`. Status reports bounded visible repaired counts grouped
+by canonical field and rule version.
+
 ## Readiness meanings
 
 Every family now reports these separate states from one shared definition:
@@ -42,6 +66,13 @@ Every family now reports these separate states from one shared definition:
 * `full_family_ready`: every required factor is available;
 * `required_factors` and `optional_factors`;
 * exact `missing_required_inputs` and `withholding_reasons` diagnostics.
+
+The EPS repair diagnostic separately counts repaired historical observations now
+usable, companies whose EPS inputs were already satisfied, companies having no
+qualifying EPS source, and companies with EPS withheld for another reason. Thus
+an unchanged growth-family count is valid when repaired history does not fill a
+currently missing required input; it no longer implies that consumers missed
+the repaired revisions.
 
 This explains the operator observations without treating partial evidence as a
 ready family. All 71 companies can have a financial-strength input while none
@@ -72,6 +103,13 @@ python -m app.investment_research_cli apply-canonical-unit-repair --research-db 
 
 python -m app.investment_research_cli canonical-unit-repair-status --research-db $Research --production-db $Production --decision-at $DecisionAt
 python -m app.investment_research_cli track-b-panel-feasibility --research-db $Research --production-db $Production --decision-at $DecisionAt
+
+# Exact post-merge read-only verification commands. Expect zero eligible/pending.
+python -m app.investment_research_cli plan-canonical-unit-repair --research-db $Research --production-db $Production --decision-at $DecisionAt
+python -m app.investment_research_cli canonical-unit-repair-status --research-db $Research --production-db $Production --decision-at $DecisionAt
+
+# Safe idempotent retry. Expect inserted 0, unchanged 7957, idempotent_retry true.
+python -m app.investment_research_cli apply-canonical-unit-repair --research-db $Research --production-db $Production --decision-at $DecisionAt --authorization $Authorization
 ```
 
 Archive all four JSON outputs with the backup fingerprint. A completed apply can
