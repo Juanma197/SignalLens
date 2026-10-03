@@ -37,30 +37,60 @@ class Classification:
     evidence_source: str
     public_at: str
     retrieved_at: str
+    available_at: str = ""
+    confidence: str = "unavailable"
+
+    @property
+    def withholding_reason(self) -> str | None:
+        return self.reason_code
 
 def _aware(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("timezone_aware_timestamp_required")
     return value.astimezone(timezone.utc)
 
-def classify_security(evidence: Iterable[dict[str, Any]], decision_at: datetime) -> Classification:
-    """Classify only from concordant durable evidence visible at ``decision_at``."""
+def classify_security(evidence: Iterable[dict[str, Any]], decision_at: datetime,
+                      *, security_id: str | None = None) -> Classification:
+    """Read the canonical, current classification visible at ``decision_at``.
+
+    Materialized rows take their availability and source names from the Milestone
+    38 schema.  The older names remain accepted solely for pre-materialization
+    in-memory evidence; they never override a materialized row.
+    """
     decision = _aware(decision_at); valid=[]
     for item in evidence:
         kind=item.get("security_type")
-        if kind not in SECURITY_TYPES or not item.get("durable_identifier") or not item.get("source"):
+        durable=item.get("durable_identifier")
+        source=item.get("evidence_source_family") or item.get("source")
+        if (kind not in SECURITY_TYPES or not durable or not source
+                or (security_id is not None and str(item.get("security_id")) != security_id)
+                or item.get("is_current", True) is not True):
             continue
-        try: public=_aware(item["public_at"]); retrieved=_aware(item["retrieved_at"])
+        try:
+            public=_aware(item["public_at"]); retrieved=_aware(item["retrieved_at"])
+            available=_aware(item.get("available_at") or max(public,retrieved))
         except (KeyError, TypeError, ValueError): continue
-        if public <= decision and retrieved <= decision:
-            valid.append((kind,item,public,retrieved))
+        effective_from=item.get("effective_from"); effective_to=item.get("effective_to")
+        try:
+            if effective_from is not None and _aware(effective_from)>decision: continue
+            if effective_to is not None and decision>=_aware(effective_to): continue
+        except (TypeError,ValueError): continue
+        if public <= decision and retrieved <= decision and available <= decision:
+            valid.append((kind,item,public,retrieved,available))
+    if any(x[1].get("conflict_details") not in (None,"",{},[]) for x in valid):
+        return Classification("classification_unavailable",False,"classification_ambiguous",
+                              "materialized_conflict","","","","unavailable")
     kinds={x[0] for x in valid}
     if len(kinds) != 1:
         reason="classification_ambiguous" if len(kinds)>1 else "classification_evidence_unavailable"
-        return Classification("classification_unavailable",False,reason,"none","","" )
-    kind,item,public,retrieved=max(valid,key=lambda x:x[3])
-    return Classification(kind,kind==ORDINARY,None if kind==ORDINARY else CLASSIFICATION_REASONS[kind],
-        str(item["source"]),public.isoformat(),retrieved.isoformat())
+        return Classification("classification_unavailable",False,reason,"none","","","","unavailable")
+    kind,item,public,retrieved,available=max(
+        valid,key=lambda x:(x[4],x[3],x[2],str(x[1].get("evidence_key") or "")))
+    stored_reason=item.get("classification_reason")
+    reason=None if kind==ORDINARY else (stored_reason or CLASSIFICATION_REASONS[kind])
+    return Classification(kind,kind==ORDINARY,reason,str(item.get("evidence_source_family") or item.get("source")),
+        public.isoformat(),retrieved.isoformat(),available.isoformat(),
+        str(item.get("confidence_category") or item.get("confidence") or "legacy"))
 
 def repair_issuer_mapping(*, security_id: str, decision_at: datetime,
                           listing_identities: Iterable[dict[str,Any]],
@@ -161,7 +191,8 @@ def construct_enterprise_value(market_cap, debt_components, cash, *, currency_co
 def financial_strength(*, current_debt=None, non_current_debt=None, confirmed_debt_free=False,
                        assets=None, equity=None, cash=None, operating_income=None,
                        interest_expense=None, security_type=ORDINARY):
-    if security_type != ORDINARY: return {"status":"withheld","reason_code":"financial_sector_not_comparable"}
+    if security_type in {"bank","insurance"}: return {"status":"withheld","reason_code":"financial_sector_not_comparable"}
+    if security_type != ORDINARY: return {"status":"withheld","reason_code":CLASSIFICATION_REASONS.get(security_type,"security_type_not_comparable")}
     if current_debt is None or non_current_debt is None:
         if not confirmed_debt_free: return {"status":"partial","reason_code":"debt_evidence_unavailable","debt_free_status":"unknown"}
         debt=0

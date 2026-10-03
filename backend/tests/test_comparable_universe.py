@@ -19,6 +19,29 @@ def test_ordinary_classification_future_and_ambiguity_refusal():
     future=evidence(ORDINARY,public_at=NOW+timedelta(seconds=1))
     assert classify_security([future],NOW).security_type=="classification_unavailable"
 
+def test_materialized_revision_selection_point_in_time_and_conflict_refusal():
+    base=evidence(ORDINARY,security_id="s1",evidence_source_family="review",
+      available_at=NOW-timedelta(days=1),is_current=True,evidence_key="a",
+      confidence_category="high")
+    base.pop("source")
+    newer=base|{"evidence_key":"z","available_at":NOW-timedelta(hours=1),
+      "retrieved_at":NOW-timedelta(hours=1)}
+    assert classify_security([base,newer],NOW,security_id="s1").available_at==newer["available_at"].isoformat()
+    future=newer|{"evidence_key":"future","available_at":NOW+timedelta(seconds=1)}
+    assert classify_security([base,future],NOW,security_id="s1").available_at==base["available_at"].isoformat()
+    conflict=newer|{"conflict_details":{"types":[ORDINARY,"bank"]}}
+    refused=classify_security([conflict],NOW,security_id="s1")
+    assert not refused.included and refused.reason_code=="classification_ambiguous"
+
+def test_unavailable_reason_is_preserved_and_not_called_financial_sector():
+    unavailable=evidence("classification_unavailable",security_id="s1",
+      evidence_source_family="stored_evidence_hierarchy",available_at=NOW,
+      is_current=True,classification_reason="issuer_evidence_missing")
+    unavailable.pop("source")
+    result=classify_security([unavailable],NOW,security_id="s1")
+    assert result.reason_code=="issuer_evidence_missing" and not result.included
+    assert financial_strength(security_type="classification_unavailable")["reason_code"]=="classification_evidence_unavailable"
+
 def test_durable_effective_dated_mapping_and_ticker_reuse():
     identity={"security_id":"s1","cik":"0001","effective_from":NOW-timedelta(days=1),"effective_to":None}
     stored={"security_id":"s1","cik":"0001","known_at":NOW-timedelta(hours=1)}
