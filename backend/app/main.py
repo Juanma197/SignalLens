@@ -75,6 +75,8 @@ from .investment_research import (coverage_audit, execution_cost_capability,
     comparable_universe_readiness, company_factor_preview)
 from .investment_evidence import (status as investment_evidence_status,
                                    enrichment_plan as investment_enrichment_plan)
+from .financial_strength import (aggregate_evidence_audit as financial_strength_evidence_audit,
+                                  contract_assessment as financial_strength_contract_assessment)
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
@@ -252,6 +254,20 @@ def evidence_materialization_status(decision_at: datetime = Query(...)) -> dict:
 def evidence_enrichment_plan(decision_at: datetime = Query(...)) -> dict:
     return _redacted(lambda: investment_enrichment_plan(research_db=settings.research_database_path,
         production_db=settings.database_path, decision_at=decision_at))
+
+@app.get("/api/v1/research/financial-strength-evidence-audit")
+def financial_strength_audit_api(decision_at: datetime = Query(...)) -> dict:
+    """Authenticated, aggregate-only financial-strength evidence audit."""
+    return _redacted(lambda: financial_strength_evidence_audit(
+        research_db=settings.research_database_path, production_db=settings.database_path,
+        decision_at=decision_at))
+
+@app.get("/api/v1/research/financial-strength-contract-assessment")
+def financial_strength_contract_api(decision_at: datetime = Query(...)) -> dict:
+    """Authenticated, bounded accounting-contract feasibility assessment."""
+    return _redacted(lambda: financial_strength_contract_assessment(
+        research_db=settings.research_database_path, production_db=settings.database_path,
+        decision_at=decision_at))
 
 
 @app.get("/api/v1/ready")
