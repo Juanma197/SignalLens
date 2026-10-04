@@ -8,6 +8,8 @@ from pathlib import Path
 from .sec_ingestion import (AUTHORIZATION_PHRASE, IngestionLimits, ingest, plan,
                             status)
 from .sec_liquidity_plan import plan_sec_liquidity_evidence_ingestion
+from .sec_liquidity_ingestion import (AUTHORIZATION_PHRASE as LIQUIDITY_AUTHORIZATION,
+    apply as apply_liquidity, recover_stale_lock, status as liquidity_status)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -18,6 +20,17 @@ def parser() -> argparse.ArgumentParser:
     liquidity=commands.add_parser("plan-sec-liquidity-evidence-ingestion"); _paths(liquidity)
     liquidity.add_argument("--decision-at",required=True)
     liquidity.add_argument("--max-request-budget",type=int,default=205)
+    apply_command=commands.add_parser("apply-sec-liquidity-evidence-ingestion"); _paths(apply_command)
+    apply_command.add_argument("--decision-at",required=True)
+    apply_command.add_argument("--plan-identifier",required=True)
+    apply_command.add_argument("--max-request-budget",type=int,required=True)
+    apply_command.add_argument("--authorization",required=True,help=f"exactly: {LIQUIDITY_AUTHORIZATION}")
+    apply_command.add_argument("--fixture",type=Path,help=argparse.SUPPRESS)
+    status_command=commands.add_parser("sec-liquidity-evidence-ingestion-status"); _paths(status_command)
+    status_command.add_argument("--decision-at")
+    recovery=commands.add_parser("recover-stale-sec-liquidity-ingestion-lock"); _paths(recovery)
+    recovery.add_argument("--run-id",required=True)
+    recovery.add_argument("--authorization",required=True,help=f"exactly: {LIQUIDITY_AUTHORIZATION}")
     for name in ("ingest-sec-fundamentals","retry-sec-failures"):
         command=commands.add_parser(name); _paths(command)
         command.add_argument("--authorization",help=f"exactly: {AUTHORIZATION_PHRASE}")
@@ -42,6 +55,17 @@ def execute(args: argparse.Namespace) -> dict:
         return plan_sec_liquidity_evidence_ingestion(research_db=args.research_db,
             production_db=args.production_db,decision_at=args.decision_at,
             max_request_budget=args.max_request_budget)
+    if args.command=="apply-sec-liquidity-evidence-ingestion":
+        fixture=json.loads(args.fixture.read_text(encoding="utf-8")) if args.fixture else None
+        return apply_liquidity(research_db=args.research_db,production_db=args.production_db,
+            decision_at=args.decision_at,plan_identifier=args.plan_identifier,
+            max_request_budget=args.max_request_budget,authorization=args.authorization,fixture=fixture)
+    if args.command=="sec-liquidity-evidence-ingestion-status":
+        return liquidity_status(research_db=args.research_db,production_db=args.production_db,
+            decision_at=args.decision_at)
+    if args.command=="recover-stale-sec-liquidity-ingestion-lock":
+        return recover_stale_lock(research_db=args.research_db,production_db=args.production_db,
+            run_id=args.run_id,authorization=args.authorization)
     if args.command=="plan-sec-ingestion": return plan(args.research_db,args.production_db)
     if args.command=="sec-ingestion-status": return status(args.research_db,args.production_db)
     fixture=json.loads(args.fixture.read_text(encoding="utf-8")) if args.fixture else None

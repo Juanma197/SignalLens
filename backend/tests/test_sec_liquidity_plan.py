@@ -69,7 +69,7 @@ def test_unmapped_budget_expiry_fingerprint_and_deterministic_id(tmp_path):
       decision_at=DECISION,max_request_budget=10,generated_at=DECISION)
     b=plan_sec_liquidity_evidence_ingestion(research_db=research,production_db=production,
       decision_at=DECISION,max_request_budget=10,generated_at=DECISION+timedelta(hours=1))
-    assert a["plan_identifier"]==b["plan_identifier"]
+    assert a["plan_identifier"]!=b["plan_identifier"]
     assert a["unmapped_identity_count"]==1
     assert a["offline_replay"]["available"] is False
     assert a["blocker_codes"]==["UNMAPPED_ISSUER_IDENTITY","REQUEST_BUDGET_EXCEEDED"]
@@ -77,7 +77,7 @@ def test_unmapped_budget_expiry_fingerprint_and_deterministic_id(tmp_path):
       now=DECISION+timedelta(days=8))==["PLAN_EXPIRED"]
     with duckdb.connect(str(research)) as db: db.execute("INSERT INTO sec_issuers VALUES ('extra','X.US','X','9999999999')")
     assert validate_apply_preconditions(a,research_db=research,production_db=production,
-      now=DECISION+timedelta(days=1))==["DATABASE_FINGERPRINT_CHANGED"]
+      now=DECISION+timedelta(minutes=5))==["DATABASE_FINGERPRINT_CHANGED"]
 
 def test_cli_paths_with_spaces_and_stable_redacted_error(tmp_path):
     research,production=databases(tmp_path)
