@@ -8,6 +8,7 @@ import pytest
 from app.liquidity_evidence import (AGGREGATE_MAXIMUM_BYTES, CONTRACT_MAXIMUM_BYTES,
     PREVIEW_MAXIMUM_BYTES, compact_utf8_size, evidence_discovery,
     contract_assessment, company_preview)
+from app.liquidity_inventory import raw_canonical_inventory, evidence_gap_assessment
 
 DECISION=datetime(2026,10,2,18,15,tzinfo=timezone.utc)
 
@@ -86,3 +87,78 @@ def test_timezone_future_cli_errors_and_bounds(tmp_path):
     assert compact_utf8_size(preview)<=PREVIEW_MAXIMUM_BYTES
     for key in ("rankings","candidates","recommendations","selections","vintages","validation_observations"):
         assert preview[key]==[]
+
+def inventory_fixture(tmp_path):
+    root=tmp_path/"raw canonical files with spaces"; root.mkdir()
+    research=root/"research evidence.duckdb"; production=root/"production evidence.duckdb"
+    stamp=datetime(2026,7,1,tzinfo=timezone.utc)
+    with duckdb.connect(str(production)) as db:
+        db.execute("CREATE TABLE marker(x INT)")
+    with duckdb.connect(str(research)) as db:
+        db.execute("""CREATE TABLE security_classification_evidence(security_id VARCHAR,
+          qualified_symbol VARCHAR,security_type VARCHAR,public_at TIMESTAMPTZ,
+          retrieved_at TIMESTAMPTZ,available_at TIMESTAMPTZ)""")
+        db.execute("""CREATE TABLE sec_issuers(security_id VARCHAR,qualified_symbol VARCHAR,
+          ticker VARCHAR,cik VARCHAR,issuer_name VARCHAR,mapping_source VARCHAR,mapped_at TIMESTAMPTZ)""")
+        db.execute("""CREATE TABLE sec_facts(fact_key VARCHAR,security_id VARCHAR,
+          qualified_symbol VARCHAR,ticker VARCHAR,cik VARCHAR,taxonomy VARCHAR,concept VARCHAR,
+          value DOUBLE,unit VARCHAR,currency VARCHAR,period_start DATE,period_end DATE,
+          form VARCHAR,accession_number VARCHAR,filed_date DATE,public_at TIMESTAMPTZ,
+          retrieved_at TIMESTAMPTZ)""")
+        db.execute("""CREATE TABLE canonical_factor_evidence(security_id VARCHAR,
+          qualified_symbol VARCHAR,canonical_field VARCHAR,value DOUBLE,unit VARCHAR,currency VARCHAR,
+          period_start DATE,period_end DATE,instant_date DATE,accession_or_source_identifier VARCHAR,
+          public_at TIMESTAMPTZ,retrieved_at TIMESTAMPTZ,available_at TIMESTAMPTZ,
+          reliability_state VARCHAR,original_concept_or_field VARCHAR)""")
+        for i in range(11):
+            sid=f"s{i}"; symbol=f"S{i:02}.US"; cik=f"{i+1:010}"
+            db.execute("INSERT INTO security_classification_evidence VALUES (?,?,'us_operating_company',?,?,?)",[sid,symbol,stamp,stamp,stamp])
+            db.execute("INSERT INTO sec_issuers VALUES (?,?,?,?,'Issuer','sec_ticker_map',?)",[sid,symbol,f"S{i:02}",cik,stamp])
+        def raw(i,concept,value=10,unit="USD",start=None,end=date(2026,6,30),public=stamp,taxonomy="us-gaap"):
+            db.execute("INSERT INTO sec_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              [f"f{i}-{concept}-{value}",f"s{i}",f"S{i:02}.US",f"S{i:02}",f"{i+1:010}",taxonomy,concept,value,unit,"USD",start,end,"10-Q",f"acc{i}-{concept}",end,public,public])
+        raw(0,"AssetsCurrent",100) # compatible raw, omitted
+        raw(1,"Assets",200) # broader does not satisfy current assets
+        raw(2,"LiabilitiesCurrent",20,public=datetime(2026,10,3,tzinfo=timezone.utc))
+        raw(3,"CashAndCashEquivalentsAtCarryingValue",30,end=date(2024,1,1))
+        raw(4,"AssetsCurrent",40,unit="shares")
+        raw(5,"LiabilitiesCurrent",50,start=date(2026,1,1))
+        raw(6,"CustomCurrentAssets",60,taxonomy="issuer-2026")
+        raw(7,"AssetsCurrent",70); raw(7,"AssetsCurrent",71)
+        raw(8,"AssetsCurrent",80)
+        db.execute("INSERT INTO canonical_factor_evidence VALUES ('s8','S08.US','current_assets',80,'USD','USD',NULL,DATE '2026-06-30',DATE '2026-06-30','acc8',?,?,?, 'usable','AssetsCurrent')",[stamp,stamp,stamp])
+        raw(9,"Assets",900)
+    return research,production
+
+def test_raw_canonical_inventory_exact_states_counts_bounds_and_immutability(tmp_path):
+    research,production=inventory_fixture(tmp_path); before=(research.read_bytes(),production.read_bytes())
+    report=raw_canonical_inventory(research_db=research,production_db=production,decision_at=DECISION)
+    ca=report["field_state_counts"]["current_assets"]
+    assert ca["compatible_raw_fact_not_materialized"]==1
+    assert ca["only_broader_aggregate_exists"]==2
+    assert ca["raw_fact_incompatible_unit"]==1
+    assert ca["issuer_extension_review_required"]==1
+    assert ca["conflicting_visible_facts"]==1
+    assert ca["compatible_canonical_fact_visible"]==1
+    assert ca["no_relevant_raw_or_canonical_fact"]==4
+    assert report["field_state_counts"]["current_liabilities"]["compatible_raw_fact_post_decision"]==1
+    assert report["field_state_counts"]["current_liabilities"]["raw_fact_incompatible_duration"]==1
+    assert report["field_state_counts"]["unrestricted_cash"]["raw_fact_stale"]==1
+    assert report["field_state_samples"]["current_assets"]["no_relevant_raw_or_canonical_fact"]["returned_count"]==4
+    assert report["standard_concept_observation_counts"]["AssetsCurrent"]==5
+    assert report["company_samples"]["returned_count"]==10 and report["company_samples"]["truncated"]
+    assert report["database_immutability"]["before"]==report["database_immutability"]["after"]
+    assert (research.read_bytes(),production.read_bytes())==before
+    for key in ("rankings","candidates","recommendations","selections","vintages","validation_observations"):
+        assert report[key]==[]
+    assert report["validation_credit"]==0
+
+def test_inventory_canonical_precedence_and_cli_redaction(tmp_path):
+    research,production=inventory_fixture(tmp_path)
+    assessment=evidence_gap_assessment(research_db=research,production_db=production,decision_at=DECISION)
+    assert assessment["field_state_counts"]["current_assets"]["compatible_canonical_fact_visible"]==1
+    command=[sys.executable,"-m","app.investment_research_cli","liquidity-raw-canonical-inventory",
+      "--research-db",str(research),"--production-db",str(production),"--decision-at","2026-10-02T18:15:00"]
+    result=subprocess.run(command,cwd=Path(__file__).parents[1],capture_output=True,text=True)
+    assert result.returncode==1 and str(research) not in result.stderr
+    assert json.loads(result.stderr)["error"]["message"]=="investment research request failed; details redacted"

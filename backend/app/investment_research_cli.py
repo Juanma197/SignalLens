@@ -10,6 +10,8 @@ from .investment_evidence import (plan_materialization, materialize_stored,
     plan_canonical_unit_repair, apply_canonical_unit_repair, canonical_unit_repair_status)
 from .liquidity_evidence import (evidence_discovery as liquidity_evidence_discovery,
     contract_assessment as liquidity_contract_assessment, company_preview as liquidity_company_preview)
+from .liquidity_inventory import (raw_canonical_inventory as liquidity_raw_canonical_inventory,
+    evidence_gap_assessment as liquidity_evidence_gap_assessment)
 from .financial_strength import (
     evidence_audit as financial_strength_evidence_audit,
     contract_assessment as financial_strength_contract_assessment,
@@ -37,6 +39,8 @@ COMMANDS={"investment-grade-coverage-audit":coverage_audit,
           "liquidity-evidence-discovery":liquidity_evidence_discovery,
           "liquidity-contract-assessment":liquidity_contract_assessment,
           "liquidity-company-preview":liquidity_company_preview}
+COMMANDS.update({"liquidity-raw-canonical-inventory":liquidity_raw_canonical_inventory,
+                 "liquidity-evidence-gap-assessment":liquidity_evidence_gap_assessment})
 def parser():
     root=argparse.ArgumentParser(description="Read-only investment research foundation")
     subs=root.add_subparsers(dest="command",required=True)
