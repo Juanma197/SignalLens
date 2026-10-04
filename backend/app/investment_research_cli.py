@@ -8,6 +8,8 @@ from .investment_research import (coverage_audit, repair_plan, execution_cost_ca
 from .investment_evidence import (plan_materialization, materialize_stored,
     status as materialization_status, enrichment_plan, enrich_from_sec,
     plan_canonical_unit_repair, apply_canonical_unit_repair, canonical_unit_repair_status)
+from .liquidity_evidence import (evidence_discovery as liquidity_evidence_discovery,
+    contract_assessment as liquidity_contract_assessment, company_preview as liquidity_company_preview)
 from .financial_strength import (
     evidence_audit as financial_strength_evidence_audit,
     contract_assessment as financial_strength_contract_assessment,
@@ -31,14 +33,17 @@ COMMANDS={"investment-grade-coverage-audit":coverage_audit,
           "track-b-panel-feasibility":track_b_panel_feasibility,
           "financial-strength-evidence-audit":financial_strength_evidence_audit,
           "financial-strength-contract-assessment":financial_strength_contract_assessment,
-          "financial-strength-company-preview":financial_strength_company_preview}
+          "financial-strength-company-preview":financial_strength_company_preview,
+          "liquidity-evidence-discovery":liquidity_evidence_discovery,
+          "liquidity-contract-assessment":liquidity_contract_assessment,
+          "liquidity-company-preview":liquidity_company_preview}
 def parser():
     root=argparse.ArgumentParser(description="Read-only investment research foundation")
     subs=root.add_subparsers(dest="command",required=True)
     for name in COMMANDS:
         p=subs.add_parser(name); p.add_argument("--research-db",required=True,type=Path)
         p.add_argument("--production-db",required=True,type=Path); p.add_argument("--decision-at",required=True,type=datetime.fromisoformat)
-        if name in {"company-investment-factor-preview","financial-strength-company-preview"}: p.add_argument("--qualified-symbol",required=True)
+        if name in {"company-investment-factor-preview","financial-strength-company-preview","liquidity-company-preview"}: p.add_argument("--qualified-symbol",required=True)
         if name in {"materialize-stored-investment-evidence","apply-canonical-unit-repair"}: p.add_argument("--authorization",required=True)
         if name == "enrich-investment-evidence-from-sec":
             p.add_argument("--authorization",required=True); p.add_argument("--user-agent",required=True)
