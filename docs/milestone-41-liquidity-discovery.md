@@ -138,3 +138,91 @@ Track A remains `prospective-us-dilution-1.0.0`, configuration hash
 `2026-10-01T00:00:00Z`, with its 90% price / 10% dilution percentiles, maximum
 three selections, exact 126/252-session outcomes, comparators, and tie-breaking
 unchanged.
+
+## Post-Milestone-41 raw-versus-canonical reconciliation
+
+The operator run at `2026-10-02T18:15:00+00:00` found 71 comparable companies,
+0/71 ready for each required field, 71/71 `only_broader_aggregate_exists` for
+current assets (the stored concept was `Assets`), and 71/71
+`no_relevant_fact_stored` for current liabilities and unrestricted cash. All
+direct and constructed metrics were consequently 0/71. Proposals remained
+unapproved and both fingerprints were unchanged.
+
+Code review established that Milestone 41 did read `sec_facts` from **both** the
+research and production databases, then supplemented those raw observations with
+canonical rows only when their stable observation identity was not already in
+the raw set. It therefore did not query canonical materialization alone. Its
+diagnosis, however, merged raw and canonical evidence and could not prove which
+layer caused an absence. The two new commands preserve the point-in-time reader
+boundary while reporting that distinction explicitly.
+
+### Persisted SEC/XBRL evidence path
+
+| Database/table | Layer | Identity and join | Concepts | Measurement/period | Availability |
+|---|---|---|---|---|---|
+| research and production `sec_facts` | raw SEC companyfacts observation | `security_id`, `qualified_symbol`, `cik`, `fact_key`; exact `security_id` joins the comparable classification, with CIK checked through `sec_issuers` | `taxonomy`, `concept` | `value`, `unit`, `currency`, `period_start`, `period_end`, fiscal period/frame; source does not retain an explicit scale | `filed_date`, `public_at`, `retrieved_at` |
+| research `canonical_factor_evidence` | canonical/materialized | `security_id`, `qualified_symbol`, `evidence_key`, `source_fact_key`; exact `security_id` join | `canonical_field`, `original_concept_or_field`, alias contract | `value`, `unit`, `currency`, start/end/instant and fiscal period; source scale may be in provenance | public, retrieved, canonical available, and materialized timestamps |
+| research and production `sec_issuers` | normalized identity bridge | `security_id` and SEC `cik`; no ticker or name inference is permitted | not applicable | not applicable | `mapped_at` |
+| research and production `sec_filings` | normalized filing metadata | `cik` and `accession_number`, joined through the issuer bridge | not applicable | form and filed date | `public_at`, `retrieved_at` |
+
+The commands also emit this catalog from the actual schemas, omitting tables
+that do not exist. `security_classification_evidence` defines the comparable
+universe; it is classification evidence rather than an SEC fact source. No row
+is associated by ticker or company name.
+
+### Interpretation of the reconciliation
+
+The inventory assigns exactly one state to every company/required-field pair.
+Canonical compatible evidence wins. Compatible raw evidence can establish
+feasibility but is reported as `compatible_raw_fact_not_materialized`, never
+promoted. Post-decision, stale, duration, and incompatible-unit facts remain
+withheld. Extensions are separately inventoried as review-required and never
+activated. `Assets` is only a broader aggregate, and combined cash is not
+unrestricted cash. Same-period conflicts fail closed.
+
+The operator databases, rather than this repository, contain the final exact
+counts. In the reported 0/71 run, Milestone 41's raw concept discovery showing
+only `Assets`, `NetCashProvidedByUsedInOperatingActivities`, and
+`free_cash_flow` is evidence that its raw reader ran; the new inventory is the
+required definitive check for research/production copies, identity conflicts,
+post-decision observations, and canonical omissions. Interpret outcomes as:
+
+| Inventory outcome | Exact remaining gap |
+|---|---|
+| compatible raw, no canonical row | materialization gap: the exact standard raw fact was not represented by usable canonical evidence |
+| no relevant raw or canonical fact | ingestion gap: the exact required standard concept is absent from stored SEC facts at the boundary |
+| extension or conflicting visible facts | accounting review; do not activate an alias |
+| unresolved issuer identity | identity repair using durable `security_id`/CIK evidence, never ticker/name inference |
+
+### Safe post-merge PowerShell verification
+
+```powershell
+git switch main
+git pull --ff-only
+$Decision = "2026-10-02T18:15:00+00:00"
+$Research = "C:\SignalLens Data\research.duckdb"
+$Production = "C:\SignalLens Data\production.duckdb"
+$BeforeResearch = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$BeforeProduction = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+
+Push-Location backend
+python -m app.investment_research_cli liquidity-raw-canonical-inventory `
+  --research-db $Research --production-db $Production --decision-at $Decision |
+  Set-Content -Encoding utf8 "..\liquidity-raw-canonical-inventory.json"
+python -m app.investment_research_cli liquidity-evidence-gap-assessment `
+  --research-db $Research --production-db $Production --decision-at $Decision |
+  Set-Content -Encoding utf8 "..\liquidity-evidence-gap-assessment.json"
+Pop-Location
+
+$AfterResearch = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$AfterProduction = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+if ($BeforeResearch -ne $AfterResearch -or $BeforeProduction -ne $AfterProduction) {
+  throw "Read-only invariant failed"
+}
+```
+
+Verify all 213 company/field classifications sum exactly, inspect the bounded
+samples and before/after fingerprints, and confirm every ranking, candidate,
+recommendation, selection, vintage, and validation collection is empty with
+zero validation credit. These commands make no network request, perform no
+ingestion or materialization, activate no alias, and write no database.
