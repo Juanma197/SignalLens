@@ -813,3 +813,111 @@ if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash -ne $Producti
 These commands must be run only after merging this repair. They access the two
 explicit local database paths read-only, make no network request, and do not contact
 Railway or any provider.
+
+## Milestone 44 operator failure and legacy-schema repair
+
+The first controlled operator apply failed with exit code 1 and the deliberately
+redacted `LIQUIDITY_MATERIALIZATION_INTERNAL_ERROR`. Its preceding plan and
+validation were valid: 187 observations for 69 companies (61 current assets, 61
+current liabilities, and 65 unrestricted cash), sufficient capacity, and exact
+authorization. Transaction rollback worked: research and production remained
+byte-for-byte unchanged, status remained `never-run`, `latest_run` remained null,
+no lock remained, and no materialization table survived.
+
+Read-only diagnosis found 52,320 rows in the existing
+`canonical_factor_evidence` table. Its exact contract is:
+
+```text
+evidence_key VARCHAR NOT NULL PRIMARY KEY
+security_id VARCHAR NOT NULL
+qualified_symbol VARCHAR NULL
+canonical_field VARCHAR NOT NULL
+value DOUBLE NULL; unit VARCHAR NULL; currency VARCHAR NULL
+period_start DATE NULL; period_end DATE NULL; instant_date DATE NULL
+fiscal_period VARCHAR NULL; form VARCHAR NULL
+accession_or_source_identifier VARCHAR NOT NULL
+public_at TIMESTAMPTZ NOT NULL; retrieved_at TIMESTAMPTZ NOT NULL
+available_at TIMESTAMPTZ NOT NULL; materialized_at TIMESTAMPTZ NOT NULL
+original_concept_or_field VARCHAR NOT NULL
+alias_contract_version VARCHAR NOT NULL; sign_convention VARCHAR NOT NULL
+reliability_state VARCHAR NOT NULL; withholding_reason VARCHAR NULL
+provenance JSON NOT NULL; source_fact_key VARCHAR NULL; lineage JSON NOT NULL
+```
+
+The exact defect was the assumption that `CREATE TABLE IF NOT EXISTS` would make
+an existing table match a new shape. `_ensure_canonical` then added operation
+columns, and the canonical `INSERT` supplied those new names but omitted required
+legacy columns. The first row therefore reached an equivalent explicit insert of
+`evidence_key, source_evidence_key, security_id, ... provenance,
+validator_version, operation_type, operation_contract_version,
+operation_contract_hash, materialization_run_id, materialized_at` and failed the
+legacy NOT NULL contract, first at `alias_contract_version` (with
+`sign_convention` and `lineage` also absent). This was an insert-contract error,
+not a validator, authorization, capacity, or evidence-population error.
+
+The repair never evolves or rewrites that table. A shared read-only preflight
+checks all 25 names, types, nullability, and the primary key; unsupported required
+extra columns fail closed with
+`LIQUIDITY_MATERIALIZATION_SCHEMA_INCOMPATIBLE`. Apply uses an explicit legacy
+column list. Run, plan, revision, validator, normalization, and source identity
+live in append-only operation tables and in the existing `provenance`/`lineage`
+JSON. Canonical `available_at` is no earlier than materialization time, while the
+original timestamps remain in provenance, so an earlier decision boundary cannot
+observe a later materialization. No migration is necessary.
+
+### Safe post-merge PowerShell sequence
+
+```powershell
+git switch main
+git pull --ff-only
+$Decision = "2026-10-04T21:30:00+00:00"
+$Research = "C:\SignalLens Data\research.duckdb"
+$Production = "C:\SignalLens Data\production.duckdb"
+$Backup = "C:\SignalLens Backups\research-before-liquidity.duckdb"
+$Authorization = "I AUTHORIZE RESEARCH-ONLY CANONICAL LIQUIDITY MATERIALIZATION"
+
+$ResearchBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$ProductionBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+Copy-Item -LiteralPath $Research -Destination $Backup
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Backup).Hash -ne $ResearchBefore) {
+  throw "Research backup verification failed"
+}
+
+Push-Location backend
+python -m app.investment_research_cli liquidity-canonical-materialization-status `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision"
+$Plan = python -m app.investment_research_cli plan-liquidity-canonical-materialization `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" | ConvertFrom-Json
+$Validation = python -m app.investment_research_cli validate-liquidity-canonical-materialization-plan `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" `
+  --plan-identifier $Plan.plan_identifier | ConvertFrom-Json
+if (-not $Validation.valid) { throw "Plan validation failed: $($Validation.reason_code)" }
+python -m app.investment_research_cli apply-liquidity-canonical-materialization `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" `
+  --plan-identifier $Plan.plan_identifier --authorization $Authorization
+python -m app.investment_research_cli liquidity-canonical-materialization-status `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision"
+Pop-Location
+
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash -ne $ProductionBefore) {
+  throw "Production immutability failed"
+}
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Backup).Hash -ne $ResearchBefore) {
+  throw "Backup changed"
+}
+```
+
+The first apply is expected to report 187 inserted and zero unchanged; status must
+show its completed run and no lock. An identical authorized retry of the same plan
+is byte-for-byte mutation-free and reports zero inserted and 187
+unchanged. Do not run the retry as part of the one-apply production sequence.
+
+On any failure, first run status read-only and compare both database hashes. An
+ordinary transactional failure needs no cleanup: verify no lock or running
+manifest survived, retain the failed output, and create a fresh plan after the
+cause is corrected. Never delete tables or rows manually. If byte verification
+unexpectedly fails, stop all writers, preserve the suspect file for diagnosis,
+verify the offline backup hash again, and only then restore it with an
+operator-controlled atomic replacement. Stale-lock recovery is allowed only for
+the exact run ID reported by status, after the documented 30-minute threshold;
+then discard the old token and plan again.
