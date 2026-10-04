@@ -8,6 +8,39 @@ credit. It does not change Track B weights. Both databases are opened read-only,
 fingerprinted before and after, and all evidence must be visible at the supplied
 timezone-aware decision boundary. No provider is contacted.
 
+## Milestone 40 bounded-output repair
+
+Operator verification exposed a 57,649,994-byte aggregate audit (about
+27,141,869 JSON characters in `companies`) and a 1,285,378-byte NEU preview
+(about 604,628 characters in `company`). The root cause was that the data layer
+attached every company's complete observation history to the aggregate report;
+the API removed `companies` only after constructing that payload, while the CLI
+returned it unchanged. The preview likewise returned the complete history. The
+old `bounds` object described limits but did not apply them to these collections.
+
+The repaired data-producing functions enforce compact UTF-8 JSON limits before
+returning: 512 KiB (524,288 bytes) for aggregate audit and authenticated aggregate
+API output, 256 KiB (262,144 bytes) for contract assessment, and 256 KiB for one
+company preview. An over-limit result fails closed through the stable redacted
+public error contract. The byte check is performed on Python's compact UTF-8 JSON,
+not on terminal output.
+
+Aggregate counts remain exact over the complete comparable population. Aggregate
+output has no `companies` array or observation history; it has at most 10 company
+summaries ordered by qualified symbol. Symbol and concept diagnostic samples are
+limited to 10. A preview returns the selected latest visible usable observation
+per canonical field, at most three deterministic alternatives per field, and at
+most 10 citations. Every bounded collection includes `total_count`,
+`returned_count`, `sample_limit`, and `truncated`; `bounds` publishes every cap.
+Future evidence is excluded from preview detail. Raw provider responses and filing
+bodies are never returned.
+
+Windows PowerShell redirection, especially Windows PowerShell 5.1, may write text
+using a wider encoding such as UTF-16LE, so the on-disk redirected file can be
+larger than the internal UTF-8 contract. Use the Python compact reserialization
+below when checking the response contract; the file length remains useful for
+diagnosing the shell encoding actually used.
+
 The observed operator snapshot at `2026-10-02T18:15:00+00:00` had 71 comparable
 US operating companies, 71 with any input, 69 minimum-calculable, and zero fully
 ready. This follows mechanically from the old all-required definition: all 71
@@ -94,6 +127,10 @@ git pull --ff-only
 $Decision = "2026-10-02T18:15:00+00:00"
 $Research = "C:\SignalLens Data\research.duckdb"
 $Production = "C:\SignalLens Data\production.duckdb"
+$Before = @{
+  research = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+  production = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+}
 
 Push-Location backend
 python -m app.investment_research_cli financial-strength-evidence-audit `
@@ -107,6 +144,17 @@ python -m app.investment_research_cli financial-strength-company-preview `
   --qualified-symbol "EXAMPLE.US" |
   Tee-Object -FilePath "..\financial-strength-company-preview.json"
 Pop-Location
+
+$After = @{
+  research = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+  production = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+}
+[pscustomobject]@{ BeforeResearch=$Before.research; AfterResearch=$After.research;
+  BeforeProduction=$Before.production; AfterProduction=$After.production }
+Get-Item .\financial-strength-evidence-audit.json,
+  .\financial-strength-contract-assessment.json,
+  .\financial-strength-company-preview.json | Select-Object Name,Length
+python -c "import json,pathlib; files=['financial-strength-evidence-audit.json','financial-strength-contract-assessment.json','financial-strength-company-preview.json']; [(lambda p: print(p, len(json.dumps(json.loads(pathlib.Path(p).read_text()),sort_keys=True,separators=(',',':')).encode('utf-8'))))(p) for p in files]"
 ```
 
 Verify both JSON reports say `read_only: true`, both fingerprint checks say

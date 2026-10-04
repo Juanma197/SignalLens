@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 from pathlib import Path
 import subprocess
@@ -8,7 +8,8 @@ import duckdb
 import pytest
 
 from app.financial_strength import (ALIAS_CONTRACT_VERSION, FINANCIAL_FIELD_ALIASES,
-    construct_debt, contract_assessment, evidence_audit, company_preview)
+    AGGREGATE_MAXIMUM_BYTES, CONTRACT_MAXIMUM_BYTES, PREVIEW_MAXIMUM_BYTES,
+    compact_utf8_size, construct_debt, contract_assessment, evidence_audit, company_preview)
 from app.model_readiness import fingerprint
 
 DECISION=datetime(2026,10,2,18,15,tzinfo=timezone.utc)
@@ -63,7 +64,6 @@ def test_read_only_point_in_time_audit_and_company_semantics(tmp_path):
     research,production=fixture(tmp_path); before=(research.read_bytes(),production.read_bytes())
     audit=evidence_audit(research_db=research,production_db=production,decision_at=DECISION)
     preview=company_preview(research_db=research,production_db=production,decision_at=DECISION,qualified_symbol="ONE.US")
-    assert audit["companies"][0]==preview["company"]
     company=preview["company"]
     assert company["debt_state"]=="debt_free_explicit"
     assert company["denominator_warnings"]==["negative_equity"]
@@ -71,6 +71,9 @@ def test_read_only_point_in_time_audit_and_company_semantics(tmp_path):
     assert sum(audit["interest_gap_diagnosis"].values())==1
     assert company["components"]["coverage"]=="unavailable"  # explicit zero interest is not a valid divisor
     assert company["score_contribution"] is None and company["recommendation"] is None
+    assert "companies" not in audit and "observations" not in company
+    assert audit["company_samples"]["items"][0]["qualified_symbol"]=="ONE.US"
+    assert company["selected_evidence"]["assets"]["value"]==100
     assert (research.read_bytes(),production.read_bytes())==before
     for key in ("rankings","candidates","recommendations","selections","vintages","validation_observations"):
         assert audit[key]==[]
@@ -81,9 +84,9 @@ def test_post_decision_unit_currency_duration_and_missing_are_withheld(tmp_path)
         future=datetime(2026,10,3,tzinfo=timezone.utc)
         db.execute("INSERT INTO canonical_factor_evidence VALUES ('one','ONE.US','interest_expense',4,'shares','EUR',NULL,DATE '2026-09-30',DATE '2026-09-30','future',?,?,?,?, 'usable',NULL,'{}')",
           [future,future,future,"InterestExpense"])
-    audit=evidence_audit(research_db=research,production_db=production,decision_at=DECISION)
-    row=[x for x in audit["companies"][0]["observations"] if x["source_filing"]=="future"][0]
-    assert not row["usable"] and row["withholding_reason"]=="post_decision_evidence"
+    preview=company_preview(research_db=research,production_db=production,decision_at=DECISION,qualified_symbol="ONE.US")
+    visible=json.dumps(preview,sort_keys=True)
+    assert "future" not in visible
     with pytest.raises(Exception): evidence_audit(research_db=research,production_db=production,decision_at=datetime(2026,1,1))
 
 def test_contracts_are_counterfactual_not_model_selection(tmp_path):
@@ -101,3 +104,41 @@ def test_cli_errors_are_bounded_stable_and_redacted(tmp_path):
     assert result.returncode==1
     assert json.loads(result.stderr)=={"error":{"code":"INVESTMENT_RESEARCH_NOT_READY","message":"investment research request failed; details redacted"},"status":"failed"}
     assert str(research) not in result.stderr
+
+def test_stress_payloads_are_bounded_exact_and_deterministic(tmp_path):
+    research,production=fixture(tmp_path)
+    stamp=datetime(2026,9,1,tzinfo=timezone.utc)
+    with duckdb.connect(str(research)) as db:
+        # Reverse insertion order proves that output sampling is based on the
+        # qualified symbol, not physical database order.
+        for number in reversed(range(25)):
+            symbol=f"S{number:03}.US"; sid=f"s{number:03}"
+            db.execute("INSERT INTO security_classification_evidence VALUES (?,?, 'us_operating_company',?,?,?)",
+                       [sid,symbol,stamp,stamp,stamp])
+        rows=[]
+        for number in reversed(range(4000)):
+            rows.append(("one","ONE.US","assets",float(number+101),"USD","USD",None,
+              date(2024,1,1)+timedelta(days=number%700),date(2024,1,1)+timedelta(days=number%700),
+              f"history-{number:04}",stamp,stamp,stamp,"Assets","usable",None,"{}"))
+        db.executemany("INSERT INTO canonical_factor_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",rows)
+    before=(research.read_bytes(),production.read_bytes())
+    audit=evidence_audit(research_db=research,production_db=production,decision_at=DECISION)
+    contract=contract_assessment(research_db=research,production_db=production,decision_at=DECISION)
+    preview=company_preview(research_db=research,production_db=production,decision_at=DECISION,qualified_symbol="ONE.US")
+    assert audit["comparable_company_count"]==26
+    assert audit["concept_counts"]["Assets"]==4001
+    sample=audit["company_samples"]
+    assert [x["qualified_symbol"] for x in sample["items"]]==["ONE.US",*[f"S{x:03}.US" for x in range(9)]]
+    assert sample=={**sample,"total_count":26,"returned_count":10,"sample_limit":10,"truncated":True}
+    alternatives=preview["company"]["alternative_observations"]["assets"]
+    assert alternatives["returned_count"]==3 and alternatives["total_count"]==4000 and alternatives["truncated"]
+    assert preview["company"]["selected_evidence"]["assets"]["value"]==100
+    assert preview["company"]["observation_population"]["truncated"]
+    assert compact_utf8_size(audit)<=AGGREGATE_MAXIMUM_BYTES
+    assert compact_utf8_size(contract)<=CONTRACT_MAXIMUM_BYTES
+    assert compact_utf8_size(preview)<=PREVIEW_MAXIMUM_BYTES
+    assert (research.read_bytes(),production.read_bytes())==before
+    for report in (audit,contract,preview):
+        for key in ("rankings","candidates","recommendations","selections","vintages","validation_observations"):
+            assert report[key]==[]
+        assert report["validation_credit"]==0
