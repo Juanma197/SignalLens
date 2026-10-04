@@ -12,6 +12,7 @@ import duckdb
 from .financial_strength import AGGREGATE_MAXIMUM_BYTES, ZERO_OUTPUTS, compact_utf8_size
 from .liquidity_inventory import FIELDS, STANDARD_CONCEPTS, _classify, _decision, _load
 from .model_readiness import fingerprint
+from .sec_liquidity_contract import operation_identity
 
 CONCEPTS = tuple(STANDARD_CONCEPTS)
 DEFAULT_REQUEST_BUDGET = 205
@@ -89,6 +90,7 @@ def plan_sec_liquidity_evidence_ingestion(*, research_db: Path, production_db: P
     digest=hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
     plan_id=f"{int(generated.timestamp())}:{digest}"
     report={"command":"plan-sec-liquidity-evidence-ingestion","read_only":True,
+      **operation_identity(),
       "decision_at":decision.isoformat(),"plan_identifier":plan_id,"plan_generated_at":generated.isoformat(),"plan_expires_at":expires.isoformat(),
       "status":"blocked" if blockers else "ready","blocker_codes":blockers,
       "comparable_company_count":len(population),"mapped_cik_count":len(mapped),
@@ -101,7 +103,7 @@ def plan_sec_liquidity_evidence_ingestion(*, research_db: Path, production_db: P
         "estimated_request_count":estimate,"estimate_formula":"2 x live companies (submissions + Company Facts)"},
       "request_budget_ceiling":max_request_budget,
       "checkpoint_strategy":"durable per-security_id/CIK state after each issuer; retry only incomplete issuers",
-      "expected_destination_tables":["sec_issuers","sec_filings","sec_facts","sec_ingestion_runs","sec_checkpoints","sec_failures","sec_raw_response_provenance"],
+      "expected_destination_tables":["sec_issuers","sec_filings","sec_facts","sec_liquidity_runs","sec_liquidity_checkpoints","sec_liquidity_failures","sec_liquidity_raw_provenance"],
       "anticipated_canonical_materialization":"separate post-ingestion, point-in-time raw-versus-canonical reconciliation; no automatic alias or extension authorization",
       "database_fingerprints":immutability,"provider_requests":0,"database_writes":0,
       "apply_contract":{"implemented":True,"authorization_phrase":"I AUTHORIZE RESEARCH-ONLY SEC LIQUIDITY EVIDENCE INGESTION",

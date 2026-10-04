@@ -417,3 +417,108 @@ Track A remains `prospective-us-dilution-1.0.0` with configuration hash
 This work changes no Track A configuration, activates no alias, loosens no
 accounting validation, and creates no Track B score, Top 3, ranking, candidate,
 recommendation, selection, vintage, or validation credit.
+
+## Milestones 41–43 controlled-ingestion isolation repair
+
+### Operator observation and root cause
+
+The pre-apply status returned 89 completed issuers, 11 permanent failures and 193
+requests from a completed run whose plan identifier was null. No controlled liquidity
+apply had run. Those values came from the older 100-security general SEC workflow.
+The first controlled implementation reused and queried the general
+`sec_ingestion_runs`, `sec_checkpoints`, and `sec_failures` tables without an
+operation/contract predicate. It could therefore fail open by skipping issuers and
+charging an unrelated request history to the controlled operation.
+
+The repair uses immutable identity on every controlled run, checkpoint, failure,
+lock, retained response and fact/filing association:
+
+- `operation_type = sec_liquidity_evidence_ingestion`
+- `operation_contract_version = 1.0.0`
+- `concept_contract_hash` is the SHA-256 of the sorted exact concept list, endpoint
+  classes, parser version, and validation rules.
+
+Every controlled read requires all three exact values. Run/checkpoint resume also
+requires the decision-boundary lineage, security ID, CIK, successful transaction,
+matching run and plan lineage, and two validated retained endpoint payloads. A null
+or conflicting identity or plan never qualifies. Diagnostics are bounded and must
+not expose contact details.
+
+### Legacy rows, migration, retries, and locks
+
+Legacy rows are preserved exactly and are never relabelled. The controlled operation
+uses operation-specific run, checkpoint, failure, and provenance tables. Schema
+initialization is transactional and repeatable. Status opens both databases read-only
+and performs no migration; against a pre-migration database it reports `never_run`
+(or `planned` when a decision boundary permits cohort calculation), zero activity,
+and no adopted legacy failures.
+
+The request ceiling is **per apply attempt**. A fresh, unexpired plan may resume a
+compatible partial lineage and skip only fully validated controlled checkpoints; it
+does not inherit the prior attempt's consumed request count. Status reports the
+latest attempt's count and remaining attempt budget.
+
+A controlled liquidity lock is recognized only with the exact identity. An
+unidentified, general-SEC, or other writer lock is reported separately and blocks an
+unsafe apply, but controlled stale-lock recovery can delete only an exact-identity
+liquidity lock selected by run ID. It never deletes another operation's lock.
+
+Production fingerprints are recorded before and after each controlled attempt.
+`unchanged` is only boolean when both values exist; no run is `not_applicable`, and
+an incomplete attempt without an after value is `unavailable`. Null fingerprints
+are never presented as evidence of change.
+
+### SEC User-Agent requirement
+
+Before transport construction, network access, schema initialization, or lock
+creation, live apply requires `SIGNALLENS_SEC_USER_AGENT` to contain a descriptive
+identity and plausible monitored email address. Blank values, the repository
+placeholder, `YOUR_REAL_EMAIL_ADDRESS`, `example.com`, and placeholder text are
+rejected with the stable redacted code `SEC_USER_AGENT_INVALID_REDACTED`. Status and
+failure output never include the address.
+
+### Corrected never-run status (abridged)
+
+```json
+{
+  "state": "planned",
+  "latest_run": null,
+  "completed_issuer_count": 0,
+  "failed_issuer_count": 0,
+  "remaining_issuer_count": 71,
+  "actual_provider_request_count": 0,
+  "raw_payload_provenance_count": 0,
+  "checkpoint_states": {},
+  "operation_lock": {"state": "none"},
+  "production_unchanged_evidence": {
+    "state": "not_applicable", "unchanged": null, "changed": null
+  },
+  "post_ingestion_reconciliation_ready": false
+}
+```
+
+### Exact post-merge preflight
+
+Discard **all plan identifiers printed before this repair was merged**. From the
+repository root, run the following without invoking apply:
+
+```powershell
+$decisionAt = "<THE_APPROVED_DECISION_AT>"
+$researchDb = "<RESEARCH_DATABASE_PATH>"
+$productionDb = "<PRODUCTION_DATABASE_PATH>"
+
+python -m app.sec_ingestion_cli sec-liquidity-evidence-ingestion-status `
+  --research-db "$researchDb" --production-db "$productionDb" `
+  --decision-at "$decisionAt"
+
+python -m app.sec_ingestion_cli plan-sec-liquidity-evidence-ingestion `
+  --research-db "$researchDb" --production-db "$productionDb" `
+  --decision-at "$decisionAt" --max-request-budget 205
+```
+
+Proceed no further unless status shows no liquidity run and
+`operation_lock.state = none`, while any `other_writer_lock` is also `none`. Only
+then set a non-placeholder `SIGNALLENS_SEC_USER_AGENT` and generate a **fresh
+15-minute plan** immediately before the separately authorized apply. Re-run status
+and retain its output. This verification procedure does not authorize or execute
+apply.
