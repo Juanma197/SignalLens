@@ -45,6 +45,7 @@ ERRORS = {
  "conflict":"LIQUIDITY_MATERIALIZATION_CONFLICT",
  "capacity":"LIQUIDITY_MATERIALIZATION_CAPACITY_INSUFFICIENT",
  "locked":"LIQUIDITY_MATERIALIZATION_LOCKED",
+ "schema":"LIQUIDITY_MATERIALIZATION_SCHEMA_INCOMPATIBLE",
  "internal":"LIQUIDITY_MATERIALIZATION_INTERNAL_ERROR",
 }
 
@@ -136,6 +137,7 @@ def _proposal(research_db: Path, production_db: Path, decision_at: Any):
 
 def plan(*,research_db,production_db,decision_at,now: datetime|None=None):
     research_db=Path(research_db); production_db=Path(production_db); validate_paths(research_db,production_db)
+    schema=schema_compatibility(research_db)
     decision,rows,reconciliation,immutability=_proposal(research_db,production_db,decision_at)
     issued=_utc(now).replace(microsecond=0); expires=issued+PLAN_LIFETIME
     counts=dict(sorted(Counter(x["canonical_field"] for x in rows).items()))
@@ -145,16 +147,19 @@ def plan(*,research_db,production_db,decision_at,now: datetime|None=None):
       "counts_by_canonical_field":counts,"proposed_company_count":len({x["security_id"] for x in rows}),
       "proposed_observation_count":len(rows),"zero_blocker_reconciliation":all(x["reconciled"] for x in reconciliation.values())}
     token=_token(identity); blockers=[] if identity["zero_blocker_reconciliation"] else [ERRORS["reconciliation"]]
+    if not schema["compatible"]: blockers.append(ERRORS["schema"])
     return {"command":"plan-liquidity-canonical-materialization","read_only":True,"status":"ready" if not blockers else "blocked",
       "plan_identifier":token,"plan_identity_sha256":hashlib.sha256(token.encode()).hexdigest(),**identity,"blockers":blockers,
       "deterministic_evidence_keys":identity["evidence_keys"],
-      "reconciliation":reconciliation,"capacity":_capacity(research_db),"provider_request_count":0,"database_write_count":0,
+      "reconciliation":reconciliation,"schema_compatibility":schema,"capacity":_capacity(research_db),"provider_request_count":0,"database_write_count":0,
       "aliases_automatically_activated":0,**ZERO_OUTPUTS}
 
 
 def validate_plan(*,research_db,production_db,decision_at,plan_identifier,now: datetime|None=None):
     checked=_utc(now); base={"command":"validate-liquidity-canonical-materialization-plan","read_only":True,
       "valid":False,"reason_code":None,"checked_at":checked.isoformat(),"provider_request_count":0,"database_write_count":0,**ZERO_OUTPUTS}
+    schema=schema_compatibility(Path(research_db))
+    if not schema["compatible"]: return {**base,"reason_code":ERRORS["schema"],"schema_compatibility":schema}
     try: bound=_decode(plan_identifier)
     except LiquidityMaterializationError as exc: return {**base,"reason_code":exc.code}
     try: issued=datetime.fromisoformat(bound["issued_at"]); expires=datetime.fromisoformat(bound["expires_at"])
@@ -198,18 +203,45 @@ CREATE TABLE IF NOT EXISTS liquidity_canonical_materialization_failures(failure_
 CREATE TABLE IF NOT EXISTS liquidity_canonical_materialization_revisions(evidence_key VARCHAR PRIMARY KEY, source_evidence_key VARCHAR NOT NULL, security_id VARCHAR NOT NULL, qualified_symbol VARCHAR NOT NULL, canonical_field VARCHAR NOT NULL, normalized_value DOUBLE NOT NULL, canonical_unit VARCHAR NOT NULL, canonical_currency VARCHAR NOT NULL, applied_scale_factor DOUBLE NOT NULL, measurement_nature VARCHAR NOT NULL, period_end DATE, instant_date DATE, fiscal_year INTEGER, fiscal_period VARCHAR, accession VARCHAR, taxonomy VARCHAR NOT NULL, original_concept VARCHAR NOT NULL, original_value DOUBLE NOT NULL, original_unit VARCHAR, original_currency VARCHAR, original_scale DOUBLE, filed_at VARCHAR, public_at TIMESTAMPTZ NOT NULL, retrieved_at TIMESTAMPTZ NOT NULL, available_at TIMESTAMPTZ NOT NULL, ingestion_provenance JSON NOT NULL, normalization_rationale JSON NOT NULL, validator_version VARCHAR NOT NULL, operation_type VARCHAR NOT NULL, operation_contract_version VARCHAR NOT NULL, operation_contract_hash VARCHAR NOT NULL, materialization_run_id VARCHAR NOT NULL, materialized_at TIMESTAMPTZ NOT NULL, plan_identity VARCHAR NOT NULL);
 """
 
-CANONICAL_COLUMNS={"evidence_key":"VARCHAR","source_evidence_key":"VARCHAR","security_id":"VARCHAR","qualified_symbol":"VARCHAR",
- "canonical_field":"VARCHAR","value":"DOUBLE","unit":"VARCHAR","currency":"VARCHAR","period_start":"DATE","period_end":"DATE",
- "instant_date":"DATE","accession_or_source_identifier":"VARCHAR","public_at":"TIMESTAMPTZ","retrieved_at":"TIMESTAMPTZ",
- "available_at":"TIMESTAMPTZ","original_concept_or_field":"VARCHAR","reliability_state":"VARCHAR","withholding_reason":"VARCHAR",
- "provenance":"JSON","validator_version":"VARCHAR","operation_type":"VARCHAR","operation_contract_version":"VARCHAR",
- "operation_contract_hash":"VARCHAR","materialization_run_id":"VARCHAR","materialized_at":"TIMESTAMPTZ"}
+CANONICAL_COLUMNS={
+ "evidence_key":("VARCHAR",True,True),"security_id":("VARCHAR",True,False),"qualified_symbol":("VARCHAR",False,False),
+ "canonical_field":("VARCHAR",True,False),"value":("DOUBLE",False,False),"unit":("VARCHAR",False,False),
+ "currency":("VARCHAR",False,False),"period_start":("DATE",False,False),"period_end":("DATE",False,False),
+ "instant_date":("DATE",False,False),"fiscal_period":("VARCHAR",False,False),"form":("VARCHAR",False,False),
+ "accession_or_source_identifier":("VARCHAR",True,False),"public_at":("TIMESTAMP WITH TIME ZONE",True,False),
+ "retrieved_at":("TIMESTAMP WITH TIME ZONE",True,False),"available_at":("TIMESTAMP WITH TIME ZONE",True,False),
+ "materialized_at":("TIMESTAMP WITH TIME ZONE",True,False),"original_concept_or_field":("VARCHAR",True,False),
+ "alias_contract_version":("VARCHAR",True,False),"sign_convention":("VARCHAR",True,False),
+ "reliability_state":("VARCHAR",True,False),"withholding_reason":("VARCHAR",False,False),
+ "provenance":("JSON",True,False),"source_fact_key":("VARCHAR",False,False),"lineage":("JSON",True,False)}
+
+def schema_compatibility(path: Path) -> dict[str,Any]:
+    """Read-only, bounded validation of the legacy canonical write contract."""
+    issues=[]
+    try:
+      with duckdb.connect(str(path),read_only=True) as db:
+        if "canonical_factor_evidence" not in _tables(db):
+          return {"compatible":True,"table_state":"absent_will_create","issue_count":0,"issues":[]}
+        info=db.execute("PRAGMA table_info('canonical_factor_evidence')").fetchall()
+        actual={r[1]:(str(r[2]).upper(),bool(r[3]),bool(r[5]),r[4]) for r in info}
+        for name,(kind,required,pk) in CANONICAL_COLUMNS.items():
+          got=actual.get(name)
+          if not got: issues.append({"column":name,"reason":"missing"}); continue
+          if got[0]!=kind: issues.append({"column":name,"reason":"type_mismatch","expected":kind,"actual":got[0]})
+          if got[1]!=required: issues.append({"column":name,"reason":"nullability_mismatch"})
+          if got[2]!=pk: issues.append({"column":name,"reason":"primary_key_mismatch"})
+        for name,(kind,notnull,_pk,default) in actual.items():
+          if name not in CANONICAL_COLUMNS and notnull and default is None:
+            issues.append({"column":name,"reason":"unsupported_required_column"})
+    except duckdb.Error:
+      issues=[{"reason":"schema_inspection_failed"}]
+    return {"compatible":not issues,"table_state":"existing","issue_count":len(issues),"issues":issues[:10],"issues_truncated":len(issues)>10}
 
 def _ensure_canonical(db):
-    db.execute("CREATE TABLE IF NOT EXISTS canonical_factor_evidence("+",".join(f'\"{k}\" {v}' for k,v in CANONICAL_COLUMNS.items())+")")
-    present={x[1] for x in db.execute("PRAGMA table_info('canonical_factor_evidence')").fetchall()}
-    for name,kind in CANONICAL_COLUMNS.items():
-      if name not in present: db.execute(f'ALTER TABLE canonical_factor_evidence ADD COLUMN "{name}" {kind}')
+    definitions=[]
+    for name,(kind,required,pk) in CANONICAL_COLUMNS.items():
+      definitions.append(f'"{name}" {kind}'+(" PRIMARY KEY" if pk else " NOT NULL" if required else ""))
+    db.execute("CREATE TABLE IF NOT EXISTS canonical_factor_evidence("+",".join(definitions)+")")
 
 
 def _tables(db): return {x[0] for x in db.execute("SHOW TABLES").fetchall()}
@@ -217,7 +249,8 @@ def _row_payload(row): return json.dumps(row,sort_keys=True,default=str,separato
 
 
 def apply(*,research_db,production_db,decision_at,plan_identifier,authorization,now: datetime|None=None,
-          capacity_available_bytes: int|None=None,fail_after_schema: bool=False):
+          capacity_available_bytes: int|None=None,fail_after_schema: bool=False,
+          fail_after_insert_preparation: bool=False):
     if authorization!=AUTHORIZATION_PHRASE: raise LiquidityMaterializationError(ERRORS["authorization"])
     research_db=Path(research_db); production_db=Path(production_db); validate_paths(research_db,production_db)
     timestamp=_utc(now); validation=validate_plan(research_db=research_db,production_db=production_db,
@@ -240,6 +273,19 @@ def apply(*,research_db,production_db,decision_at,plan_identifier,authorization,
           db.execute(SCHEMA)
           _ensure_canonical(db)
           if fail_after_schema: raise RuntimeError("test rollback seam")
+          revision_count=db.execute("SELECT count(*) FROM liquidity_canonical_materialization_revisions WHERE plan_identity=?",[plan_identity]).fetchone()[0]
+          if revision_count==len(rows):
+            canonical_count=db.execute("SELECT count(*) FROM canonical_factor_evidence WHERE evidence_key IN (SELECT evidence_key FROM liquidity_canonical_materialization_revisions WHERE plan_identity=?)",[plan_identity]).fetchone()[0]
+            if canonical_count!=len(rows): raise LiquidityMaterializationError(ERRORS["conflict"])
+            retry_run_id=db.execute("SELECT run_id FROM liquidity_canonical_materialization_runs WHERE plan_identity=? AND status='completed' ORDER BY finished_at DESC LIMIT 1",[plan_identity]).fetchone()[0]
+            unchanged=len(rows); db.rollback()
+            # An identical retry is a genuinely mutation-free observation of the
+            # already committed run, rather than a second manifest write.
+            return {"command":"apply-liquidity-canonical-materialization","status":"completed","run_id":retry_run_id,
+              "plan_identity":plan_identity,"inserted_count":0,"unchanged_count":unchanged,"conflict_count":0,
+              "counts_by_canonical_field":counts_field,"counts_by_company":counts_company,"production_fingerprint_before":prod_before,
+              "production_fingerprint_after":fingerprint(production_db),"provider_request_count":0,**operation_identity(),**ZERO_OUTPUTS}
+          if revision_count: raise LiquidityMaterializationError(ERRORS["conflict"])
           if db.execute("SELECT count(*) FROM liquidity_canonical_materialization_lock").fetchone()[0]: raise LiquidityMaterializationError(ERRORS["locked"])
           db.execute("INSERT INTO liquidity_canonical_materialization_lock VALUES (?,?,?,?,?,?,?,?)",
             [LOCK_NAME,run_id,plan_identity,OPERATION_TYPE,timestamp,timestamp,os.getpid(),socket.gethostname()])
@@ -256,20 +302,34 @@ def apply(*,research_db,production_db,decision_at,plan_identifier,authorization,
               if not compatible: conflicts+=1; raise LiquidityMaterializationError(ERRORS["conflict"])
               unchanged+=1
             else:
-              db.execute("INSERT INTO liquidity_canonical_materialization_revisions VALUES ("+",".join("?" for _ in values)+")",values)
               provenance={"source_evidence_key":row["source_evidence_key"],"taxonomy":row["taxonomy"],"original_value":row["original_value"],
                 "original_unit":row["original_unit"],"original_currency":row["original_currency"],"original_scale":row["original_scale"],
                 "applied_scale_factor":row["applied_scale_factor"],"measurement_nature":row["measurement_nature"],"fiscal_year":row["fiscal_year"],
                 "fiscal_period":row["fiscal_period"],"filed_at":row["filed_at"],"ingestion":row["ingestion_provenance"],
-                "normalization_rationale":row["normalization"],"plan_identity":plan_identity}
-              canonical={"evidence_key":row["evidence_key"],"source_evidence_key":row["source_evidence_key"],"security_id":row["security_id"],
+                "normalization_rationale":row["normalization"],"operation_type":OPERATION_TYPE,
+                "operation_contract_version":OPERATION_CONTRACT_VERSION,"operation_contract_hash":CONTRACT_HASH,
+                "validator_version":VALIDATOR_VERSION,"plan_identity":plan_identity,"materialization_run_id":run_id,
+                "decision_at":str(decision_at),"original_timestamps":{"filed_at":row["filed_at"],"public_at":row["public_at"],
+                "retrieved_at":row["retrieved_at"],"available_at":row["available_at"]}}
+              lineage={"source_evidence_key":row["source_evidence_key"],"source_fact_key":row["source_evidence_key"],
+                "operation_type":OPERATION_TYPE,"operation_contract_hash":CONTRACT_HASH,"validator_version":VALIDATOR_VERSION,
+                "plan_identity":plan_identity,"materialization_run_id":run_id,"decision_at":str(decision_at)}
+              canonical={"evidence_key":row["evidence_key"],"security_id":row["security_id"],
                 "qualified_symbol":row["qualified_symbol"],"canonical_field":row["canonical_field"],"value":row["value"],"unit":"USD","currency":"USD",
-                "period_start":None,"period_end":row["period_end"],"instant_date":row["instant_date"],"accession_or_source_identifier":row["accession"],
-                "public_at":row["public_at"],"retrieved_at":row["retrieved_at"],"available_at":row["available_at"],
-                "original_concept_or_field":row["original_concept"],"reliability_state":"usable","withholding_reason":None,"provenance":json.dumps(provenance),
-                "validator_version":VALIDATOR_VERSION,"operation_type":OPERATION_TYPE,"operation_contract_version":OPERATION_CONTRACT_VERSION,
-                "operation_contract_hash":CONTRACT_HASH,"materialization_run_id":run_id,"materialized_at":timestamp}
+                "period_start":None,"period_end":row["period_end"],"instant_date":row["instant_date"],"fiscal_period":row["fiscal_period"],
+                "form":row["ingestion_provenance"].get("form"),"accession_or_source_identifier":row["accession"],
+                "public_at":row["public_at"],"retrieved_at":row["retrieved_at"],"available_at":max(datetime.fromisoformat(row["available_at"]),timestamp),
+                "materialized_at":timestamp,"original_concept_or_field":row["original_concept"],
+                "alias_contract_version":OPERATION_CONTRACT_VERSION,"sign_convention":"reported_nonnegative",
+                "reliability_state":"usable","withholding_reason":None,"provenance":json.dumps(provenance),
+                "source_fact_key":row["source_evidence_key"],"lineage":json.dumps(lineage)}
+              existing=db.execute("SELECT security_id,canonical_field,value,source_fact_key FROM canonical_factor_evidence WHERE evidence_key=?",
+                [row["evidence_key"]]).fetchone()
+              if existing:
+                conflicts+=1; raise LiquidityMaterializationError(ERRORS["conflict"])
+              db.execute("INSERT INTO liquidity_canonical_materialization_revisions VALUES ("+",".join("?" for _ in values)+")",values)
               names=list(canonical); db.execute("INSERT INTO canonical_factor_evidence ("+",".join(f'\"{x}\"' for x in names)+") VALUES ("+",".join("?" for _ in names)+")",[canonical[x] for x in names]); inserted+=1
+              if fail_after_insert_preparation: raise RuntimeError("test partial insert rollback seam")
           prod_after=fingerprint(production_db)
           if prod_after!=prod_before: raise LiquidityMaterializationError(ERRORS["fingerprint"])
           db.execute("INSERT INTO liquidity_canonical_materialization_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -299,8 +359,10 @@ def status(*,research_db,production_db,decision_at=None):
     after=(fingerprint(research_db),fingerprint(production_db))
     if before!=after: raise LiquidityMaterializationError(ERRORS["internal"])
     state="running" if lock else (latest["status"] if latest else "never-run")
+    schema=schema_compatibility(research_db)
     return {"command":"liquidity-canonical-materialization-status","read_only":True,"state":state,"latest_run":latest,
       "lock":lock or {"state":"unlocked"},"capacity":_capacity(research_db),"production_fingerprint_evidence":before[1],
+      "schema_compatibility":schema,"reason_code":None if schema["compatible"] else ERRORS["schema"],
       "post_materialization_readiness":"run verification reports" if state=="completed" else "not materialized",
       "provider_request_count":0,"database_write_count":0,**operation_identity(),**ZERO_OUTPUTS}
 
