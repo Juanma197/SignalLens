@@ -146,6 +146,9 @@ def test_raw_canonical_inventory_exact_states_counts_bounds_and_immutability(tmp
     assert report["field_state_counts"]["unrestricted_cash"]["raw_fact_stale"]==1
     assert report["field_state_samples"]["current_assets"]["no_relevant_raw_or_canonical_fact"]["returned_count"]==4
     assert report["standard_concept_observation_counts"]["AssetsCurrent"]==5
+    assert report["company_reconciliation"]["requiring_new_sec_ingestion"]["count"]==10
+    assert report["company_reconciliation"]["requiring_accounting_review"]["count"]>=2
+    assert report["company_reconciliation"]["requiring_canonical_materialization"]["count"]==1
     assert report["company_samples"]["returned_count"]==10 and report["company_samples"]["truncated"]
     assert report["database_immutability"]["before"]==report["database_immutability"]["after"]
     assert (research.read_bytes(),production.read_bytes())==before

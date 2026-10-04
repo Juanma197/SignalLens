@@ -226,3 +226,132 @@ samples and before/after fingerprints, and confirm every ranking, candidate,
 recommendation, selection, vintage, and validation collection is empty with
 zero validation credit. These commands make no network request, perform no
 ingestion or materialization, activate no alias, and write no database.
+
+## Milestone 43: corrected aggregation and safe ingestion planning
+
+The `2026-10-02T18:15:00+00:00` operator reconciliation examined 213 cells for
+71 companies. All 71 current-assets cells had only the broader `Assets`
+aggregate (5,796 raw observations and zero `AssetsCurrent` observations). All
+71 current-liabilities cells and all 71 unrestricted-cash cells had no relevant
+raw or canonical fact. There were zero observations for `LiabilitiesCurrent`
+and for every contracted direct/combined/restricted-cash/investment concept,
+zero extensions, zero identity failures, and zero compatible facts either
+materialized or omitted. Both databases were byte-for-byte unchanged.
+
+The former company aggregation incorrectly required **all three** fields to be
+`no_relevant_raw_or_canonical_fact`. Because every company had broader `Assets`
+for one field, it returned zero ingestion companies despite 142 absent cells.
+The corrected flags use `any`: one absent required field means ingestion, while
+broader-only, incompatible, extension, or conflicting evidence independently
+means accounting review. Thus the operator result reconciles as follows (these
+are derived classifications, not hard-coded production counts):
+
+| Independent company issue | Correct count | Reason |
+|---|---:|---|
+| requires new SEC ingestion | 71 | every company lacks current liabilities and unrestricted cash |
+| requires accounting review | 71 | every company has only broader `Assets` for current assets |
+| requires canonical materialization | 0 | no compatible exact raw fact was omitted |
+| identity failure | 0 | no issuer identity was classified unresolved |
+
+### Current ingestion-contract diagnosis
+
+The cause is selection before persistence, not evidence that SEC itself lacks
+the facts. `sec_capability.CONCEPTS` is the current allowlist consumed by
+`normalize_facts`; it includes `Assets` under asset return but none of
+`AssetsCurrent`, `LiabilitiesCurrent`, or the liquidity cash/restriction and
+working-capital concepts. `normalize_facts` walks only that allowlist, and the
+ingester persists those normalized observations to `sec_facts`. It does not
+retain the complete Company Facts response. This exactly explains why `Assets`
+can be present while requested liquidity concepts are absent.
+
+Existing ingestion uses a ticker-map request followed by SEC submissions and
+Company Facts requests, a 205-request ceiling, at most two attempts by default,
+20-second timeouts, and 0.12-second minimum pacing with retry backoff. Durable
+`sec_checkpoints` record issuer state, attempts, and last run; retry mode selects
+failed/incomplete work. `sec_ingestion_runs` records budgets and counts, while
+`sec_failures` records stable failure codes. `sec_filings` supplies filed/public
+availability and `sec_facts` supplies retrieval provenance. Historical facts
+must therefore be requested again for issuers without a recognized retained
+payload; missing rows alone never establish provider absence.
+
+The planner checks the exact comparable population and CIK bridge rather than
+assuming 71 mappings. With 71 mapped issuers and no retained payloads, the
+projection is **142 requests**: one submissions request plus one Company Facts
+request per issuer. Mapping retrieval is deliberately outside that estimate
+because an unmapped issuer blocks the plan rather than permitting ticker/name
+inference. The ceiling defaults to 205. Complete original payload replay is
+reported available only when an explicitly recognized payload table contains a
+non-empty artifact with an exact CIK; transformed `sec_facts` rows are not
+treated as replayable payloads. The current persistence contract defines no raw
+payload table, so existing normalized rows alone cannot be replayed.
+
+The concept contract remains exact and separate:
+`AssetsCurrent`, `LiabilitiesCurrent`,
+`CashAndCashEquivalentsAtCarryingValue`,
+`CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents`,
+`RestrictedCashAndCashEquivalentsCurrent`,
+`RestrictedCashAndCashEquivalents`, `ShortTermInvestments`,
+`MarketableSecuritiesCurrent`, `InventoryNet`,
+`AccountsReceivableNetCurrent`, `AccountsPayableCurrent`, `Assets`, and
+`Liabilities`. `Assets` never maps to `AssetsCurrent`; combined cash never
+becomes unrestricted cash without compatible restricted-cash decomposition;
+issuer extensions remain review-only.
+
+### Read-only plan schema and commands
+
+`plan-sec-liquidity-evidence-ingestion` returns the exact population, mapped and
+unmapped counts, requested concepts, ingestion/replay/live cohorts, deterministic
+two-per-live-issuer request estimate, ceiling, checkpoint strategy, destination
+tables, subsequent materialization step, database fingerprints, deterministic
+plan identifier, seven-day expiry, status, and stable blocker codes. Samples
+are capped at ten and the complete compact JSON is bounded. It opens databases
+read-only, makes zero HTTP requests, and performs zero writes.
+
+```powershell
+git switch main
+git pull --ff-only
+$Decision = "2026-10-02T18:15:00+00:00"
+$Research = "C:\SignalLens Data\research.duckdb"
+$Production = "C:\SignalLens Data\production.duckdb"
+$BeforeResearch = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$BeforeProduction = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+
+Push-Location backend
+python -m app.sec_ingestion_cli plan-sec-liquidity-evidence-ingestion `
+  --research-db $Research --production-db $Production --decision-at $Decision `
+  --max-request-budget 205 |
+  Set-Content -Encoding utf8 "..\sec-liquidity-ingestion-plan.json"
+Pop-Location
+
+$AfterResearch = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$AfterProduction = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+if ($BeforeResearch -ne $AfterResearch -or $BeforeProduction -ne $AfterProduction) {
+  throw "Read-only invariant failed"
+}
+```
+
+### Separate future apply/replay authorization boundary
+
+No live apply command is implemented or authorized by this milestone. A future
+`apply-sec-liquidity-evidence-ingestion` must accept only the immediately
+preceding unexpired database-bound plan identifier, matching expected research
+and production fingerprints, the exact case-sensitive phrase
+`I AUTHORIZE RESEARCH-ONLY SEC LIQUIDITY EVIDENCE INGESTION`, and an explicit
+maximum-request budget. It must enforce bounded request rate/retries, write only
+research tables, durably checkpoint each issuer, retain original response
+provenance and filed/public/retrieved timestamps, persist transactionally or
+restart-safely, verify production unchanged, and run raw-versus-canonical
+reconciliation afterward.
+
+A future offline replay must be separately planned and authorized. It must hash
+and bind artifact identity, preserve original facts, insert idempotently without
+overwrite, retain artifact provenance, never synthesize availability times, and
+label replay separately from newly retrieved evidence. Absence of a recognized
+complete artifact is a replay-unavailable result, not permission to reconstruct
+one from normalized rows.
+
+Track A remains `prospective-us-dilution-1.0.0` with configuration hash
+`7b11264778fd120c03c820275d9c048d002bdb8564510fcf989cb590ce1b7ebd`.
+This work changes no Track A configuration, activates no alias, loosens no
+accounting validation, and creates no Track B score, Top 3, ranking, candidate,
+recommendation, selection, vintage, or validation credit.

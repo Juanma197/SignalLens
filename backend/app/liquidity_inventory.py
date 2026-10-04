@@ -162,9 +162,16 @@ def _report(command,research_db,production_db,decision_at):
             counts[field][state]+=1; samples[field][state].append(symbol)
         details.append({"security_id":sid,"qualified_symbol":symbol,"fields":states})
     pair_counts=Counter(state for d in details for state in d["fields"].values())
-    ingestion=sorted(d["qualified_symbol"] for d in details if all(x=="no_relevant_raw_or_canonical_fact" for x in d["fields"].values()))
-    review=sorted(d["qualified_symbol"] for d in details if any(x in {"issuer_extension_review_required","conflicting_visible_facts"} for x in d["fields"].values()))
+    # These are independent company-level issue flags, not a partition.  In
+    # particular, one absent field is enough to require ingestion even when a
+    # different field has broader evidence that requires accounting review.
+    ingestion=sorted(d["qualified_symbol"] for d in details if "no_relevant_raw_or_canonical_fact" in d["fields"].values())
+    review_states={"issuer_extension_review_required","conflicting_visible_facts",
+                   "raw_fact_incompatible_unit","raw_fact_incompatible_duration",
+                   "raw_fact_stale","only_broader_aggregate_exists"}
+    review=sorted(d["qualified_symbol"] for d in details if any(x in review_states for x in d["fields"].values()))
     identity=sorted(d["qualified_symbol"] for d in details if "issuer_identity_unresolved" in d["fields"].values())
+    materialization=sorted(d["qualified_symbol"] for d in details if "compatible_raw_fact_not_materialized" in d["fields"].values())
     standard=Counter(str(x.get("concept")) for x in raw if x.get("concept") in STANDARD_CONCEPTS)
     extensions=Counter(str(x.get("concept")) for x in raw if str(x.get("taxonomy") or "").lower() not in {"us-gaap","us-gaap-2024","us-gaap-2025","us-gaap-2026"} and any(t in str(x.get("concept") or "").lower() for t in ("current","cash","liquid")))
     report={"command":command,"decision_at":decision.isoformat(),"read_only":True,"comparable_company_count":len(population),
@@ -173,7 +180,11 @@ def _report(command,research_db,production_db,decision_at):
       "issuer_extension_concepts":_bounded([{"concept":k,"observation_count":v,"status":"review_required_not_activated"} for k,v in sorted(extensions.items())],SAMPLE_LIMIT),
       "field_state_counts":counts,"field_state_samples":{f:{s:_bounded(sorted(v),SAMPLE_LIMIT) for s,v in by.items()} for f,by in samples.items()},
       "company_field_reconciliation":{"raw_compatible_facts_already_materialized":pair_counts["compatible_canonical_fact_visible"],"raw_compatible_facts_omitted_from_materialization":pair_counts["compatible_raw_fact_not_materialized"],"raw_facts_withheld_correctly":sum(pair_counts[x] for x in ("compatible_raw_fact_post_decision","raw_fact_incompatible_unit","raw_fact_incompatible_duration","raw_fact_stale")),"concepts_absent_from_raw_storage":pair_counts["no_relevant_raw_or_canonical_fact"]},
-      "company_reconciliation":{"requiring_new_sec_ingestion":{"count":len(ingestion),"samples":_bounded(ingestion,SAMPLE_LIMIT)},"requiring_accounting_review":{"count":len(review),"samples":_bounded(review,SAMPLE_LIMIT)},"identity_failures":{"count":len(identity),"samples":_bounded(identity,SAMPLE_LIMIT)}},
+      "company_reconciliation":{"semantics":"independent issue flags; counts may overlap",
+        "requiring_new_sec_ingestion":{"count":len(ingestion),"samples":_bounded(ingestion,SAMPLE_LIMIT)},
+        "requiring_accounting_review":{"count":len(review),"samples":_bounded(review,SAMPLE_LIMIT)},
+        "requiring_canonical_materialization":{"count":len(materialization),"samples":_bounded(materialization,SAMPLE_LIMIT)},
+        "identity_failures":{"count":len(identity),"samples":_bounded(identity,SAMPLE_LIMIT)}},
       "materialization_defect":"compatible exact standard raw facts exist but no usable canonical row for the same security and canonical field" if pair_counts["compatible_raw_fact_not_materialized"] else None,
       "ingestion_gap":"exact required standard concept is absent from both raw SEC stores and canonical evidence at the decision boundary" if pair_counts["no_relevant_raw_or_canonical_fact"] else None,
       "company_samples":_bounded(details,SAMPLE_LIMIT),"database_immutability":immutability,"bounds":_bounds(AGGREGATE_MAXIMUM_BYTES),"labels":TRACK_B_LABELS,**ZERO_OUTPUTS}
