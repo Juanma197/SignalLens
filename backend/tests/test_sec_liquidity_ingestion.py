@@ -102,6 +102,52 @@ def test_rejected_preflight_has_no_writes_or_transport_construction(tmp_path,mon
         assert "sec_liquidity_runs" not in {row[0] for row in db.execute("SHOW TABLES").fetchall()}
 
 
+def test_apply_after_crossing_minute_uses_encoded_issue_time(tmp_path,monkeypatch):
+    research,production=databases(tmp_path); production_before=production.read_bytes()
+    issued=datetime(2026,10,4,18,20,tzinfo=timezone.utc)
+    plan=plan_sec_liquidity_evidence_ingestion(research_db=research,production_db=production,
+        decision_at=DECISION,max_request_budget=205,generated_at=issued)
+    constructed=False
+    class ForbiddenClient:
+        def __init__(self,*args,**kwargs):
+            nonlocal constructed; constructed=True
+            raise AssertionError("transport constructed for fixture apply")
+    monkeypatch.setattr("app.sec_liquidity_ingestion.SECRequestClient",ForbiddenClient)
+    result=apply(research_db=research,production_db=production,decision_at=DECISION,
+        plan_identifier=plan["plan_identifier"],max_request_budget=205,
+        authorization=AUTHORIZATION_PHRASE,fixture=fixture_for_all(),
+        now=issued.replace(minute=21,second=10))
+    assert result["status"]=="completed" and not constructed
+    assert production.read_bytes()==production_before
+    assert all(result[key]==[] for key in ("rankings","candidates","recommendations",
+        "selections","vintages","validation_observations"))
+
+
+@pytest.mark.parametrize("case",["authorization","user_agent","malformed","expired"])
+def test_rejected_preflight_has_no_writes_or_transport_construction(tmp_path,monkeypatch,case):
+    research,production=databases(tmp_path)
+    issued=datetime(2026,10,4,18,20,tzinfo=timezone.utc)
+    plan=plan_sec_liquidity_evidence_ingestion(research_db=research,production_db=production,
+        decision_at=DECISION,max_request_budget=205,generated_at=issued)
+    before=(research.read_bytes(),production.read_bytes()); constructed=False
+    class ForbiddenClient:
+        def __init__(self,*args,**kwargs):
+            nonlocal constructed; constructed=True
+    monkeypatch.setattr("app.sec_liquidity_ingestion.SECRequestClient",ForbiddenClient)
+    args={"research_db":research,"production_db":production,"decision_at":DECISION,
+      "plan_identifier":plan["plan_identifier"],"max_request_budget":205,
+      "authorization":AUTHORIZATION_PHRASE,"user_agent":"SignalLens ops@company.test",
+      "now":issued+timedelta(seconds=30)}
+    if case=="authorization": args["authorization"]="wrong"
+    elif case=="user_agent": args["user_agent"]="placeholder"
+    elif case=="malformed": args["plan_identifier"]="v1:nope"
+    else: args["now"]=issued+timedelta(minutes=15)
+    with pytest.raises(LiquidityPlanError): apply(**args)
+    assert not constructed and (research.read_bytes(),production.read_bytes())==before
+    with duckdb.connect(str(research),read_only=True) as db:
+        assert "sec_liquidity_runs" not in {row[0] for row in db.execute("SHOW TABLES").fetchall()}
+
+
 def test_client_budget_host_content_and_transient_retry():
     attempts=0
     def handler(request):

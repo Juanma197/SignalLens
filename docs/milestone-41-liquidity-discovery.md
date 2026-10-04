@@ -595,6 +595,9 @@ Pop-Location
 This repair changes no Track A configuration or behavior and authorizes no model
 output, score, candidate, ranking, recommendation, selection, vintage, or
 validation credit.
+This repair changes no Track A configuration or behavior and authorizes no model
+output, score, candidate, ranking, recommendation, selection, vintage, or
+validation credit.
 
 ## Post-ingestion reconciliation evidence
 
