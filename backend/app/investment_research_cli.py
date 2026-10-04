@@ -14,6 +14,10 @@ from .liquidity_inventory import (raw_canonical_inventory as liquidity_raw_canon
     evidence_gap_assessment as liquidity_evidence_gap_assessment)
 from .liquidity_compatibility import (compatibility_audit as liquidity_measurement_compatibility_audit,
     plan_canonical_materialization as plan_liquidity_canonical_materialization)
+from .liquidity_materialization import (validate_plan as validate_liquidity_canonical_materialization_plan,
+    apply as apply_liquidity_canonical_materialization, status as liquidity_canonical_materialization_status,
+    recover_stale_lock as recover_stale_liquidity_canonical_materialization_lock,
+    LiquidityMaterializationError)
 from .financial_strength import (
     evidence_audit as financial_strength_evidence_audit,
     contract_assessment as financial_strength_contract_assessment,
@@ -45,6 +49,10 @@ COMMANDS.update({"liquidity-raw-canonical-inventory":liquidity_raw_canonical_inv
                  "liquidity-evidence-gap-assessment":liquidity_evidence_gap_assessment,
                  "liquidity-measurement-compatibility-audit":liquidity_measurement_compatibility_audit,
                  "plan-liquidity-canonical-materialization":plan_liquidity_canonical_materialization})
+COMMANDS.update({"validate-liquidity-canonical-materialization-plan":validate_liquidity_canonical_materialization_plan,
+ "apply-liquidity-canonical-materialization":apply_liquidity_canonical_materialization,
+ "liquidity-canonical-materialization-status":liquidity_canonical_materialization_status,
+ "recover-stale-liquidity-canonical-materialization-lock":recover_stale_liquidity_canonical_materialization_lock})
 def parser():
     root=argparse.ArgumentParser(description="Read-only investment research foundation")
     subs=root.add_subparsers(dest="command",required=True)
@@ -53,6 +61,10 @@ def parser():
         p.add_argument("--production-db",required=True,type=Path); p.add_argument("--decision-at",required=True,type=datetime.fromisoformat)
         if name in {"company-investment-factor-preview","financial-strength-company-preview","liquidity-company-preview"}: p.add_argument("--qualified-symbol",required=True)
         if name in {"materialize-stored-investment-evidence","apply-canonical-unit-repair"}: p.add_argument("--authorization",required=True)
+        if name in {"validate-liquidity-canonical-materialization-plan","apply-liquidity-canonical-materialization"}: p.add_argument("--plan-identifier",required=True)
+        if name == "apply-liquidity-canonical-materialization": p.add_argument("--authorization",required=True)
+        if name == "recover-stale-liquidity-canonical-materialization-lock":
+            p.add_argument("--run-id",required=True); p.add_argument("--authorization",required=True)
         if name == "enrich-investment-evidence-from-sec":
             p.add_argument("--authorization",required=True); p.add_argument("--user-agent",required=True)
             p.add_argument("--request-budget",required=True,type=int); p.add_argument("--runtime-budget-seconds",type=float,default=60)
@@ -66,5 +78,6 @@ def main():
         values=vars(args); command=values.pop("command")
         print(json.dumps(COMMANDS[command](**values),sort_keys=True,default=str))
     except Exception as exc:
-        print(json.dumps({"status":"failed","error":{"code":public_error_code(exc),"message":"investment research request failed; details redacted"}},sort_keys=True),file=sys.stderr); raise SystemExit(1) from None
+        code=exc.code if isinstance(exc,LiquidityMaterializationError) else public_error_code(exc)
+        print(json.dumps({"status":"failed","error":{"code":code,"message":"investment research request failed; details redacted"}},sort_keys=True),file=sys.stderr); raise SystemExit(1) from None
 if __name__=="__main__": main()
