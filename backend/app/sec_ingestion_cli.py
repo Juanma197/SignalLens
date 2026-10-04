@@ -7,7 +7,8 @@ from pathlib import Path
 
 from .sec_ingestion import (AUTHORIZATION_PHRASE, IngestionLimits, ingest, plan,
                             status)
-from .sec_liquidity_plan import plan_sec_liquidity_evidence_ingestion
+from .sec_liquidity_plan import (LiquidityPlanError, plan_sec_liquidity_evidence_ingestion,
+    validate_sec_liquidity_plan)
 from .sec_liquidity_ingestion import (AUTHORIZATION_PHRASE as LIQUIDITY_AUTHORIZATION,
     apply as apply_liquidity, recover_stale_lock, status as liquidity_status)
 
@@ -26,6 +27,10 @@ def parser() -> argparse.ArgumentParser:
     apply_command.add_argument("--max-request-budget",type=int,required=True)
     apply_command.add_argument("--authorization",required=True,help=f"exactly: {LIQUIDITY_AUTHORIZATION}")
     apply_command.add_argument("--fixture",type=Path,help=argparse.SUPPRESS)
+    validate_command=commands.add_parser("validate-sec-liquidity-evidence-ingestion-plan"); _paths(validate_command)
+    validate_command.add_argument("--decision-at",required=True)
+    validate_command.add_argument("--plan-identifier",required=True)
+    validate_command.add_argument("--max-request-budget",type=int,required=True)
     status_command=commands.add_parser("sec-liquidity-evidence-ingestion-status"); _paths(status_command)
     status_command.add_argument("--decision-at")
     recovery=commands.add_parser("recover-stale-sec-liquidity-ingestion-lock"); _paths(recovery)
@@ -60,6 +65,10 @@ def execute(args: argparse.Namespace) -> dict:
         return apply_liquidity(research_db=args.research_db,production_db=args.production_db,
             decision_at=args.decision_at,plan_identifier=args.plan_identifier,
             max_request_budget=args.max_request_budget,authorization=args.authorization,fixture=fixture)
+    if args.command=="validate-sec-liquidity-evidence-ingestion-plan":
+        return validate_sec_liquidity_plan(research_db=args.research_db,
+            production_db=args.production_db,decision_at=args.decision_at,
+            plan_identifier=args.plan_identifier,max_request_budget=args.max_request_budget)
     if args.command=="sec-liquidity-evidence-ingestion-status":
         return liquidity_status(research_db=args.research_db,production_db=args.production_db,
             decision_at=args.decision_at)
@@ -79,7 +88,8 @@ def execute(args: argparse.Namespace) -> dict:
 def main() -> None:
     try: print(json.dumps(execute(parser().parse_args()),sort_keys=True,default=str))
     except Exception as exc:
-        print(json.dumps({"status":"failed","error":{"code":type(exc).__name__,
+        code=exc.code if isinstance(exc,LiquidityPlanError) else "SEC_LIQUIDITY_INTERNAL_ERROR"
+        print(json.dumps({"status":"failed","error":{"code":code,
             "message":"SEC ingestion command failed; details redacted"}}),file=sys.stderr)
         raise SystemExit(1) from None
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -19,6 +20,49 @@ DEFAULT_REQUEST_BUDGET = 205
 PLAN_LIFETIME = timedelta(minutes=15)
 SAMPLE_LIMIT = 10
 ARTIFACT_TABLES = ("sec_companyfacts_payloads", "sec_provider_payloads")
+PLAN_IDENTIFIER_VERSION = "v1"
+
+
+class LiquidityPlanError(Exception):
+    """A bounded, public preflight failure (the message is the stable code)."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+def _canonical(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+
+
+def _encode_identifier(issued_at: datetime, identity: dict[str, Any]) -> str:
+    payload = base64.urlsafe_b64encode(_canonical(identity)).decode().rstrip("=")
+    digest = hashlib.sha256(_canonical(identity)).hexdigest()
+    return f"{PLAN_IDENTIFIER_VERSION}:{int(issued_at.timestamp())}:{payload}:{digest}"
+
+
+def _decode_identifier(identifier: str) -> tuple[datetime, dict[str, Any], str]:
+    """Strictly decode a v1 capability; legacy identifiers are intentionally invalid."""
+    import re
+    match = re.fullmatch(r"v1:(0|[1-9][0-9]{0,10}):([A-Za-z0-9_-]+):([0-9a-f]{64})", identifier)
+    if not match:
+        raise LiquidityPlanError("SEC_LIQUIDITY_PLAN_INVALID")
+    try:
+        epoch = int(match.group(1))
+        issued = datetime.fromtimestamp(epoch, timezone.utc)
+        encoded = match.group(2)
+        raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+        identity = json.loads(raw)
+    except (ValueError, OverflowError, json.JSONDecodeError, UnicodeDecodeError):
+        raise LiquidityPlanError("SEC_LIQUIDITY_PLAN_INVALID") from None
+    if not isinstance(identity, dict) or identity.get("issued_at") != issued.isoformat():
+        raise LiquidityPlanError("SEC_LIQUIDITY_PLAN_INVALID")
+    if base64.urlsafe_b64encode(raw).decode().rstrip("=") != encoded:
+        raise LiquidityPlanError("SEC_LIQUIDITY_PLAN_INVALID")
+    actual = hashlib.sha256(_canonical(identity)).hexdigest()
+    if actual != match.group(3):
+        raise LiquidityPlanError("SEC_LIQUIDITY_PLAN_INVALID")
+    return issued, identity, actual
 
 def _tables(db: duckdb.DuckDBPyConnection) -> set[str]:
     return {str(row[0]) for row in db.execute("SHOW TABLES").fetchall()}
@@ -79,16 +123,16 @@ def plan_sec_liquidity_evidence_ingestion(*, research_db: Path, production_db: P
     blockers=[]
     if unmapped: blockers.append("UNMAPPED_ISSUER_IDENTITY")
     if estimate>max_request_budget: blockers.append("REQUEST_BUDGET_EXCEEDED")
-    # Minute precision gives an operator enough time to copy the identifier into
-    # apply while still making an old displayed plan distinguishable.
-    generated=(generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(second=0,microsecond=0)
+    # v1 uses exact whole-second issue time. Apply reconstructs from this immutable
+    # instant rather than refreshing the plan with its own clock.
+    generated=(generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(microsecond=0)
     expires=generated+PLAN_LIFETIME
-    identity={"decision_at":decision.isoformat(),"fingerprints":immutability["before"],
-              "companies":requiring,"mapped_ciks":sorted(mapped.values()),"concepts":CONCEPTS,
-              "estimated_requests":estimate,"request_budget":max_request_budget}
-    identity["plan_generated_at"]=generated.isoformat()
-    digest=hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
-    plan_id=f"{int(generated.timestamp())}:{digest}"
+    identity={"issued_at":generated.isoformat(),"expires_at":expires.isoformat(),
+              "decision_at":decision.isoformat(),"fingerprints":immutability["before"],
+              "issuer_cohort":[{"security_id":sid,"qualified_symbol":symbols[sid],"cik":mapped.get(sid)} for sid in sorted(requiring_ids)],
+              "concepts":list(CONCEPTS),"estimated_requests":estimate,
+              "request_budget":max_request_budget,**operation_identity()}
+    plan_id=_encode_identifier(generated,identity)
     report={"command":"plan-sec-liquidity-evidence-ingestion","read_only":True,
       **operation_identity(),
       "decision_at":decision.isoformat(),"plan_identifier":plan_id,"plan_generated_at":generated.isoformat(),"plan_expires_at":expires.isoformat(),
@@ -123,3 +167,65 @@ def validate_apply_preconditions(plan: dict[str, Any], *, research_db: Path,
     actual={"research":fingerprint(research_db),"production":fingerprint(production_db)}
     if actual != expected: blockers.append("DATABASE_FINGERPRINT_CHANGED")
     return blockers
+
+
+def validate_sec_liquidity_plan(*, research_db: Path, production_db: Path,
+        decision_at: Any, plan_identifier: str, max_request_budget: int,
+        now: datetime | None=None) -> dict[str, Any]:
+    """Perform the shared, strictly read-only apply/diagnostic preflight."""
+    checked=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    try:
+        issued, bound, _ = _decode_identifier(plan_identifier)
+    except LiquidityPlanError as exc:
+        return _validation_report(exc.code, checked)
+    expires=issued+PLAN_LIFETIME
+    common={"issued_at":issued.isoformat(),"expires_at":expires.isoformat(),
+            "remaining_validity_seconds":max(0,int((expires-checked).total_seconds())),
+            "contract_version":bound.get("operation_contract_version"),
+            "contract_hash":bound.get("concept_contract_hash")}
+    if issued > checked:
+        return _validation_report("SEC_LIQUIDITY_PLAN_FUTURE_ISSUED",checked,**common)
+    if checked >= expires:
+        return _validation_report("SEC_LIQUIDITY_PLAN_EXPIRED",checked,**common)
+    if bound.get("expires_at") != expires.isoformat():
+        return _validation_report("SEC_LIQUIDITY_PLAN_INVALID",checked,**common)
+    current_identity=operation_identity()
+    if any(bound.get(key) != value for key,value in current_identity.items()):
+        return _validation_report("SEC_LIQUIDITY_PLAN_CONTRACT_MISMATCH",checked,**common)
+    try:
+        rebuilt=plan_sec_liquidity_evidence_ingestion(research_db=research_db,
+            production_db=production_db,decision_at=decision_at,
+            max_request_budget=max_request_budget,generated_at=issued)
+        _, actual, _=_decode_identifier(rebuilt["plan_identifier"])
+    except (ValueError, OSError, duckdb.Error):
+        return _validation_report("SEC_LIQUIDITY_PLAN_INVALID",checked,**common)
+    if bound.get("decision_at") != actual.get("decision_at"):
+        return _validation_report("SEC_LIQUIDITY_PLAN_DECISION_MISMATCH",checked,**common)
+    expected_fp=bound.get("fingerprints",{})
+    actual_fp=actual.get("fingerprints",{})
+    fp_match={"research":expected_fp.get("research")==actual_fp.get("research"),
+              "production":expected_fp.get("production")==actual_fp.get("production")}
+    common["database_fingerprint_match"]=fp_match
+    if not all(fp_match.values()):
+        return _validation_report("SEC_LIQUIDITY_PLAN_FINGERPRINT_CHANGED",checked,**common)
+    budget_ok=(bound.get("request_budget")==max_request_budget and
+               isinstance(bound.get("estimated_requests"),int) and
+               bound["estimated_requests"]<=max_request_budget)
+    common["request_budget_sufficient"]=budget_ok
+    if not budget_ok:
+        return _validation_report("SEC_LIQUIDITY_REQUEST_BUDGET_INSUFFICIENT",checked,**common)
+    # This catches cohort, exact CIK mapping, concepts, estimate, operation and all
+    # other database-bound inputs without selectively accepting an altered token.
+    if bound != actual or rebuilt["status"] != "ready":
+        return _validation_report("SEC_LIQUIDITY_PLAN_INVALID",checked,**common)
+    return _validation_report(None,checked,**common)
+
+
+def _validation_report(code: str | None, checked: datetime, **values: Any) -> dict[str, Any]:
+    return {"command":"validate-sec-liquidity-evidence-ingestion-plan","read_only":True,
+            "valid":code is None,"reason_code":code,"checked_at":checked.isoformat(),
+            "issued_at":None,"expires_at":None,"remaining_validity_seconds":0,
+            "contract_version":None,"contract_hash":None,
+            "database_fingerprint_match":{"research":False,"production":False},
+            "request_budget_sufficient":False,"provider_requests":0,"database_writes":0,
+            **values,**ZERO_OUTPUTS}
