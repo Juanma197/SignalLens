@@ -303,7 +303,7 @@ issuer extensions remain review-only.
 unmapped counts, requested concepts, ingestion/replay/live cohorts, deterministic
 two-per-live-issuer request estimate, ceiling, checkpoint strategy, destination
 tables, subsequent materialization step, database fingerprints, deterministic
-plan identifier, seven-day expiry, status, and stable blocker codes. Samples
+ plan identifier, 15-minute expiry, status, and stable blocker codes. Samples
 are capped at ten and the complete compact JSON is bounded. It opens databases
 read-only, makes zero HTTP requests, and performs zero writes.
 
@@ -474,7 +474,7 @@ Before transport construction, network access, schema initialization, or lock
 creation, live apply requires `SIGNALLENS_SEC_USER_AGENT` to contain a descriptive
 identity and plausible monitored email address. Blank values, the repository
 placeholder, `YOUR_REAL_EMAIL_ADDRESS`, `example.com`, and placeholder text are
-rejected with the stable redacted code `SEC_USER_AGENT_INVALID_REDACTED`. Status and
+rejected with the stable redacted code `SEC_LIQUIDITY_USER_AGENT_INVALID`. Status and
 failure output never include the address.
 
 ### Corrected never-run status (abridged)
@@ -522,3 +522,105 @@ then set a non-placeholder `SIGNALLENS_SEC_USER_AGENT` and generate a **fresh
 15-minute plan** immediately before the separately authorized apply. Re-run status
 and retain its output. This verification procedure does not authorize or execute
 apply.
+
+## 2026-10-04 apply-preflight repair (Milestones 41–43)
+
+The first operator apply failed safely during preflight: it returned exit code 1,
+made **zero provider requests**, created no schema, run, checkpoint, failure,
+provenance, or lock rows, and changed neither research nor production. The supplied
+plan was issued at 18:20 UTC and apply ran after the clock crossed 18:21 UTC.
+
+The confirmed root cause was that apply parsed the issue epoch for its expiry check
+but then rebuilt the expected plan with the apply-time clock. Because generation
+time is digest-bound, crossing the minute boundary produced a different identifier.
+The old tests generated and applied with the same implicit current clock bucket, so
+they never exercised this transition. The regression now plans at 18:20:00 and
+successfully applies at 18:21:10; boundary tests also cover 18:20:59 and exact
+expiration.
+
+All pre-repair identifiers must be discarded. The only accepted identifier is the
+versioned capability `v1:<issued_epoch>:<base64url_bound_payload>:<sha256_digest>`.
+The payload binds the decision, both database fingerprints, exact issuer/security/
+CIK cohort, concepts, request estimate and budget, operation type, contract version
+and contract hash. It is an integrity checksum, **not authentication**. Its encoded
+issue instant is immutable; apply reconstructs at that instant, and independently
+rejects current time at or after the original 15-minute expiry. Expiry is never
+extended or refreshed.
+
+Public failures are bounded to `SEC_LIQUIDITY_PLAN_INVALID`,
+`SEC_LIQUIDITY_PLAN_EXPIRED`, `SEC_LIQUIDITY_PLAN_FUTURE_ISSUED`,
+`SEC_LIQUIDITY_PLAN_FINGERPRINT_CHANGED`, `SEC_LIQUIDITY_PLAN_DECISION_MISMATCH`,
+`SEC_LIQUIDITY_PLAN_CONTRACT_MISMATCH`,
+`SEC_LIQUIDITY_REQUEST_BUDGET_INSUFFICIENT`,
+`SEC_LIQUIDITY_AUTHORIZATION_INVALID`, `SEC_LIQUIDITY_USER_AGENT_INVALID`,
+`SEC_LIQUIDITY_OPERATION_LOCKED`, and `SEC_LIQUIDITY_INTERNAL_ERROR`. CLI output
+never exposes exception classes, paths, contact addresses, response bodies,
+secrets, or tracebacks.
+
+Use this exact post-merge sequence: **status → fresh plan → read-only validation →
+apply**. Validation needs no SEC User-Agent and performs no writes or requests.
+
+```powershell
+git switch main
+git pull --ff-only
+$Decision = "2026-10-02T18:15:00+00:00"
+$Research = "C:\SignalLens Data\research.duckdb"
+$Production = "C:\SignalLens Data\production.duckdb"
+$Authorization = "I AUTHORIZE RESEARCH-ONLY SEC LIQUIDITY EVIDENCE INGESTION"
+Push-Location backend
+
+python -m app.sec_ingestion_cli sec-liquidity-evidence-ingestion-status `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision"
+
+$PlanJson = python -m app.sec_ingestion_cli plan-sec-liquidity-evidence-ingestion `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" `
+  --max-request-budget 205
+$Plan = $PlanJson | ConvertFrom-Json
+if ($Plan.status -ne "ready") { throw "SEC liquidity plan is not ready" }
+
+$ValidationJson = python -m app.sec_ingestion_cli validate-sec-liquidity-evidence-ingestion-plan `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" `
+  --plan-identifier "$($Plan.plan_identifier)" --max-request-budget 205
+$Validation = $ValidationJson | ConvertFrom-Json
+if (-not $Validation.valid) { throw "SEC liquidity plan validation failed: $($Validation.reason_code)" }
+
+$env:SIGNALLENS_SEC_USER_AGENT = "SignalLens research operations <MONITORED_EMAIL>"
+python -m app.sec_ingestion_cli apply-sec-liquidity-evidence-ingestion `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" `
+  --plan-identifier "$($Plan.plan_identifier)" --max-request-budget 205 `
+  --authorization "$Authorization"
+Pop-Location
+```
+
+This repair changes no Track A configuration or behavior and authorizes no model
+output, score, candidate, ranking, recommendation, selection, vintage, or
+validation credit.
+
+## Post-ingestion reconciliation evidence
+
+The operator subsequently ran all four read-only reconciliation commands. Each
+exited zero, each error log was empty, and SHA-256 checks confirmed that both
+databases remained byte-for-byte unchanged. The reports showed 191 raw field
+observations withheld correctly, consisting of 61 post-decision current-assets
+observations, 61 post-decision current-liabilities observations, and 69
+post-decision unrestricted-cash observations. This is expected: evidence retrieved
+on October 4 cannot be made available to the October 2 decision without introducing
+look-ahead. Retrieval does not rewrite historical availability, even when the SEC
+filing itself was public earlier.
+
+The reports also found 12 exact concepts absent from retained raw storage: current
+liabilities for ten companies and unrestricted cash for two. Ten companies require
+accounting review, including broader aggregates that must not be silently treated as
+current assets. No alias was activated, no canonical evidence was materialized, all
+contract coverage remained zero, and Track A and all prohibited model outputs
+remained unchanged.
+
+A completed controlled retrieval is now reported separately from an unattempted
+ingestion gap. `requiring_new_sec_ingestion` excludes a security only when its exact
+isolated checkpoint links to its controlled run and to retained provenance for both
+SEC endpoint classes. An absent concept after that proof is reported under
+`completed_retrieval_concept_absent`; it does **not** recommend repeating the same
+provider requests. Fresh plans likewise assign zero live requests to those proven
+completed securities. Legacy SEC runs, checkpoints, failures, or payloads do not
+qualify. Post-decision facts remain withheld for the October 2 boundary and may be
+evaluated only under a separately approved later decision boundary.

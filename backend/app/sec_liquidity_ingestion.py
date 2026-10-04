@@ -26,7 +26,8 @@ from .liquidity_inventory import STANDARD_CONCEPTS, raw_canonical_inventory
 from .model_readiness import fingerprint
 from .sec_capability import SEC_FACTS, SEC_SUBMISSIONS, valid_user_agent
 from .sec_ingestion import validate_paths
-from .sec_liquidity_plan import plan_sec_liquidity_evidence_ingestion
+from .sec_liquidity_plan import (LiquidityPlanError,
+    plan_sec_liquidity_evidence_ingestion, validate_sec_liquidity_plan)
 from .sec_liquidity_contract import (CONCEPT_CONTRACT_HASH, OPERATION_CONTRACT_VERSION,
     OPERATION_TYPE, PARSER_VERSION, operation_identity)
 
@@ -229,29 +230,40 @@ def _raw_record(run_id: str, plan_id: str, lineage_id: str, item: dict[str,str],
             content_type,raw.decode("utf-8"),PARSER_CONTRACT_VERSION]
 
 
+def _reject_existing_lock(research_db: Path) -> None:
+    """Inspect locks read-only so a rejected apply cannot initialize a schema."""
+    with duckdb.connect(str(research_db), read_only=True) as db:
+        if "sec_liquidity_ingestion_lock" not in _tables(db):
+            return
+        columns=_columns(db,"sec_liquidity_ingestion_lock")
+        if not {"operation_type","operation_contract_version","concept_contract_hash"} <= columns:
+            if db.execute("SELECT count(*) FROM sec_liquidity_ingestion_lock").fetchone()[0]:
+                raise LiquidityPlanError("SEC_LIQUIDITY_OPERATION_LOCKED")
+            return
+        if db.execute("SELECT count(*) FROM sec_liquidity_ingestion_lock").fetchone()[0]:
+            raise LiquidityPlanError("SEC_LIQUIDITY_OPERATION_LOCKED")
+
+
 def apply(*, research_db: Path, production_db: Path, decision_at: Any, plan_identifier: str,
           max_request_budget: int, authorization: str | None, fixture: dict[str,Any] | None=None,
           now: datetime | None=None, transport: httpx.BaseTransport | None=None,
           user_agent: str | None=None, interrupt_after: int | None=None) -> dict[str,Any]:
-    if authorization != AUTHORIZATION_PHRASE: raise PermissionError("AUTHORIZATION_REQUIRED")
+    if authorization != AUTHORIZATION_PHRASE: raise LiquidityPlanError("SEC_LIQUIDITY_AUTHORIZATION_INVALID")
     validate_paths(research_db,production_db)
-    if not 1 <= max_request_budget <= MAX_BUDGET: raise ValueError("INVALID_REQUEST_BUDGET")
+    if not 1 <= max_request_budget <= MAX_BUDGET: raise LiquidityPlanError("SEC_LIQUIDITY_REQUEST_BUDGET_INSUFFICIENT")
     # Configuration is rejected before schema writes, locks, or transport construction.
     agent=user_agent if user_agent is not None else os.getenv("SIGNALLENS_SEC_USER_AGENT","")
-    if fixture is None and not _valid_user_agent(agent): raise ValueError("SEC_USER_AGENT_INVALID_REDACTED")
+    if fixture is None and not _valid_user_agent(agent): raise LiquidityPlanError("SEC_LIQUIDITY_USER_AGENT_INVALID")
     timestamp=_utc(now)
-    try: planned_at=datetime.fromtimestamp(int(plan_identifier.split(":",1)[0]),timezone.utc)
-    except (ValueError,IndexError): raise ValueError("PLAN_IDENTIFIER_MISMATCH") from None
-    if timestamp >= planned_at + timedelta(minutes=15): raise ValueError("PLAN_EXPIRED")
+    validation=validate_sec_liquidity_plan(research_db=research_db,production_db=production_db,
+        decision_at=decision_at,plan_identifier=plan_identifier,
+        max_request_budget=max_request_budget,now=timestamp)
+    if not validation["valid"]: raise LiquidityPlanError(validation["reason_code"])
+    # Reconstructing at the encoded instant above is the only source of plan truth.
     plan=plan_sec_liquidity_evidence_ingestion(research_db=research_db,production_db=production_db,
-        decision_at=decision_at,max_request_budget=max_request_budget,generated_at=timestamp)
-    if plan["plan_identifier"] != plan_identifier: raise ValueError("PLAN_IDENTIFIER_MISMATCH")
-    if any(plan.get(k)!=v for k,v in operation_identity().items()): raise ValueError("OPERATION_CONTRACT_MISMATCH")
-    if timestamp >= datetime.fromisoformat(plan["plan_expires_at"]): raise ValueError("PLAN_EXPIRED")
-    if plan["status"]!="ready": raise ValueError("PLAN_NOT_READY")
-    if plan["live_sec_retrieval"]["estimated_request_count"] > max_request_budget: raise ValueError("INSUFFICIENT_REQUEST_BUDGET")
-    expected=plan["database_fingerprints"]["before"]
-    if {"research":fingerprint(research_db),"production":fingerprint(production_db)} != expected: raise ValueError("DATABASE_FINGERPRINT_CHANGED")
+        decision_at=decision_at,max_request_budget=max_request_budget,
+        generated_at=datetime.fromisoformat(validation["issued_at"]))
+    _reject_existing_lock(research_db)
     production_before=fingerprint(production_db)
     with duckdb.connect(str(production_db),read_only=True) as p: p.execute("SELECT 1")
     workload=_workload(research_db,production_db,decision_at)
