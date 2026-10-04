@@ -627,3 +627,100 @@ provider requests. Fresh plans likewise assign zero live requests to those prove
 completed securities. Legacy SEC runs, checkpoints, failures, or payloads do not
 qualify. Post-decision facts remain withheld for the October 2 boundary and may be
 evaluated only under a separately approved later decision boundary.
+
+## Milestones 41–43 post-retrieval measurement reconciliation
+
+The controlled operation completed all **71 issuers** with exactly **142 successful
+provider requests**, no failures, and no production-byte change. Its durable
+checkpoints therefore classify all 71 as `previously_completed_retrieval`; live
+retrieval and estimated requests remain zero. An exact concept still absent after
+that completed retrieval is `completed_retrieval_concept_absent`, never a reason to
+repeat the SEC requests.
+
+At `2026-10-04T21:30:00+00:00`, inventory reported 187 compatible direct facts
+awaiting materialization (61 current assets, 61 current liabilities and 65
+unrestricted cash), covering 69 companies. Discovery instead called the same
+persisted population incompatible. Its incompatible population included those 187
+facts plus four stale cash facts (191 observations in the diagnostic population).
+The confirmed root cause was not an accounting difference: controlled Company Facts
+rows carried authoritative SEC unit `USD`, while the separate locally projected
+`currency` column was absent on the affected persisted representation. Inventory
+accepted `unit=USD` without consulting that redundant column; discovery required
+both `unit=USD` and `currency=USD`.
+
+`liquidity-measurement-validator-1.0.0` is now authoritative for inventory,
+discovery, contract assessment, company preview, compatibility audit and
+materialization planning. SEC Company Facts' unit key establishes denomination.
+The validator losslessly normalizes a null, blank, or `USD` redundant currency to
+canonical USD **only** when source unit is exactly `USD`. It preserves source value,
+unit, currency and scale in provenance. Missing, zero and one scales are identity
+representations; any other explicit scale is withheld because applying it would be
+ambiguous in this persistence contract. Explicit currency contradictions, non-USD
+units, nonfinite or negative values, duration facts, unsupported taxonomies or
+concepts, unavailable timestamps and stale periods remain withheld.
+
+Stable reason codes are: `accepted`, `concept_not_contractual`,
+`taxonomy_not_supported`, `visibility_timestamp_missing`,
+`not_visible_at_decision`, `measurement_nature_duration`, `source_unit_not_usd`,
+`unit_currency_contradiction`, `currency_ambiguous`, `scale_not_lossless`,
+`value_nonfinite_or_invalid`, `value_negative`, and `period_stale`. No issuer,
+domicile, exchange, ticker, company-name or comparable-universe inference supplies
+currency.
+
+Expected operator reconciliation after this repair is:
+
+| Canonical field | Inventory accepted | Discovery accepted direct | Remaining withheld |
+|---|---:|---:|---|
+| current assets | 61 | 61 | 10 broader `Assets` only |
+| current liabilities | 61 | 61 | 10 broader `Liabilities` only |
+| unrestricted cash | 65 | 65 | 4 stale, 1 broader combined cash only, 1 absent |
+| **total** | **187** | **187** | accounting distinctions preserved |
+
+The audit compares stable evidence identities, not only totals, and fails closed on
+an inventory-only or discovery-only identity. Total `Assets` never satisfies
+`AssetsCurrent`; total `Liabilities` never satisfies `LiabilitiesCurrent`; combined
+cash requires compatible restricted-cash evidence; investments are not cash; issuer
+extensions remain review-only; and duration facts never become instant facts. The
+October 4 retrieval remains invisible at the October 2 boundary and is not backdated.
+The four stale cash facts remain withheld.
+
+`plan-liquidity-canonical-materialization` is read-only. It proposes only shared,
+accepted validator results and returns exact observation/company/field counts,
+stable evidence keys, source-provenance requirements, database fingerprints, a
+content-derived identifier, expiry, blockers and bounded samples. It performs zero
+writes and provider requests, activates zero aliases, and creates no ranking,
+candidate, recommendation, selection, vintage, model output or validation credit.
+There is deliberately no apply command in this milestone. A reconciliation mismatch
+blocks readiness.
+
+### Exact post-merge read-only commands
+
+```powershell
+git switch main
+git pull --ff-only
+$Decision = "2026-10-04T21:30:00+00:00"
+$Research = "C:\SignalLens Data\research.duckdb"
+$Production = "C:\SignalLens Data\production.duckdb"
+$ResearchBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$ProductionBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+
+Push-Location backend
+python -m app.investment_research_cli liquidity-measurement-compatibility-audit `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" |
+  Set-Content -Encoding utf8 "..\liquidity-measurement-compatibility-audit.json"
+python -m app.investment_research_cli plan-liquidity-canonical-materialization `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" |
+  Set-Content -Encoding utf8 "..\liquidity-canonical-materialization-plan.json"
+Pop-Location
+
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash -ne $ResearchBefore) {
+  throw "Research read-only invariant failed"
+}
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash -ne $ProductionBefore) {
+  throw "Production read-only invariant failed"
+}
+```
+
+These commands must be run only after merging this repair. They access the two
+explicit local database paths read-only, make no network request, and do not contact
+Railway or any provider.
