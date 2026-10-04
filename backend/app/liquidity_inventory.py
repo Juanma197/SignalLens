@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime
-import math
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +17,7 @@ from .financial_strength import (_aware, _bounded, _bounds, _companies, _rows,
 from .investment_research import InvestmentResearchError, TRACK_B_LABELS
 from .model_readiness import fingerprint
 from .sec_ingestion import validate_paths
+from .liquidity_measurement import VALIDATOR_VERSION, evidence_identity, validate_measurement
 
 FIELDS = {
     "current_assets": ("AssetsCurrent",),
@@ -107,25 +107,22 @@ def _source_catalog(r, p):
     return out
 
 def _raw_status(row, decision):
-    public,retrieved=_aware(row.get("public_at")),_aware(row.get("retrieved_at"))
-    if public is None or retrieved is None or max(public,retrieved)>decision:
-        return "compatible_raw_fact_post_decision"
-    if row.get("period_start") is not None: return "raw_fact_incompatible_duration"
-    if str(row.get("unit") or "") not in {"USD","monetary"} or str(row.get("currency") or "")!="USD":
-        return "raw_fact_incompatible_unit"
-    end=row.get("period_end") or row.get("instant_date")
-    if end is None or (decision.date()-end).days>STALE_DAYS: return "raw_fact_stale"
-    value=row.get("value")
-    if not isinstance(value,(int,float)) or not math.isfinite(float(value)) or value<0:
-        return "raw_fact_incompatible_unit"
-    return "compatible"
+    result=validate_measurement(row,decision)
+    if result["accepted"]: return "compatible"
+    return {"visibility_timestamp_missing":"compatible_raw_fact_post_decision",
+      "not_visible_at_decision":"compatible_raw_fact_post_decision",
+      "measurement_nature_duration":"raw_fact_incompatible_duration",
+      "period_stale":"raw_fact_stale"}.get(result["reason_code"],"raw_fact_incompatible_unit")
 
 def _canonical_ok(row, field, decision):
     if row.get("canonical_field") != field: return False
     if row.get("reliability_state") not in (None,"usable"): return False
     public,retrieved,available=(_aware(row.get(k)) for k in ("public_at","retrieved_at","available_at"))
     if not public or not retrieved or not available or available != max(public,retrieved) or available>decision: return False
-    return _raw_status(row,decision)=="compatible"
+    interpreted=dict(row)
+    interpreted.setdefault("taxonomy","us-gaap")
+    interpreted.setdefault("concept",row.get("original_concept_or_field"))
+    return _raw_status(interpreted,decision)=="compatible"
 
 def _identity_unresolved(sid, raw, issuers):
     ciks={str(x.get("cik")) for x in raw if str(x.get("security_id"))==sid and x.get("cik")}
@@ -205,6 +202,8 @@ def _report(command,research_db,production_db,decision_at):
     standard=Counter(str(x.get("concept")) for x in raw if x.get("concept") in STANDARD_CONCEPTS)
     extensions=Counter(str(x.get("concept")) for x in raw if str(x.get("taxonomy") or "").lower() not in {"us-gaap","us-gaap-2024","us-gaap-2025","us-gaap-2026"} and any(t in str(x.get("concept") or "").lower() for t in ("current","cash","liquid")))
     report={"command":command,"decision_at":decision.isoformat(),"read_only":True,"comparable_company_count":len(population),
+      "liquidity_measurement_validator_version":VALIDATOR_VERSION,
+      "consumer_semantics":"all unit, currency, scale, period and visibility decisions come from validate_measurement",
       "identity_join_rule":"exact security_id only; CIK consistency checked through sec_issuers; ticker and company name prohibited",
       "source_table_inventory":sources,"standard_concept_observation_counts":{x:standard[x] for x in STANDARD_CONCEPTS},
       "issuer_extension_concepts":_bounded([{"concept":k,"observation_count":v,"status":"review_required_not_activated"} for k,v in sorted(extensions.items())],SAMPLE_LIMIT),

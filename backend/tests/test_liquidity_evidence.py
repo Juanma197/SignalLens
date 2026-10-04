@@ -9,6 +9,9 @@ from app.liquidity_evidence import (AGGREGATE_MAXIMUM_BYTES, CONTRACT_MAXIMUM_BY
     PREVIEW_MAXIMUM_BYTES, compact_utf8_size, evidence_discovery,
     contract_assessment, company_preview)
 from app.liquidity_inventory import raw_canonical_inventory, evidence_gap_assessment
+from app.liquidity_measurement import VALIDATOR_VERSION, validate_measurement
+from app.liquidity_compatibility import (compatibility_audit,
+    plan_canonical_materialization, reconcile_identity_sets)
 
 DECISION=datetime(2026,10,2,18,15,tzinfo=timezone.utc)
 
@@ -165,3 +168,48 @@ def test_inventory_canonical_precedence_and_cli_redaction(tmp_path):
     result=subprocess.run(command,cwd=Path(__file__).parents[1],capture_output=True,text=True)
     assert result.returncode==1 and str(research) not in result.stderr
     assert json.loads(result.stderr)["error"]["message"]=="investment research request failed; details redacted"
+
+def test_versioned_validator_sec_usd_currency_scale_nature_visibility_and_staleness():
+    base={"security_id":"s","taxonomy":"us-gaap","concept":"AssetsCurrent","value":10.0,
+      "unit":"USD","currency":None,"scale":None,"period_start":None,"period_end":date(2026,6,30),
+      "public_at":datetime(2026,7,1,tzinfo=timezone.utc),"retrieved_at":datetime(2026,7,2,tzinfo=timezone.utc),
+      "accession_number":"a"}
+    accepted=validate_measurement(base,DECISION)
+    assert accepted["accepted"] and accepted["canonical_currency"]=="USD"
+    assert accepted["validator_version"]==VALIDATOR_VERSION and accepted["applied_scale_factor"]==1
+    assert accepted["lossless_normalization_provenance"]["original_currency"] is None
+    for scale in (0,1): assert validate_measurement({**base,"scale":scale},DECISION)["accepted"]
+    assert validate_measurement({**base,"currency":"USD"},DECISION)["accepted"]
+    cases=(({"currency":"EUR"},"unit_currency_contradiction"),({"unit":"EUR","currency":"EUR"},"source_unit_not_usd"),
+      ({"scale":3},"scale_not_lossless"),({"value":float("inf")},"value_nonfinite_or_invalid"),
+      ({"period_start":date(2026,1,1)},"measurement_nature_duration"),
+      ({"retrieved_at":datetime(2026,10,4,tzinfo=timezone.utc)},"not_visible_at_decision"),
+      ({"period_end":date(2024,1,1)},"period_stale"))
+    for change,code in cases:
+        result=validate_measurement({**base,**change},DECISION)
+        assert not result["accepted"] and result["reason_code"]==code
+    assert validate_measurement({**base,"concept":"Assets"},DECISION)["canonical_field"]=="assets"
+    assert validate_measurement({**base,"concept":"Liabilities"},DECISION)["canonical_field"]=="liabilities"
+    assert validate_measurement({**base,"concept":"CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"},DECISION)["canonical_field"]=="cash_plus_restricted_cash"
+
+def test_compatibility_audit_and_materialization_plan_are_bounded_read_only_and_reconciled(tmp_path):
+    research,production=fixture(tmp_path); before=(research.read_bytes(),production.read_bytes())
+    audit=compatibility_audit(research_db=research,production_db=production,decision_at=DECISION)
+    plan=plan_canonical_materialization(research_db=research,production_db=production,decision_at=DECISION)
+    assert audit["reconciled"] and all(x["reconciled"] for x in audit["reconciliation"].values())
+    assert plan["status"]=="ready" and plan["proposed_observation_count"]==5
+    assert plan["provider_request_count"]==plan["database_write_count"]==plan["aliases_automatically_activated"]==0
+    assert len(plan["deterministic_evidence_keys"])==len(set(plan["deterministic_evidence_keys"]))
+    assert (research.read_bytes(),production.read_bytes())==before
+    assert compact_utf8_size(audit)<=AGGREGATE_MAXIMUM_BYTES
+    mismatch=reconcile_identity_sets({"current_assets":{"a"}}, {"current_assets":{"b"}})
+    assert not mismatch["current_assets"]["reconciled"]
+
+def test_new_cli_paths_with_spaces_and_stable_redaction(tmp_path):
+    research,production=fixture(tmp_path)
+    for name in ("liquidity-measurement-compatibility-audit","plan-liquidity-canonical-materialization"):
+        command=[sys.executable,"-m","app.investment_research_cli",name,"--research-db",str(research),
+          "--production-db",str(production),"--decision-at",DECISION.isoformat()]
+        result=subprocess.run(command,cwd=Path(__file__).parents[1],capture_output=True,text=True,env={**__import__('os').environ,"PYTHONPATH":"."})
+        assert result.returncode==0, result.stderr
+        assert json.loads(result.stdout)["command"]==name

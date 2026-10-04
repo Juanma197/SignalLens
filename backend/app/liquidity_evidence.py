@@ -20,6 +20,8 @@ from .financial_strength import (_aware, _bounded, _bounds, _companies, _rows,
 from .investment_research import InvestmentResearchError, TRACK_B_LABELS
 from .model_readiness import fingerprint
 from .sec_ingestion import validate_paths
+from .liquidity_measurement import (VALIDATOR_VERSION, evidence_identity,
+    source_scale, validate_measurement)
 
 PROPOSAL_VERSION="liquidity-alias-proposal-1.0.0"
 DISCOVERY_RULE_VERSION="liquidity-exact-name-rule-1.0.0"
@@ -61,44 +63,38 @@ def _decision(value):
     return result
 
 def _nature(row): return "duration" if row.get("period_start") is not None else "instant"
-def _scale(row):
-    p=row.get("provenance")
-    if isinstance(p,str):
-        try: p=json.loads(p)
-        except (ValueError,TypeError): p={}
-    return (p or {}).get("scale",(p or {}).get("scale_factor",row.get("scale",1)))
+def _scale(row): return source_scale(row)
 def _concept(row): return str(row.get("concept") or row.get("original_concept_or_field") or "")
 def _accession(row): return row.get("accession_number") or row.get("accession_or_source_identifier")
 
 def _assess(row, decision):
     concept=_concept(row); spec=SPECS.get(concept); public=_aware(row.get("public_at")); retrieved=_aware(row.get("retrieved_at"))
     available=_aware(row.get("available_at")) or (max(public,retrieved) if public and retrieved else None)
-    reason=None
-    if not public or not retrieved: reason="timestamps missing or unreliable"
-    elif max(public,retrieved)>decision or (available and available>decision): reason="post-decision evidence only"
-    elif row.get("available_at") is not None and available!=max(public,retrieved): reason="timestamps missing or unreliable"
-    elif _nature(row)!="instant": reason="invalid duration/instant nature"
-    elif str(row.get("unit") or "") not in {"USD","monetary"} or str(row.get("currency") or "")!="USD": reason="incompatible unit or currency"
-    elif row.get("taxonomy") and not str(row.get("taxonomy")).lower().startswith("us-gaap"): reason="taxonomy unsupported"
-    elif not isinstance(_scale(row),(int,float)) or not math.isfinite(float(_scale(row))) or float(_scale(row))<=0: reason="incompatible unit or currency"
-    elif not isinstance(row.get("value"),(int,float)) or not math.isfinite(float(row["value"])): reason="insufficient evidence"
-    elif float(row["value"])<0: reason="insufficient evidence"
-    elif not spec: reason="taxonomy unsupported"
+    validation=validate_measurement(row,decision)
+    labels={"visibility_timestamp_missing":"timestamps missing or unreliable",
+      "not_visible_at_decision":"post-decision evidence only","measurement_nature_duration":"invalid duration/instant nature",
+      "source_unit_not_usd":"incompatible unit or currency","unit_currency_contradiction":"incompatible unit or currency",
+      "currency_ambiguous":"incompatible unit or currency","scale_not_lossless":"incompatible unit or currency",
+      "taxonomy_not_supported":"taxonomy unsupported","concept_not_contractual":"taxonomy unsupported",
+      "value_nonfinite_or_invalid":"insufficient evidence","value_negative":"insufficient evidence","period_stale":"stale period"}
+    reason=None if validation["accepted"] else labels[validation["reason_code"]]
     end=row.get("period_end") or row.get("instant_date")
-    if not reason and end and (decision.date()-end).days>STALE_DAYS: reason="stale period"
     taxonomy=str(row.get("taxonomy") or "unknown")
     version=row.get("taxonomy_version")
     if version is None and "-" in taxonomy: version=taxonomy.rsplit("-",1)[-1]
     return {"exact_concept":concept,"taxonomy":taxonomy,"taxonomy_version":version,
       "balance_type":row.get("balance_type") or "unknown_not_stored","period_nature":_nature(row),
-      "expected_unit":"USD","observed_unit":row.get("unit"),"currency":row.get("currency"),"scale":_scale(row),
+      "expected_unit":"USD","observed_unit":row.get("unit"),"currency":validation["canonical_currency"],"source_currency":row.get("currency"),"scale":_scale(row),
       "sign":"negative" if isinstance(row.get("value"),(int,float)) and row["value"]<0 else "nonnegative",
       "value":row.get("value"),"period_end":str(end) if end else None,"form":row.get("form"),
       "accession_or_filing_reference":_accession(row),"public_at":str(row.get("public_at") or "") or None,
       "retrieval_at":str(row.get("retrieved_at") or "") or None,"canonical_availability_at":str(available) if available else None,
       "relationship":spec["relationship"] if spec else "incompatible","proposed_canonical_field":spec["canonical_field"] if spec else None,
       "confidence":spec["confidence"] if spec else "none","accepted":reason is None,
-      "acceptance_or_withholding_reason":"passes exact semantic, point-in-time, unit, currency, scale, sign and instant checks" if reason is None else reason}
+      "acceptance_or_withholding_reason":"passes exact semantic, point-in-time, unit, currency, scale, sign and instant checks" if reason is None else reason,
+      "reason_code":validation["reason_code"],"validator_version":validation["validator_version"],
+      "evidence_identity":validation["evidence_identity"],"validation":validation,
+      "_source_database":row.get("_source_database"),"_source_table":row.get("_source_table")}
 
 def _compatible(*items):
     return bool(items) and all(x and x["accepted"] for x in items) and len({(x["period_end"],x["currency"],str(x["scale"])) for x in items})==1
@@ -158,19 +154,32 @@ def _load(research_db,production_db,decision_at):
     validate_paths(research_db,production_db); before=(fingerprint(research_db),fingerprint(production_db))
     with duckdb.connect(str(research_db),read_only=True) as r, duckdb.connect(str(production_db),read_only=True) as p:
         canonical=_rows(r,"canonical_factor_evidence"); classifications=_rows(r,"security_classification_evidence")
-        raw=_rows(r,"sec_facts")+_rows(p,"sec_facts")
+        raw=[]
+        for database,db in (("research",r),("production",p)):
+            for item in _rows(db,"sec_facts"):
+                item={**item,"_source_database":database,"_source_table":"sec_facts"}; raw.append(item)
         population=_companies(canonical,classifications,decision)
         # Raw evidence is authoritative for discovery. Canonical rows supplement it
         # only when no raw row with the same stable observation identity exists.
-        seen={(str(x.get("security_id")),_concept(x),str(x.get("period_end")),str(_accession(x))) for x in raw}
-        rows=raw+[x for x in canonical if (str(x.get("security_id")),_concept(x),str(x.get("period_end") or x.get("instant_date")),str(_accession(x))) not in seen]
+        unique={}
+        for item in raw: unique.setdefault(evidence_identity(item),item)
+        raw=list(unique.values())
+        seen={evidence_identity(x) for x in raw}
+        canonical=[{**x,"_source_database":"research","_source_table":"canonical_factor_evidence",
+          "taxonomy":x.get("taxonomy") or "us-gaap","concept":_concept(x)} for x in canonical]
+        rows=raw+[x for x in canonical if evidence_identity(x) not in seen]
         companies=[_company(sid,sym,rows,decision) for sid,sym in population]
     after=(fingerprint(research_db),fingerprint(production_db))
     if before!=after:raise InvestmentResearchError("database changed during read-only audit")
-    return decision,companies,{"research_unchanged":True,"production_unchanged":True,"verified":True}
+    return decision,companies,{"research_unchanged":True,"production_unchanged":True,"verified":True,
+      "before":{"research":before[0],"production":before[1]},
+      "after":{"research":after[0],"production":after[1]}}
 
 def _base(command,decision,immutability,maximum):
-    return {"command":command,"decision_at":decision.isoformat(),"read_only":True,"discovery_rule":{"version":DISCOVERY_RULE_VERSION,"rule":"exact case-sensitive allow-list plus exact names containing a bounded liquidity token; token discoveries remain withheld until semantic validation","tokens":TOKENS.pattern},"bounds":_bounds(maximum),"database_immutability":immutability,"labels":TRACK_B_LABELS,**ZERO_OUTPUTS}
+    return {"command":command,"decision_at":decision.isoformat(),"read_only":True,
+      "liquidity_measurement_validator_version":VALIDATOR_VERSION,
+      "consumer_semantics":"all unit, currency, scale, period and visibility decisions come from validate_measurement",
+      "discovery_rule":{"version":DISCOVERY_RULE_VERSION,"rule":"exact case-sensitive allow-list plus exact names containing a bounded liquidity token; token discoveries remain withheld until semantic validation","tokens":TOKENS.pattern},"bounds":_bounds(maximum),"database_immutability":immutability,"labels":TRACK_B_LABELS,**ZERO_OUTPUTS}
 def _finish(report,maximum):
     report["compact_utf8_bytes"]=0
     for _ in range(3):report["compact_utf8_bytes"]=compact_utf8_size(report)
