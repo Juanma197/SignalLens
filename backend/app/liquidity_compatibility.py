@@ -82,6 +82,11 @@ def compatibility_audit(*,research_db,production_db,decision_at):
     return _finish(report)
 
 def plan_canonical_materialization(*,research_db,production_db,decision_at):
+    # Kept here as the public import for backwards compatibility; the versioned
+    # capability-token implementation lives with the controlled operation.
+    from .liquidity_materialization import plan
+    return plan(research_db=research_db,production_db=production_db,decision_at=decision_at)
+def _legacy_plan_canonical_materialization(*,research_db,production_db,decision_at):
     decision,companies,observations,accepted,reconciliation,immutability=_snapshot(research_db,production_db,decision_at)
     reconciled=all(x["reconciled"] for x in reconciliation.values())
     proposed=[]

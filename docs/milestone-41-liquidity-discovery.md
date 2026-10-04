@@ -690,8 +690,97 @@ stable evidence keys, source-provenance requirements, database fingerprints, a
 content-derived identifier, expiry, blockers and bounded samples. It performs zero
 writes and provider requests, activates zero aliases, and creates no ranking,
 candidate, recommendation, selection, vintage, model output or validation credit.
-There is deliberately no apply command in this milestone. A reconciliation mismatch
-blocks readiness.
+The subsequent controlled operation adds apply without changing this validator or
+activating aliases. A reconciliation mismatch blocks readiness.
+
+## Milestones 42–44: controlled canonical materialization
+
+The 2026-10-04 21:30 UTC operator audit completed with 187 shared observations
+(61 current assets, 61 current liabilities and 65 unrestricted cash) for 69
+companies, no blockers, no requests and unchanged databases. The remaining ten
+broader/non-current aggregates, four stale cash facts, one non-USD cash fact, one
+absent cash fact, historical stale observations and one negative current-assets
+observation stay withheld.
+
+`liquidity_canonical_materialization` contract `1.0.0` binds its SHA-256 contract
+document, validator `liquidity-measurement-validator-1.0.0`, exact fields and concept
+mappings, normalization/scale/timestamp rules, evidence-key algorithm and write
+schema into every plan and revision. The `lcm1` token is canonical JSON plus its
+SHA-256 digest. It binds issue/expiry and decision times, both file fingerprints,
+operation and validator identities, the ordered evidence-key set and digest, exact
+field/company/observation counts, and successful reconciliation. Its 24-hour
+lifetime is measured from the encoded `issued_at`; validation never refreshes that
+instant, avoiding the former apply-time-clock defect.
+
+Apply requires this exact, case-sensitive phrase:
+
+`I AUTHORIZE RESEARCH-ONLY CANONICAL LIQUIDITY MATERIALIZATION`
+
+All preflight checks precede the writable research connection. Production remains
+read-only and is fingerprinted before and after. Revisions, manifests and failures
+are operation-specific; retrying the identical plan inserts zero revisions and
+reports all as unchanged. A conflicting key refuses rather than overwrites. Schema,
+lock, manifest and evidence writes share one DuckDB transaction, so any escaping
+error removes schema and data changes. Neither backup creation nor deletion is
+automatic.
+
+Capacity is conservative: **required free bytes = 2 × research file bytes + 512
+MiB**. For the approximately 1.45 GB operator database, first create and verify an
+offline operator-managed backup, then ensure the plan reports
+`capacity_sufficient=true`. This reserves room for the original file, DuckDB
+transaction/WAL behavior, and safety margin.
+
+### Exact post-merge PowerShell materialization workflow
+
+```powershell
+git switch main
+git pull --ff-only
+$Decision = "2026-10-04T21:30:00+00:00"
+$Research = "C:\SignalLens Data\research.duckdb"
+$Production = "C:\SignalLens Data\production.duckdb"
+$Authorization = "I AUTHORIZE RESEARCH-ONLY CANONICAL LIQUIDITY MATERIALIZATION"
+$ProductionBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+
+# Operator creates and verifies an offline backup here; SignalLens does not do so.
+Push-Location backend
+$Plan = python -m app.investment_research_cli plan-liquidity-canonical-materialization `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" | ConvertFrom-Json
+python -m app.investment_research_cli validate-liquidity-canonical-materialization-plan `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" `
+  --plan-identifier $Plan.plan_identifier
+python -m app.investment_research_cli apply-liquidity-canonical-materialization `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" `
+  --plan-identifier $Plan.plan_identifier --authorization $Authorization
+python -m app.investment_research_cli liquidity-canonical-materialization-status `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision"
+
+foreach ($Report in @("liquidity-measurement-compatibility-audit",`
+ "liquidity-raw-canonical-inventory","liquidity-evidence-discovery",`
+ "liquidity-contract-assessment","financial-strength-contract-assessment",`
+ "track-b-panel-feasibility")) {
+  python -m app.investment_research_cli $Report --research-db "$Research" `
+    --production-db "$Production" --decision-at "$Decision"
+}
+Pop-Location
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash -ne $ProductionBefore) {
+  throw "Production immutability failed"
+}
+```
+
+After verifying the named run is not active and is older than 30 minutes, recover
+only its exact canonical-liquidity lock (never a legacy or SEC-ingestion lock):
+
+```powershell
+python -m app.investment_research_cli recover-stale-liquidity-canonical-materialization-lock `
+  --research-db "$Research" --production-db "$Production" --decision-at "$Decision" `
+  --run-id "<exact-status-run-id>" --authorization $Authorization
+```
+
+Re-plan after recovery if the token expired or either source changed. Do not reuse a
+failed/mismatched plan. Verification should show compatible canonical facts and
+greater ratio coverage only where inputs coexist; it must leave the listed rejected
+facts withheld and grant zero ranking, selection, recommendation, vintage or
+validation credit.
 
 ### Exact post-merge read-only commands
 
