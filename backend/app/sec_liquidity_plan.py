@@ -15,7 +15,7 @@ from .model_readiness import fingerprint
 
 CONCEPTS = tuple(STANDARD_CONCEPTS)
 DEFAULT_REQUEST_BUDGET = 205
-PLAN_LIFETIME = timedelta(days=7)
+PLAN_LIFETIME = timedelta(minutes=15)
 SAMPLE_LIMIT = 10
 ARTIFACT_TABLES = ("sec_companyfacts_payloads", "sec_provider_payloads")
 
@@ -78,12 +78,16 @@ def plan_sec_liquidity_evidence_ingestion(*, research_db: Path, production_db: P
     blockers=[]
     if unmapped: blockers.append("UNMAPPED_ISSUER_IDENTITY")
     if estimate>max_request_budget: blockers.append("REQUEST_BUDGET_EXCEEDED")
-    generated=(generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    # Minute precision gives an operator enough time to copy the identifier into
+    # apply while still making an old displayed plan distinguishable.
+    generated=(generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(second=0,microsecond=0)
     expires=generated+PLAN_LIFETIME
     identity={"decision_at":decision.isoformat(),"fingerprints":immutability["before"],
               "companies":requiring,"mapped_ciks":sorted(mapped.values()),"concepts":CONCEPTS,
               "estimated_requests":estimate,"request_budget":max_request_budget}
-    plan_id=hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
+    identity["plan_generated_at"]=generated.isoformat()
+    digest=hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
+    plan_id=f"{int(generated.timestamp())}:{digest}"
     report={"command":"plan-sec-liquidity-evidence-ingestion","read_only":True,
       "decision_at":decision.isoformat(),"plan_identifier":plan_id,"plan_generated_at":generated.isoformat(),"plan_expires_at":expires.isoformat(),
       "status":"blocked" if blockers else "ready","blocker_codes":blockers,
@@ -100,7 +104,7 @@ def plan_sec_liquidity_evidence_ingestion(*, research_db: Path, production_db: P
       "expected_destination_tables":["sec_issuers","sec_filings","sec_facts","sec_ingestion_runs","sec_checkpoints","sec_failures","sec_raw_response_provenance"],
       "anticipated_canonical_materialization":"separate post-ingestion, point-in-time raw-versus-canonical reconciliation; no automatic alias or extension authorization",
       "database_fingerprints":immutability,"provider_requests":0,"database_writes":0,
-      "apply_contract":{"implemented":False,"authorization_phrase":"I AUTHORIZE RESEARCH-ONLY SEC LIQUIDITY EVIDENCE INGESTION",
+      "apply_contract":{"implemented":True,"authorization_phrase":"I AUTHORIZE RESEARCH-ONLY SEC LIQUIDITY EVIDENCE INGESTION",
         "requirements":["immediately preceding unexpired database-bound plan identifier","matching research and production fingerprints","explicit maximum-request budget","research-only writes","bounded rate and retries","durable issuer checkpoints","raw response provenance and filed/public/retrieved timestamps","restart-safe persistence","unchanged production verification","post-ingestion reconciliation"]},
       "bounds":{"sample_limit":SAMPLE_LIMIT,"maximum_compact_utf8_bytes":AGGREGATE_MAXIMUM_BYTES},**ZERO_OUTPUTS}
     report["compact_utf8_bytes"]=compact_utf8_size(report)

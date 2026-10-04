@@ -330,25 +330,87 @@ if ($BeforeResearch -ne $AfterResearch -or $BeforeProduction -ne $AfterProductio
 }
 ```
 
-### Separate future apply/replay authorization boundary
+### Controlled plan, apply, and status workflow (Milestones 41–43)
 
-No live apply command is implemented or authorized by this milestone. A future
-`apply-sec-liquidity-evidence-ingestion` must accept only the immediately
-preceding unexpired database-bound plan identifier, matching expected research
-and production fingerprints, the exact case-sensitive phrase
-`I AUTHORIZE RESEARCH-ONLY SEC LIQUIDITY EVIDENCE INGESTION`, and an explicit
-maximum-request budget. It must enforce bounded request rate/retries, write only
-research tables, durably checkpoint each issuer, retain original response
-provenance and filed/public/retrieved timestamps, persist transactionally or
-restart-safely, verify production unchanged, and run raw-versus-canonical
-reconciliation afterward.
+The canonical budget option is **`--max-request-budget`**. There is no
+`--max-requests` alias for these liquidity commands. Generate a **fresh plan
+immediately before apply**: plan identifiers are database-, decision-, budget-,
+population-, and generation-time-bound and expire after 15 minutes. Never reuse
+the earlier displayed operator plan. The expected current workload is 71 issuers
+and 142 attempted requests (submissions plus Company Facts); retries also count
+against the 205-request ceiling.
 
-A future offline replay must be separately planned and authorized. It must hash
-and bind artifact identity, preserve original facts, insert idempotently without
-overwrite, retain artifact provenance, never synthesize availability times, and
-label replay separately from newly retrieved evidence. Absence of a recognized
-complete artifact is a replay-unavailable result, not permission to reconstruct
-one from normalized rows.
+Back up both databases first and retain their SHA-256 values. Apply opens
+production read-only, mutates only research, operates sequentially with a
+descriptive contact-bearing `SIGNALLENS_SEC_USER_AGENT`, refuses redirects and
+non-`data.sec.gov` hosts, paces requests, and applies bounded exponential retry
+with jitter only to transient network/HTTP failures. It bounds connect/read
+timeouts, response bytes, content type, JSON shape, and exact response CIK.
+
+```powershell
+git switch main
+git pull --ff-only
+$Decision = "2026-10-02T18:15:00+00:00"
+$Research = "C:\SignalLens Data\research.duckdb"
+$Production = "C:\SignalLens Data\production.duckdb"
+$Authorization = "I AUTHORIZE RESEARCH-ONLY SEC LIQUIDITY EVIDENCE INGESTION"
+$env:SIGNALLENS_SEC_USER_AGENT = "SignalLens research operations ops@example.com"
+Copy-Item -LiteralPath $Research -Destination "$Research.pre-sec-liquidity.bak"
+Copy-Item -LiteralPath $Production -Destination "$Production.pre-sec-liquidity.bak"
+$ResearchBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$ProductionBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+
+Push-Location backend
+$PlanJson = python -m app.sec_ingestion_cli plan-sec-liquidity-evidence-ingestion `
+  --research-db $Research --production-db $Production --decision-at $Decision `
+  --max-request-budget 205
+$Plan = $PlanJson | ConvertFrom-Json
+if ($Plan.status -ne "ready") { throw "SEC liquidity plan is not ready" }
+
+python -m app.sec_ingestion_cli apply-sec-liquidity-evidence-ingestion `
+  --research-db $Research --production-db $Production --decision-at $Decision `
+  --plan-identifier $Plan.plan_identifier --max-request-budget 205 `
+  --authorization $Authorization
+
+python -m app.sec_ingestion_cli sec-liquidity-evidence-ingestion-status `
+  --research-db $Research --production-db $Production --decision-at $Decision
+Pop-Location
+
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash -ne $ProductionBefore) {
+  throw "Production immutability invariant failed"
+}
+```
+
+Every completed issuer is committed atomically with two bounded raw-provenance
+artifacts and a durable checkpoint. A partial/exhausted run keeps completed
+issuers; generate another fresh plan and apply it to continue only incomplete
+issuers. Evidence keys make repeated responses and facts idempotent. Unknown and
+issuer-extension concepts remain only in the retained raw JSON. A filing date is
+not treated as an exact public timestamp; observations without a defensible SEC
+acceptance timestamp are withheld from normalized point-in-time use.
+
+An active operation lock fails closed. If status calls it stale, first confirm
+that the recorded process is gone, preserve a database backup, inspect the run
+and checkpoint counts, then explicitly run (using the exact stale run ID):
+
+```powershell
+python -m app.sec_ingestion_cli recover-stale-sec-liquidity-ingestion-lock `
+  --research-db $Research --production-db $Production --run-id "<stale-run-id>" `
+  --authorization "I AUTHORIZE RESEARCH-ONLY SEC LIQUIDITY EVIDENCE INGESTION"
+```
+
+Recovery marks a still-running row partial and removes only that verified stale
+lock; it never deletes evidence or checkpoints. To roll back operator ingestion,
+stop all writers, preserve the failed database for audit, restore the research
+backup, verify both saved hashes, and leave production untouched.
+
+After completion or a partial run, use status with `--decision-at`, then run the
+four read-only reconciliation commands: `liquidity-raw-canonical-inventory`,
+`liquidity-evidence-gap-assessment`, `liquidity-evidence-discovery`, and
+`liquidity-contract-assessment`. Review compatible facts awaiting canonical
+materialization, genuinely absent concepts, stale/incompatible/post-decision
+facts, issuer extensions, and remaining failures separately. Ingestion never
+activates aliases and never materializes canonical evidence automatically.
 
 Track A remains `prospective-us-dilution-1.0.0` with configuration hash
 `7b11264778fd120c03c820275d9c048d002bdb8564510fcf989cb590ce1b7ebd`.
