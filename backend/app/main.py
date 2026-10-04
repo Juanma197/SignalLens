@@ -75,6 +75,8 @@ from .investment_research import (coverage_audit, execution_cost_capability,
     comparable_universe_readiness, company_factor_preview)
 from .investment_evidence import (status as investment_evidence_status,
                                    enrichment_plan as investment_enrichment_plan)
+from .liquidity_evidence import (aggregate_evidence_discovery as liquidity_evidence_discovery,
+    contract_assessment as liquidity_contract_assessment)
 from .financial_strength import (aggregate_evidence_audit as financial_strength_evidence_audit,
                                   contract_assessment as financial_strength_contract_assessment)
 
@@ -266,6 +268,21 @@ def financial_strength_audit_api(decision_at: datetime = Query(...)) -> dict:
 def financial_strength_contract_api(decision_at: datetime = Query(...)) -> dict:
     """Authenticated, bounded accounting-contract feasibility assessment."""
     return _redacted(lambda: financial_strength_contract_assessment(
+        research_db=settings.research_database_path, production_db=settings.database_path,
+        decision_at=decision_at))
+
+
+@app.get("/api/v1/research/liquidity-evidence-discovery")
+def liquidity_evidence_discovery_api(decision_at: datetime = Query(...)) -> dict:
+    """Authenticated aggregate-only exact-concept discovery."""
+    return _redacted(lambda: liquidity_evidence_discovery(
+        research_db=settings.research_database_path, production_db=settings.database_path,
+        decision_at=decision_at))
+
+@app.get("/api/v1/research/liquidity-contract-assessment")
+def liquidity_contract_assessment_api(decision_at: datetime = Query(...)) -> dict:
+    """Authenticated aggregate-only liquidity contract counterfactual."""
+    return _redacted(lambda: liquidity_contract_assessment(
         research_db=settings.research_database_path, production_db=settings.database_path,
         decision_at=decision_at))
 
