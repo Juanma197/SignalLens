@@ -11,7 +11,8 @@ from typing import Any
 import duckdb
 
 from .financial_strength import AGGREGATE_MAXIMUM_BYTES, ZERO_OUTPUTS, compact_utf8_size
-from .liquidity_inventory import FIELDS, STANDARD_CONCEPTS, _classify, _decision, _load
+from .liquidity_inventory import (FIELDS, STANDARD_CONCEPTS, _classify, _decision,
+    _load, completed_liquidity_retrieval_security_ids)
 from .model_readiness import fingerprint
 from .sec_liquidity_contract import operation_identity
 
@@ -118,7 +119,10 @@ def plan_sec_liquidity_evidence_ingestion(*, research_db: Path, production_db: P
         artifacts=_artifact_ciks(r)|_artifact_ciks(p)
     replay_ids={sid for sid,cik in mapped.items() if sid in requiring_ids and cik in artifacts}
     replay=sorted(symbols[sid] for sid in replay_ids)
-    live=sorted(symbols[sid] for sid in mapped if sid in requiring_ids and sid not in replay_ids)
+    completed_ids=completed_liquidity_retrieval_security_ids(research_db) & requiring_ids
+    completed=sorted(symbols[sid] for sid in completed_ids)
+    live=sorted(symbols[sid] for sid in mapped if sid in requiring_ids and sid not in replay_ids
+                and sid not in completed_ids)
     estimate=2*len(live) # one submissions and one Company Facts request per mapped issuer
     blockers=[]
     if unmapped: blockers.append("UNMAPPED_ISSUER_IDENTITY")
@@ -143,6 +147,8 @@ def plan_sec_liquidity_evidence_ingestion(*, research_db: Path, production_db: P
       "companies_requiring_ingestion":{"count":len(requiring),"samples":_bounded(requiring)},
       "offline_replay":{"available":bool(replay),"company_count":len(replay),"samples":_bounded(replay),
         "recognized_tables":list(ARTIFACT_TABLES),"identity_requirement":"exact CIK plus retained non-empty original payload"},
+      "previously_completed_retrieval":{"company_count":len(completed),"samples":_bounded(completed),
+        "semantics":"matching isolated checkpoint and both retained endpoint payloads; no repeat provider request"},
       "live_sec_retrieval":{"company_count":len(live),"samples":_bounded(live),
         "estimated_request_count":estimate,"estimate_formula":"2 x live companies (submissions + Company Facts)"},
       "request_budget_ceiling":max_request_budget,

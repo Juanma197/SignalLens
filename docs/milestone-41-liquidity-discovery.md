@@ -595,3 +595,35 @@ Pop-Location
 This repair changes no Track A configuration or behavior and authorizes no model
 output, score, candidate, ranking, recommendation, selection, vintage, or
 validation credit.
+This repair changes no Track A configuration or behavior and authorizes no model
+output, score, candidate, ranking, recommendation, selection, vintage, or
+validation credit.
+
+## Post-ingestion reconciliation evidence
+
+The operator subsequently ran all four read-only reconciliation commands. Each
+exited zero, each error log was empty, and SHA-256 checks confirmed that both
+databases remained byte-for-byte unchanged. The reports showed 191 raw field
+observations withheld correctly, consisting of 61 post-decision current-assets
+observations, 61 post-decision current-liabilities observations, and 69
+post-decision unrestricted-cash observations. This is expected: evidence retrieved
+on October 4 cannot be made available to the October 2 decision without introducing
+look-ahead. Retrieval does not rewrite historical availability, even when the SEC
+filing itself was public earlier.
+
+The reports also found 12 exact concepts absent from retained raw storage: current
+liabilities for ten companies and unrestricted cash for two. Ten companies require
+accounting review, including broader aggregates that must not be silently treated as
+current assets. No alias was activated, no canonical evidence was materialized, all
+contract coverage remained zero, and Track A and all prohibited model outputs
+remained unchanged.
+
+A completed controlled retrieval is now reported separately from an unattempted
+ingestion gap. `requiring_new_sec_ingestion` excludes a security only when its exact
+isolated checkpoint links to its controlled run and to retained provenance for both
+SEC endpoint classes. An absent concept after that proof is reported under
+`completed_retrieval_concept_absent`; it does **not** recommend repeating the same
+provider requests. Fresh plans likewise assign zero live requests to those proven
+completed securities. Legacy SEC runs, checkpoints, failures, or payloads do not
+qualify. Post-decision facts remain withheld for the October 2 boundary and may be
+evaluated only under a separately approved later decision boundary.

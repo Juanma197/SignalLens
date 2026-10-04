@@ -54,6 +54,33 @@ def _columns(db, table):
     if table not in _tables(db): return []
     return [row[1] for row in db.execute(f"PRAGMA table_info('{table}')").fetchall()]
 
+def completed_liquidity_retrieval_security_ids(research_db: Path) -> set[str]:
+    """Find exact controlled checkpoints backed by both retained endpoint payloads."""
+    with duckdb.connect(str(research_db),read_only=True) as db:
+        required={"sec_liquidity_runs","sec_liquidity_checkpoints","sec_liquidity_raw_provenance"}
+        if not required <= _tables(db): return set()
+        identity={"run_id","lineage_id","plan_id","operation_type",
+                  "operation_contract_version","concept_contract_hash"}
+        if not identity <= set(_columns(db,"sec_liquidity_runs")): return set()
+        if not identity|{"security_id","cik","status","transaction_succeeded"} <= set(_columns(db,"sec_liquidity_checkpoints")): return set()
+        if not identity|{"security_id","cik","endpoint_class"} <= set(_columns(db,"sec_liquidity_raw_provenance")): return set()
+        rows=db.execute("""SELECT c.security_id
+          FROM sec_liquidity_checkpoints c
+          JOIN sec_liquidity_runs r ON r.run_id=c.run_id AND r.lineage_id=c.lineage_id
+            AND r.plan_id=c.plan_id AND r.operation_type=c.operation_type
+            AND r.operation_contract_version=c.operation_contract_version
+            AND r.concept_contract_hash=c.concept_contract_hash
+          JOIN sec_liquidity_raw_provenance p ON p.run_id=c.run_id
+            AND p.lineage_id=c.lineage_id AND p.plan_id=c.plan_id
+            AND p.security_id=c.security_id AND p.cik=c.cik
+            AND p.operation_type=c.operation_type
+            AND p.operation_contract_version=c.operation_contract_version
+            AND p.concept_contract_hash=c.concept_contract_hash
+          WHERE c.operation_type='sec_liquidity_evidence_ingestion'
+            AND c.status='completed' AND c.transaction_succeeded=true
+          GROUP BY c.security_id HAVING count(DISTINCT p.endpoint_class)=2""").fetchall()
+    return {str(row[0]) for row in rows}
+
 def _source_catalog(r, p):
     definitions = (
       ("research", "sec_facts", "raw", "SEC companyfacts observations"),
@@ -154,6 +181,7 @@ def _load(research_db,production_db,decision_at):
 
 def _report(command,research_db,production_db,decision_at):
     decision,population,raw,canonical,issuers,sources,immutability=_load(research_db,production_db,decision_at)
+    completed_retrieval=completed_liquidity_retrieval_security_ids(Path(research_db))
     counts={f:{s:0 for s in STATES} for f in FIELDS}; samples={f:{s:[] for s in STATES} for f in FIELDS}; details=[]
     for sid,symbol in population:
         states={}
@@ -165,7 +193,9 @@ def _report(command,research_db,production_db,decision_at):
     # These are independent company-level issue flags, not a partition.  In
     # particular, one absent field is enough to require ingestion even when a
     # different field has broader evidence that requires accounting review.
-    ingestion=sorted(d["qualified_symbol"] for d in details if "no_relevant_raw_or_canonical_fact" in d["fields"].values())
+    absent=[d for d in details if "no_relevant_raw_or_canonical_fact" in d["fields"].values()]
+    ingestion=sorted(d["qualified_symbol"] for d in absent if d["security_id"] not in completed_retrieval)
+    exhausted=sorted(d["qualified_symbol"] for d in absent if d["security_id"] in completed_retrieval)
     review_states={"issuer_extension_review_required","conflicting_visible_facts",
                    "raw_fact_incompatible_unit","raw_fact_incompatible_duration",
                    "raw_fact_stale","only_broader_aggregate_exists"}
@@ -182,11 +212,13 @@ def _report(command,research_db,production_db,decision_at):
       "company_field_reconciliation":{"raw_compatible_facts_already_materialized":pair_counts["compatible_canonical_fact_visible"],"raw_compatible_facts_omitted_from_materialization":pair_counts["compatible_raw_fact_not_materialized"],"raw_facts_withheld_correctly":sum(pair_counts[x] for x in ("compatible_raw_fact_post_decision","raw_fact_incompatible_unit","raw_fact_incompatible_duration","raw_fact_stale")),"concepts_absent_from_raw_storage":pair_counts["no_relevant_raw_or_canonical_fact"]},
       "company_reconciliation":{"semantics":"independent issue flags; counts may overlap",
         "requiring_new_sec_ingestion":{"count":len(ingestion),"samples":_bounded(ingestion,SAMPLE_LIMIT)},
+        "completed_retrieval_concept_absent":{"count":len(exhausted),"samples":_bounded(exhausted,SAMPLE_LIMIT),
+          "semantics":"both controlled SEC endpoints were retained successfully; another identical retrieval is not indicated"},
         "requiring_accounting_review":{"count":len(review),"samples":_bounded(review,SAMPLE_LIMIT)},
         "requiring_canonical_materialization":{"count":len(materialization),"samples":_bounded(materialization,SAMPLE_LIMIT)},
         "identity_failures":{"count":len(identity),"samples":_bounded(identity,SAMPLE_LIMIT)}},
       "materialization_defect":"compatible exact standard raw facts exist but no usable canonical row for the same security and canonical field" if pair_counts["compatible_raw_fact_not_materialized"] else None,
-      "ingestion_gap":"exact required standard concept is absent from both raw SEC stores and canonical evidence at the decision boundary" if pair_counts["no_relevant_raw_or_canonical_fact"] else None,
+      "ingestion_gap":"exact required standard concept is absent and no completed controlled retrieval exists" if ingestion else None,
       "company_samples":_bounded(details,SAMPLE_LIMIT),"database_immutability":immutability,"bounds":_bounds(AGGREGATE_MAXIMUM_BYTES),"labels":TRACK_B_LABELS,**ZERO_OUTPUTS}
     report["compact_utf8_bytes"]=0
     for _ in range(3):report["compact_utf8_bytes"]=compact_utf8_size(report)
