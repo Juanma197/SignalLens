@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .sec_ingestion import (AUTHORIZATION_PHRASE, IngestionLimits, ingest, plan,
                             status)
+from .sec_liquidity_plan import plan_sec_liquidity_evidence_ingestion
 
 
 def parser() -> argparse.ArgumentParser:
@@ -14,6 +15,9 @@ def parser() -> argparse.ArgumentParser:
     commands=root.add_subparsers(dest="command",required=True)
     for name in ("plan-sec-ingestion","sec-ingestion-status"):
         command=commands.add_parser(name); _paths(command)
+    liquidity=commands.add_parser("plan-sec-liquidity-evidence-ingestion"); _paths(liquidity)
+    liquidity.add_argument("--decision-at",required=True)
+    liquidity.add_argument("--max-request-budget",type=int,default=205)
     for name in ("ingest-sec-fundamentals","retry-sec-failures"):
         command=commands.add_parser(name); _paths(command)
         command.add_argument("--authorization",help=f"exactly: {AUTHORIZATION_PHRASE}")
@@ -34,6 +38,10 @@ def _paths(command: argparse.ArgumentParser) -> None:
 
 
 def execute(args: argparse.Namespace) -> dict:
+    if args.command=="plan-sec-liquidity-evidence-ingestion":
+        return plan_sec_liquidity_evidence_ingestion(research_db=args.research_db,
+            production_db=args.production_db,decision_at=args.decision_at,
+            max_request_budget=args.max_request_budget)
     if args.command=="plan-sec-ingestion": return plan(args.research_db,args.production_db)
     if args.command=="sec-ingestion-status": return status(args.research_db,args.production_db)
     fixture=json.loads(args.fixture.read_text(encoding="utf-8")) if args.fixture else None
