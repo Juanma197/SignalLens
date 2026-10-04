@@ -20,8 +20,14 @@ from .sec_ingestion import validate_paths
 from .investment_research import InvestmentResearchError, TRACK_B_LABELS
 
 ALIAS_CONTRACT_VERSION = "financial-strength-alias-contract-1.0.0"
-MAX_COMPANIES = 100
-MAX_CONCEPT_SAMPLES = 10
+COMPANY_SAMPLE_LIMIT = 10
+SYMBOL_SAMPLE_LIMIT = 10
+CONCEPT_SAMPLE_LIMIT = 10
+OBSERVATIONS_PER_FIELD_LIMIT = 3
+CITATION_LIMIT = 10
+AGGREGATE_MAXIMUM_BYTES = 512 * 1024
+CONTRACT_MAXIMUM_BYTES = 256 * 1024
+PREVIEW_MAXIMUM_BYTES = 256 * 1024
 INTEREST_GAP_REASONS = ("no_interest_related_facts_stored",
  "facts_exist_under_unsupported_concepts","usable_facts_exist_but_were_not_mapped",
  "facts_use_incompatible_units","facts_are_post_decision",
@@ -146,7 +152,34 @@ def _companies(canonical, classifications, decision):
     # evidence then defines the bounded audit population, never an inferred class.
     if not allowed and not classifications:
         allowed={(str(r.get("security_id")),str(r.get("qualified_symbol") or "")) for r in canonical}
-    return sorted(allowed,key=lambda x:(x[1],x[0]))[:MAX_COMPANIES]
+    # This is the complete population.  Bounds belong on returned detail, never
+    # on the population used for aggregate accounting.
+    return sorted(allowed,key=lambda x:(x[1],x[0]))
+
+def _bounded(items, limit):
+    values=list(items); returned=values[:limit]
+    return {"items":returned,"total_count":len(values),"returned_count":len(returned),
+            "sample_limit":limit,"truncated":len(values)>len(returned)}
+
+def _bounds(maximum):
+    return {"company_sample_limit":COMPANY_SAMPLE_LIMIT,
+            "symbol_sample_limit":SYMBOL_SAMPLE_LIMIT,
+            "concept_sample_limit":CONCEPT_SAMPLE_LIMIT,
+            "observations_per_field_limit":OBSERVATIONS_PER_FIELD_LIMIT,
+            "citation_limit":CITATION_LIMIT,
+            "maximum_compact_utf8_bytes":maximum}
+
+def compact_utf8_size(payload):
+    """Size of Python's deterministic compact JSON, independent of shell encoding."""
+    return len(json.dumps(payload,sort_keys=True,separators=(",",":"),default=str).encode("utf-8"))
+
+def _within_contract(payload, maximum):
+    payload["compact_utf8_bytes"]=0
+    for _ in range(3):
+        payload["compact_utf8_bytes"]=compact_utf8_size(payload)
+    if payload["compact_utf8_bytes"]>maximum:
+        raise InvestmentResearchError("financial strength response exceeds size contract")
+    return payload
 
 def _observation(row, decision):
     concept=str(row.get("original_concept_or_field") or "")
@@ -257,14 +290,22 @@ def evidence_audit(*, research_db: Path, production_db: Path, decision_at: datet
         samples.setdefault(reason,[]).append(company["qualified_symbol"])
     coverage=Counter(f for c in companies for f in c["available_fields"])
     concept_counts=Counter(x["original_concept"] for c in companies for x in c["observations"])
-    return {"command":"financial-strength-evidence-audit","decision_at":decision.isoformat(),"read_only":True,
+    components=Counter(f"{name}:{state}" for c in companies for name,state in c["components"].items())
+    company_summaries=[{"security_id":c["security_id"],"qualified_symbol":c["qualified_symbol"],
+      "available_fields":c["available_fields"],"debt_state":c["debt_state"],
+      "components":c["components"],"missing_inputs":c["missing_inputs"],
+      "denominator_warnings":c["denominator_warnings"]} for c in companies]
+    report={"command":"financial-strength-evidence-audit","decision_at":decision.isoformat(),"read_only":True,
       "alias_contract_version":ALIAS_CONTRACT_VERSION,"comparable_company_count":len(companies),
       "field_coverage":{f:coverage[f] for f in AUDIT_FIELDS},
-      "concept_counts":dict(sorted(concept_counts.items())[:MAX_CONCEPT_SAMPLES]),
+      "concept_counts":dict(sorted(concept_counts.items())),
+      "component_counts":dict(sorted(components.items())),
       "interest_gap_diagnosis":{k:interest[k] for k in INTEREST_GAP_REASONS},
-      "interest_samples":{k:sorted(samples.get(k,[]))[:MAX_CONCEPT_SAMPLES] for k in INTEREST_GAP_REASONS},
-      "companies":companies,"bounds":{"max_companies":MAX_COMPANIES,"max_concept_samples":MAX_CONCEPT_SAMPLES},
+      "interest_samples":{k:_bounded(sorted(samples.get(k,[])),SYMBOL_SAMPLE_LIMIT) for k in INTEREST_GAP_REASONS},
+      "company_samples":_bounded(company_summaries,COMPANY_SAMPLE_LIMIT),
+      "bounds":_bounds(AGGREGATE_MAXIMUM_BYTES),
       "database_immutability":immutability,"labels":TRACK_B_LABELS,**ZERO_OUTPUTS}
+    return _within_contract(report,AGGREGATE_MAXIMUM_BYTES)
 
 def _contract_results(companies):
     result=Counter()
@@ -310,22 +351,52 @@ def contract_assessment(*, research_db: Path, production_db: Path, decision_at: 
     aggregate=Counter()
     for c in companies:
         for k,v in c["components"].items(): aggregate[f"{k}:{v}"]+=1
-    return {"command":"financial-strength-contract-assessment","decision_at":decision.isoformat(),"read_only":True,
+    report={"command":"financial-strength-contract-assessment","decision_at":decision.isoformat(),"read_only":True,
       "comparable_company_count":len(companies),"readiness_semantics":{"any_input_available":"at least one usable contracted field",
        "minimum_calculable":"at least one component is ready","component_level":"ready, not_applicable, or unavailable",
        "full_family_ready":"every component is ready or explicitly not_applicable; interest absence alone is never not-applicable"},
       "component_counts":dict(sorted(aggregate.items())),"metric_assessments":metrics,
       "candidate_contracts":_contract_results(companies),"contract_selected":None,
       "selection_prohibition":"No contract is selected by returns or sample size; accounting judgment remains required.",
+      "bounds":_bounds(CONTRACT_MAXIMUM_BYTES),
       "database_immutability":immutability,"labels":TRACK_B_LABELS,**ZERO_OUTPUTS}
+    return _within_contract(report,CONTRACT_MAXIMUM_BYTES)
+
+def _preview_company(company):
+    selected=_latest(company["observations"])
+    alternatives={}
+    for field in AUDIT_FIELDS:
+        chosen=selected.get(field)
+        candidates=[x for x in company["observations"] if x["canonical_field"]==field and x is not chosen]
+        # Most recent evidence first, with a final stable tie break.  Post-decision
+        # evidence is never exposed even as a conflict.
+        candidates=[x for x in candidates if x["withholding_reason"]!="post_decision_evidence"]
+        candidates.sort(key=lambda x:(str(x.get("period_end") or ""),str(x.get("available_at") or ""),
+                                     str(x.get("original_concept") or ""),str(x.get("source_filing") or "")),reverse=True)
+        if candidates: alternatives[field]=_bounded(candidates,OBSERVATIONS_PER_FIELD_LIMIT)
+    citations=sorted({str(x["source_filing"]) for x in [*selected.values(),
+      *(item for group in alternatives.values() for item in group["items"])] if x.get("source_filing")})
+    result={k:v for k,v in company.items() if k!="observations"}
+    result["selected_evidence"]={k:selected[k] for k in sorted(selected)}
+    result["alternative_observations"]={k:alternatives[k] for k in sorted(alternatives)}
+    result["citations"]=_bounded(citations,CITATION_LIMIT)
+    result["observation_population"]={"total_count":len(company["observations"]),
+      "returned_count":len(selected)+sum(x["returned_count"] for x in alternatives.values()),
+      "sample_limit":None,"truncated":len(company["observations"])>
+        len(selected)+sum(x["returned_count"] for x in alternatives.values())}
+    return result
 
 def company_preview(*, research_db: Path, production_db: Path, decision_at: datetime,
                     qualified_symbol: str) -> dict:
     decision,companies,_,immutability=_report(research_db=research_db,production_db=production_db,decision_at=decision_at)
     matches=[x for x in companies if x["qualified_symbol"]==qualified_symbol]
     if len(matches)!=1: raise InvestmentResearchError("company unavailable or ambiguous")
-    return {"command":"financial-strength-company-preview","decision_at":decision.isoformat(),"read_only":True,
-      "company":matches[0],"database_immutability":immutability,"labels":TRACK_B_LABELS,**ZERO_OUTPUTS}
+    report={"command":"financial-strength-company-preview","decision_at":decision.isoformat(),"read_only":True,
+      "company":_preview_company(matches[0]),"bounds":_bounds(PREVIEW_MAXIMUM_BYTES),
+      "database_immutability":immutability,"labels":TRACK_B_LABELS,**ZERO_OUTPUTS}
+    return _within_contract(report,PREVIEW_MAXIMUM_BYTES)
 
 def aggregate_evidence_audit(**kwargs):
-    report=evidence_audit(**kwargs); report.pop("companies",None); return report
+    # evidence_audit is already aggregate-only.  Keep a distinct API entry point
+    # so company preview semantics can never leak into the aggregate route.
+    return evidence_audit(**kwargs)
