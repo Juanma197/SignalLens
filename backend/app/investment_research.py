@@ -129,7 +129,18 @@ def _visible_canonical_rows(db, decision: datetime) -> list[dict[str,Any]]:
         completed=[_aware_for_preview(x[0]) for x in db.execute(
           "SELECT decision_at FROM canonical_unit_repair_runs WHERE status='completed' AND rule_version=?",
           [EPS_UNIT_RULE_VERSION]).fetchall()]
-    rows=[r for r in _rows(db,"canonical_factor_evidence")
+    canonical=_rows(db,"canonical_factor_evidence")
+    from .liquidity_materialization import CONTRACT_HASH
+    from .liquidity_resolution import resolve_canonical_liquidity
+    effective,_resolution=resolve_canonical_liquidity(raw_rows=_rows(db,"sec_facts"),
+      canonical_rows=canonical,revision_rows=_rows(db,"liquidity_canonical_materialization_revisions"),
+      run_rows=_rows(db,"liquidity_canonical_materialization_runs"),decision_at=decision,
+      contract_hash=CONTRACT_HASH)
+    controlled={str(r.get("evidence_key")) for r in canonical
+      if _json_dict(r.get("provenance")).get("operation_type")=="liquidity_canonical_materialization"}
+    canonical=[r for r in canonical if str(r.get("evidence_key")) not in controlled]
+    canonical.extend(r for r in effective if r.get("_canonical_revision"))
+    rows=[r for r in canonical
           if r.get("reliability_state")=="usable" and _visible(r,decision) is None
           and r.get("available_at") is not None
           and _aware_for_preview(r["available_at"])<=decision
@@ -166,7 +177,10 @@ class InvestmentResearchError(RuntimeError):
     reason_code = "INVESTMENT_RESEARCH_NOT_READY"
 
 def public_error_code(exc: Exception) -> str:
-    return exc.reason_code if isinstance(exc, InvestmentResearchError) else "INVESTMENT_RESEARCH_INTERNAL_ERROR"
+    # Domain readers may expose a stable, non-sensitive code without making
+    # their bounded internal diagnostics part of the public CLI contract.
+    code=getattr(exc,"reason_code",None)
+    return str(code) if code else "INVESTMENT_RESEARCH_INTERNAL_ERROR"
 
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
