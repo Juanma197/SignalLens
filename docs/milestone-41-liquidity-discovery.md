@@ -921,3 +921,152 @@ verify the offline backup hash again, and only then restore it with an
 operator-controlled atomic replacement. Stale-lock recovery is allowed only for
 the exact run ID reported by status, after the documented 30-minute threshold;
 then discard the old token and plan again.
+
+## Milestones 41–44 post-materialization consumer repair
+
+The controlled run `46ab3c8a-975a-45a5-b161-1d97ee4099e4` completed at about
+2026-10-05T00:18:22Z.  It inserted 187 append-only revisions for 69 companies:
+61 current-assets, 61 current-liabilities, and 65 unrestricted-cash observations.
+There were no unchanged rows or conflicts, no provider requests, and no model or
+validation output.  Production and the verified pre-apply backup remained byte
+identical and the operation lock was released.  This completed run is correct and
+must not be rolled back, rewritten, or repeated.
+
+At 2026-10-04T21:30:00Z the compatibility audit passed and withheld all 187 later
+revisions (`not_visible_at_decision` 61/61/65), with exact reconciliation and zero
+validation credit.  At 2026-10-05T00:30:00Z, compatibility audit, discovery, and
+contract assessment instead returned the redacted `INVESTMENT_RESEARCH_NOT_READY`.
+
+The failed invariant was in the consumer merge, not in materialization.  The raw
+SEC row is identified by `fact_key`, while its revision has a new canonical
+`evidence_key`; generic identity deduplication consequently treated the pair as
+independent.  In addition, generic raw validation requires `available_at` to equal
+`max(public_at, retrieved_at)`, whereas the append-only revision correctly has
+`available_at = max(source availability, materialized_at)`.  Thus the canonical
+row was simultaneously duplicated and interpreted under the wrong availability
+contract.  The mismatch reached consumer reconciliation/response invariants and
+was redacted by the CLI.  It was not alias filtering, accounting relaxation, or a
+change to source evidence.
+
+All liquidity readers now use one fail-closed resolver.  It recognizes only the
+exact operation type, contract version/hash, and validator version; parses JSON
+objects independent of key order; verifies the canonical key, completed run,
+revision record, immutable source identity and accounting attributes; and joins
+one revision to one raw `fact_key`.  It selects only revisions whose canonical
+availability is visible, ordered by materialization time, availability time, and
+finally evidence key.  The selected revision replaces (never supplements) its
+raw source for calculation, while bounded diagnostics retain the source identity.
+Malformed, ambiguous, unmatched, future, incompatible, or conflicting revisions
+fail closed with `LIQUIDITY_CANONICAL_RESOLUTION_FAILED`; the public message stays
+redacted.  Historical evaluation still uses only the raw row under its own
+timestamp and contract, so materialization creates no hindsight readiness.
+
+Track B feasibility's actual aggregate schema uses `comparable_universe_size`,
+`per_family_availability`, `companies_by_usable_family_count` (string keys
+`3`/`4`/`5`/`6`), `cross_sectional_sample_sizes`, `missingness_patterns`, and
+`future_panel_feasible`.  It does not expose the attempted informal property
+names.  The checked-in lifecycle fixture has two comparable companies and five
+canonical liquidity observations: after visibility both companies have the
+current-assets/current-liabilities minimum and one also has unrestricted cash.
+The small fixture is deliberately not evidence for preregistration; the operator
+universe counts must be read from the post-merge command below.  Feasibility is
+not contract approval, and no contract, score, ranking, candidate, recommendation,
+selection, vintage, observation, or validation credit is produced.
+
+### Exact read-only post-merge verification
+
+```powershell
+git switch main
+git pull --ff-only
+$Research = "C:\SignalLens Data\research.duckdb"
+$Production = "C:\SignalLens Data\production.duckdb"
+$Historical = "2026-10-04T21:30:00+00:00"
+$After = "2026-10-05T00:30:00+00:00"
+$ResearchBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$ProductionBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+
+Push-Location backend
+$Commands = @(
+  "liquidity-measurement-compatibility-audit",
+  "liquidity-evidence-discovery",
+  "liquidity-contract-assessment",
+  "liquidity-raw-canonical-inventory",
+  "liquidity-evidence-gap-assessment",
+  "financial-strength-evidence-audit",
+  "financial-strength-contract-assessment",
+  "track-b-panel-feasibility",
+  "comparable-universe-research-readiness"
+)
+foreach ($Decision in @($Historical, $After)) {
+  foreach ($Command in $Commands) {
+    python -m app.investment_research_cli $Command `
+      --research-db "$Research" --production-db "$Production" `
+      --decision-at "$Decision"
+    if ($LASTEXITCODE -ne 0) { throw "$Command failed at $Decision" }
+  }
+}
+python -m app.investment_research_cli liquidity-company-preview `
+  --research-db "$Research" --production-db "$Production" --decision-at "$After" `
+  --qualified-symbol "<EXCHANGE-QUALIFIED-SYMBOL>"
+python -m app.investment_research_cli company-investment-factor-preview `
+  --research-db "$Research" --production-db "$Production" --decision-at "$After" `
+  --qualified-symbol "<EXCHANGE-QUALIFIED-SYMBOL>"
+Pop-Location
+
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash -ne $ResearchBefore) {
+  throw "Research changed during read-only verification"
+}
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash -ne $ProductionBefore) {
+  throw "Production changed during read-only verification"
+}
+```
+
+These are verification reads only: do not plan, apply, restore, rematerialize, or
+invoke a provider.  The existing completed run requires no rollback and no repeat
+apply.
+
+## Urgent post-merge portability correction
+
+The first merged consumer repair was not portable.  On the post-merge Windows
+checkout its own focused command reported five failures and fifteen passes: both
+idempotent-retry tests, the offline lifecycle test, the exact 187-row historical
+test, and the JSON-order test failed.  The bounded resolver diagnostics, once
+surfaced internally, showed `source_timestamp_mismatch` for every otherwise valid
+controlled row (5 in the small fixture and 187 in the operator-shaped fixture).
+Because rejection uses an ordered first-failure taxonomy, later comparisons were
+not reached for those rows.  The cause was raw `isoformat()`/`str()` comparison of
+equivalent TIMESTAMPTZ representations rather than comparison of UTC instants.
+DATE, numeric, redundant-currency, and scale checks had the same portability risk.
+
+The identical retry had a second root cause.  Validation noticed the expected
+post-apply research fingerprint, but then rebuilt a fresh plan against the mutated
+database.  That rebuild traversed the failing consumer resolver and its exception
+was collapsed to `LIQUIDITY_MATERIALIZATION_PLAN_INVALID`.  Retry recognition now
+occurs before ordinary fingerprint rejection or plan reconstruction.  It requires
+the exact token identity, unexpired token, operation/contract/hash/validator,
+decision boundary, evidence-key digest and complete key set, field counts,
+completed manifest, zero conflicts, matching revision/canonical pairs, and the
+unchanged production fingerprint.  A valid retry returns zero inserted, the
+original count unchanged, `idempotent_retry=true`, and performs no write.
+
+Producer and consumer now share canonical serialization helpers for UTC timestamp
+instants, DATE values, finite decimal values, null/blank/USD redundant currency,
+identity scale, evidence keys, operation identity, decision timestamps, and
+canonical availability.  Valid future revisions have their durable lineage
+checked but are not substituted before `available_at`; after that instant the one
+revision replaces its one raw source.  Individual corruption regressions retain
+the bounded reason taxonomy, while the CLI continues to emit only one stable
+redacted error and empty stdout on failure.
+
+During the operator verification all listed consumers failed closed, including
+both boundaries, discovery, both contract/inventory reports, financial strength,
+Track B, comparable-universe readiness, and both previews.  Those attempts were
+read-only and changed neither database hash.  Empty failed-command output must not
+be converted through `@($null).Count`; it is a command failure, not one ranking,
+candidate, or recommendation.  No model output was produced.
+
+The read-only PowerShell sequence above remains the post-merge verification
+sequence.  Capture stdout only after checking `$LASTEXITCODE`, require nonempty
+JSON before `ConvertFrom-Json`, and stop immediately on an empty report.  The
+completed operator run remains valid and needs no rollback, rewrite, or repeat
+apply.

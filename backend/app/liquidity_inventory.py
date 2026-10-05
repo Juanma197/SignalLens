@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,12 @@ STATES = (
 )
 SAMPLE_LIMIT = 10
 STALE_DAYS = 550
+
+def _json_object(value):
+    if isinstance(value,dict): return value
+    try: result=json.loads(value)
+    except (TypeError,ValueError): return None
+    return result if isinstance(result,dict) else None
 
 def _decision(value: Any) -> datetime:
     result = _aware(value)
@@ -170,11 +177,24 @@ def _load(research_db,production_db,decision_at):
         unique={}
         for x in raw:
             key=x.get("fact_key") or (x.get("security_id"),x.get("cik"),x.get("taxonomy"),x.get("concept"),x.get("period_start"),x.get("period_end"),x.get("accession_number"),x.get("unit"))
-            unique[str(key)]=x
+            unique.setdefault(str(key),x)
         raw=list(unique.values()); sources=_source_catalog(r,p)
+        from .liquidity_materialization import CONTRACT_HASH
+        from .liquidity_resolution import resolve_canonical_liquidity
+        effective,resolution=resolve_canonical_liquidity(raw_rows=raw,canonical_rows=canonical,
+          revision_rows=_rows(r,"liquidity_canonical_materialization_revisions"),
+          run_rows=_rows(r,"liquidity_canonical_materialization_runs"),decision_at=decision,
+          contract_hash=CONTRACT_HASH)
+        raw_keys={evidence_identity(x) for x in raw}
+        resolved=[x for x in effective if x.get("_canonical_revision") or evidence_identity(x) in raw_keys]
+        raw=[x for x in resolved if not x.get("_canonical_revision")]
+        controlled={str(x.get("evidence_key")) for x in canonical
+          if (_json_object(x.get("provenance")) or {}).get("operation_type")=="liquidity_canonical_materialization"}
+        canonical=[x for x in canonical if str(x.get("evidence_key")) not in controlled]
+        canonical.extend(x for x in resolved if x.get("_canonical_revision"))
     after={"research":fingerprint(research_db),"production":fingerprint(production_db)}
     if before!=after: raise InvestmentResearchError("database changed during read-only audit")
-    return decision,population,raw,canonical,issuers,sources,{"verified":True,"before":before,"after":after,"research_unchanged":True,"production_unchanged":True}
+    return decision,population,raw,canonical,issuers,sources,{"verified":True,"before":before,"after":after,"research_unchanged":True,"production_unchanged":True,"canonical_liquidity_resolution":resolution}
 
 def _report(command,research_db,production_db,decision_at):
     decision,population,raw,canonical,issuers,sources,immutability=_load(research_db,production_db,decision_at)

@@ -277,6 +277,17 @@ def _report(*, research_db: Path, production_db: Path, decision_at: datetime):
     with duckdb.connect(str(research_db),read_only=True) as research, duckdb.connect(str(production_db),read_only=True) as production:
         canonical=_rows(research,"canonical_factor_evidence"); classifications=_rows(research,"security_classification_evidence")
         raw=_rows(research,"sec_facts") + _rows(production,"sec_facts")
+        raw=list({str(x.get("fact_key") or (x.get("security_id"),x.get("concept"),x.get("period_end"),x.get("accession_number"),x.get("unit"))):x for x in reversed(raw)}.values())
+        from .liquidity_materialization import CONTRACT_HASH
+        from .liquidity_resolution import resolve_canonical_liquidity
+        effective,resolution=resolve_canonical_liquidity(raw_rows=raw,canonical_rows=canonical,
+          revision_rows=_rows(research,"liquidity_canonical_materialization_revisions"),
+          run_rows=_rows(research,"liquidity_canonical_materialization_runs"),decision_at=decision,
+          contract_hash=CONTRACT_HASH)
+        controlled={str(x.get("evidence_key")) for x in canonical
+          if _json(x.get("provenance")).get("operation_type")=="liquidity_canonical_materialization"}
+        canonical=[x for x in canonical if str(x.get("evidence_key")) not in controlled]
+        canonical.extend(x for x in effective if x.get("_canonical_revision"))
         companies=[_company(sid,symbol,canonical,decision) for sid,symbol in _companies(canonical,classifications,decision)]
     after=(fingerprint(Path(research_db)),fingerprint(Path(production_db)))
     if before != after: raise InvestmentResearchError("database changed during read-only audit")
