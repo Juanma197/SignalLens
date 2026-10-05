@@ -159,21 +159,24 @@ def _load(research_db,production_db,decision_at):
             for item in _rows(db,"sec_facts"):
                 item={**item,"_source_database":database,"_source_table":"sec_facts"}; raw.append(item)
         population=_companies(canonical,classifications,decision)
-        # Raw evidence is authoritative for discovery. Canonical rows supplement it
-        # only when no raw row with the same stable observation identity exists.
+        # Raw evidence is authoritative for discovery.  A controlled canonical
+        # revision may replace exactly its source observation through the shared
+        # fail-closed resolver; it is never an additional observation.
         unique={}
         for item in raw: unique.setdefault(evidence_identity(item),item)
         raw=list(unique.values())
-        seen={evidence_identity(x) for x in raw}
-        canonical=[{**x,"_source_database":"research","_source_table":"canonical_factor_evidence",
-          "taxonomy":x.get("taxonomy") or "us-gaap","concept":_concept(x)} for x in canonical]
-        rows=raw+[x for x in canonical if evidence_identity(x) not in seen]
+        from .liquidity_materialization import CONTRACT_HASH
+        from .liquidity_resolution import resolve_canonical_liquidity
+        rows,resolution=resolve_canonical_liquidity(raw_rows=raw,canonical_rows=canonical,
+          revision_rows=_rows(r,"liquidity_canonical_materialization_revisions"),
+          run_rows=_rows(r,"liquidity_canonical_materialization_runs"),decision_at=decision,
+          contract_hash=CONTRACT_HASH)
         companies=[_company(sid,sym,rows,decision) for sid,sym in population]
     after=(fingerprint(research_db),fingerprint(production_db))
     if before!=after:raise InvestmentResearchError("database changed during read-only audit")
     return decision,companies,{"research_unchanged":True,"production_unchanged":True,"verified":True,
       "before":{"research":before[0],"production":before[1]},
-      "after":{"research":after[0],"production":after[1]}}
+      "after":{"research":after[0],"production":after[1]},"canonical_liquidity_resolution":resolution}
 
 def _base(command,decision,immutability,maximum):
     return {"command":command,"decision_at":decision.isoformat(),"read_only":True,
