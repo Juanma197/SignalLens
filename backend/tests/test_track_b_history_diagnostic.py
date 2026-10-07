@@ -35,6 +35,8 @@ def test_success_partial_and_incompatible_schema(tmp_path):
     assert any(e['reason_code'] == 'SCHEMA_PARTIAL' for e in events)
     assert any(e['stage'] == 'production.canonical_factor_evidence' and
                e['reason_code'] == 'SCHEMA_INCOMPATIBLE' for e in events)
+    assert 'row_count' not in next(e['counts'] for e in events
+                                 if e['stage'] == 'production.global_corporate_actions')
     assert any(e['reason_code'] == 'INVENTORY_COMPLETED' for e in events)
     assert check(paths) == events
 

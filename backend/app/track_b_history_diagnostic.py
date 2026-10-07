@@ -88,8 +88,10 @@ def diagnose(*, research_db, production_db, decision_at):
         missing = len(summary.get('missing_adapter_columns', ()))
         reason = ('SCHEMA_INCOMPATIBLE' if summary['state'] == 'incompatible_evidence'
                   else 'SCHEMA_PARTIAL' if missing else 'METADATA_READ_OK')
-        event(stage, reason, row_count=summary['row_count'] or 0,
-              adapter_column_count=len(summary['columns']), missing_column_count=missing)
+        counts = {'adapter_column_count': len(summary['columns']), 'missing_column_count': missing}
+        # Views are not evaluated: unknown row counts must not become zero.
+        if summary['row_count'] is not None: counts['row_count'] = summary['row_count']
+        event(stage, reason, **counts)
         return summary, rows
 
     def chains(periods, length, annual=False):
