@@ -975,135 +975,296 @@ selection, vintage, observation, or validation credit is produced.
 
 ### Exact read-only post-merge verification
 
+A symbol merely being stored in listings, SEC facts, or issuer mappings does not
+make it previewable at every historical boundary.  All three company-preview
+paths require one unambiguous company identity in their point-in-time population;
+for liquidity and financial strength that means a `us_operating_company`
+classification whose public, retrieval, and canonical availability timestamps
+are valid and visible at the requested decision time.  A stored `NEU.US` can
+therefore legitimately fail closed at the historical boundary while becoming
+previewable later.  The identity probe below prints the bounded classification
+rows and visible counts at both boundaries so that a generic public error is not
+used to infer the cause.
+
 ```powershell
-$ErrorActionPreference = "Stop"
-git switch main
-git pull --ff-only
-$Backend = "C:\Users\Juan Estrada\Projects\SignalLens\backend"
-$Python = "..\.venv\Scripts\python.exe"
-$Research = "data\research\signallens-research.duckdb"
-$Production = "data\signallens.duckdb"
-$Reports = "data\research\reports"
-$Historical = "2026-10-04T21:30:00+00:00"
-$After = "2026-10-05T00:30:00+00:00"
-$CompletedRun = "46ab3c8a-975a-45a5-b161-1d97ee4099e4"
+& {
+  $ErrorActionPreference = "Stop"
+  $Repo = "C:\Users\Juan Estrada\Projects\SignalLens"
+  $Backend = "C:\Users\Juan Estrada\Projects\SignalLens\backend"
+  $Python = "..\.venv\Scripts\python.exe"
+  $Research = "data\research\signallens-research.duckdb"
+  $Production = "data\signallens.duckdb"
+  $Reports = "data\research\reports"
+  $Historical = "2026-10-04T21:30:00+00:00"
+  $After = "2026-10-05T00:30:00+00:00"
+  $CompletedRun = "46ab3c8a-975a-45a5-b161-1d97ee4099e4"
+  $Failures = New-Object 'System.Collections.Generic.List[object]'
+  $ResearchBefore = $null
+  $ProductionBefore = $null
 
-Push-Location $Backend
-New-Item -ItemType Directory -Force -Path $Reports | Out-Null
-$ResearchBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
-$ProductionBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+  function Add-VerificationFailure {
+    param([string]$Command,[string]$Decision,[string]$Reason,[int]$ExitCode)
+    $Failures.Add([pscustomobject]@{
+      command=$Command; decision_at=$Decision; reason=$Reason; exit_code=$ExitCode
+    }) | Out-Null
+    Write-Warning "$Command at $Decision`: $Reason (exit $ExitCode)"
+  }
 
-function Invoke-ReadOnlyReport {
-  param([string]$Command, [string]$Decision, [string[]]$Extra = @())
-  $Stamp = $Decision.Replace(":", "-")
-  $Path = Join-Path $Reports "$Command-$Stamp.json"
-  $Output = & $Python -m app.investment_research_cli $Command `
-    --research-db $Research --production-db $Production `
-    --decision-at $Decision @Extra
-  $ExitCode = $LASTEXITCODE
-  if ($ExitCode -ne 0) { throw "$Command failed at $Decision (exit $ExitCode)" }
-  $Text = ($Output -join [Environment]::NewLine).Trim()
-  if ([string]::IsNullOrWhiteSpace($Text)) { throw "$Command returned empty stdout at $Decision" }
-  try { $Json = $Text | ConvertFrom-Json -Depth 100 }
-  catch { throw "$Command returned invalid JSON at $Decision`: $($_.Exception.Message)" }
-  $Text | Set-Content -Encoding utf8 -LiteralPath $Path
-  [pscustomobject]@{
-    command = $Command; decision_at = $Decision; report = $Path
-    status = $Json.status; state = $Json.state; read_only = $Json.read_only
-    compatible = $Json.compatible; reconciled = $Json.reconciled
-    readiness = $Json.readiness; assessment = $Json.assessment
-    company_count = $Json.company_count
-    observation_count = $Json.observation_count
-    comparable_universe_size = $Json.comparable_universe_size
-    future_panel_feasible = $Json.future_panel_feasible
-    provider_request_count = $Json.provider_request_count
-    model_output_count = $Json.model_output_count
-    validation_credit = $Json.validation_credit
-  } | Format-List | Out-Host
-  $Resolution = $Json.database_immutability.canonical_liquidity_resolution
-  if ($null -ne $Resolution) {
+  function Read-TextFile {
+    param([string]$Path,[string]$Command,[string]$Decision,[string]$Stream)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+      Add-VerificationFailure $Command $Decision "$Stream file is missing" -1
+      return $null
+    }
+    try {
+      $Value = [string](Get-Content -Raw -LiteralPath $Path -ErrorAction Stop)
+      return $Value.Trim()
+    } catch {
+      Add-VerificationFailure $Command $Decision `
+        ("could not read {0}: {1}" -f $Stream,$_.Exception.Message) -1
+      return $null
+    }
+  }
+
+  function Invoke-ReadOnlyReport {
+    param([string]$Command,[string]$Decision,[string[]]$Extra=@())
+    $Stamp = $Decision.Replace(":","-")
+    $Base = Join-Path $Reports "$Command-$Stamp"
+    $Stdout = "$Base.json"
+    $Stderr = "$Base.stderr.json"
+    $Arguments = @("-m","app.investment_research_cli",$Command,
+      "--research-db",$Research,"--production-db",$Production,
+      "--decision-at",$Decision) + $Extra
+    try {
+      $Process = Start-Process -FilePath $Python -ArgumentList $Arguments -Wait `
+        -PassThru -NoNewWindow -RedirectStandardOutput $Stdout `
+        -RedirectStandardError $Stderr -ErrorAction Stop
+    } catch {
+      Add-VerificationFailure $Command $Decision `
+        ("process launch failed: {0}" -f $_.Exception.Message) -1
+      return
+    }
+    $ExitCode = $Process.ExitCode
+    $OutputText = Read-TextFile $Stdout $Command $Decision "stdout"
+    $ErrorText = Read-TextFile $Stderr $Command $Decision "stderr"
+    if ($null -eq $OutputText -or $null -eq $ErrorText) { return }
+
+    if ($ExitCode -ne 0) {
+      if ([string]::IsNullOrWhiteSpace($ErrorText)) {
+        Add-VerificationFailure $Command $Decision "nonzero exit with empty stderr" $ExitCode
+        return
+      }
+      try {
+        $ErrorJson = $ErrorText | ConvertFrom-Json -ErrorAction Stop
+      } catch {
+        Add-VerificationFailure $Command $Decision `
+          ("nonzero exit with invalid error JSON: {0}" -f $_.Exception.Message) $ExitCode
+        return
+      }
+      Add-VerificationFailure $Command $Decision `
+        ("{0}: {1}" -f $ErrorJson.error.code,$ErrorJson.error.message) $ExitCode
+      return
+    }
+    if ([string]::IsNullOrWhiteSpace($OutputText)) {
+      Add-VerificationFailure $Command $Decision "successful exit with empty stdout" $ExitCode
+      return
+    }
+    try {
+      $Json = $OutputText | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+      Add-VerificationFailure $Command $Decision `
+        ("successful exit with invalid JSON: {0}" -f $_.Exception.Message) $ExitCode
+      return
+    }
     [pscustomobject]@{
-      controlled_revision_count = $Resolution.controlled_revision_count
-      visible_selected_count = $Resolution.visible_selected_count
-      future_revision_count = $Resolution.future_revision_count
-      deduplicated_source_count = $Resolution.deduplicated_source_count
-      issue_counts = ($Resolution.issue_counts | ConvertTo-Json -Compress -Depth 10)
-      samples = (@($Resolution.samples) | Select-Object -First 10 | ConvertTo-Json -Compress -Depth 10)
-      samples_truncated = $Resolution.samples_truncated
+      command=$Command; decision_at=$Decision; report=$Stdout
+      status=$Json.status; state=$Json.state; read_only=$Json.read_only
+      compatible=$Json.compatible; reconciled=$Json.reconciled
+      readiness=$Json.readiness; assessment=$Json.assessment
+      company_count=$Json.company_count; observation_count=$Json.observation_count
+      comparable_universe_size=$Json.comparable_universe_size
+      future_panel_feasible=$Json.future_panel_feasible
+      provider_request_count=$Json.provider_request_count
+      model_output_count=$Json.model_output_count
+      validation_credit=$Json.validation_credit
     } | Format-List | Out-Host
+    $Resolution = $Json.database_immutability.canonical_liquidity_resolution
+    if ($null -ne $Resolution) {
+      [pscustomobject]@{
+        controlled_revision_count=$Resolution.controlled_revision_count
+        visible_selected_count=$Resolution.visible_selected_count
+        future_revision_count=$Resolution.future_revision_count
+        deduplicated_source_count=$Resolution.deduplicated_source_count
+        issue_counts=($Resolution.issue_counts | ConvertTo-Json -Compress -Depth 10)
+        samples=(@($Resolution.samples) | Select-Object -First 10 | ConvertTo-Json -Compress -Depth 10)
+        samples_truncated=$Resolution.samples_truncated
+      } | Format-List | Out-Host
+    }
   }
-  return $Json
-}
 
-$Commands = @(
-  "liquidity-canonical-materialization-status",
-  "liquidity-measurement-compatibility-audit",
-  "liquidity-evidence-discovery",
-  "liquidity-contract-assessment",
-  "liquidity-raw-canonical-inventory",
-  "liquidity-evidence-gap-assessment",
-  "financial-strength-evidence-audit",
-  "financial-strength-contract-assessment",
-  "track-b-panel-feasibility",
-  "comparable-universe-research-readiness"
-)
-foreach ($Decision in @($Historical, $After)) {
-  foreach ($Command in $Commands) {
-    $null = Invoke-ReadOnlyReport -Command $Command -Decision $Decision
-  }
-}
+  Push-Location $Repo
+  try {
+    try {
+      $GitSwitch=Start-Process -FilePath "git.exe" -ArgumentList @("switch","main") `
+        -Wait -PassThru -NoNewWindow -ErrorAction Stop
+      if ($GitSwitch.ExitCode -ne 0) {
+        Add-VerificationFailure "git-switch-main" "setup" "git switch failed" $GitSwitch.ExitCode
+      }
+    } catch { Add-VerificationFailure "git-switch-main" "setup" $_.Exception.Message -1 }
+    try {
+      $GitPull=Start-Process -FilePath "git.exe" -ArgumentList @("pull","--ff-only") `
+        -Wait -PassThru -NoNewWindow -ErrorAction Stop
+      if ($GitPull.ExitCode -ne 0) {
+        Add-VerificationFailure "git-pull-ff-only" "setup" "git pull failed" $GitPull.ExitCode
+      }
+    } catch { Add-VerificationFailure "git-pull-ff-only" "setup" $_.Exception.Message -1 }
+    Set-Location $Backend
+    try { New-Item -ItemType Directory -Force -Path $Reports -ErrorAction Stop | Out-Null }
+    catch { Add-VerificationFailure "reports-directory" "setup" $_.Exception.Message -1 }
+    try { $ResearchBefore=(Get-FileHash -Algorithm SHA256 -LiteralPath $Research -ErrorAction Stop).Hash }
+    catch { Add-VerificationFailure "research-database-hash" "before" $_.Exception.Message -1 }
+    try { $ProductionBefore=(Get-FileHash -Algorithm SHA256 -LiteralPath $Production -ErrorAction Stop).Hash }
+    catch { Add-VerificationFailure "production-database-hash" "before" $_.Exception.Message -1 }
 
-# Verify the stored NEU identity rather than inferring or substituting a company.
-$IdentityProbe = @'
-import duckdb, sys
-paths=sys.argv[1:]
+    $Commands = @(
+      "liquidity-canonical-materialization-status",
+      "liquidity-measurement-compatibility-audit",
+      "liquidity-evidence-discovery",
+      "liquidity-contract-assessment",
+      "liquidity-raw-canonical-inventory",
+      "liquidity-evidence-gap-assessment",
+      "financial-strength-evidence-audit",
+      "financial-strength-contract-assessment",
+      "track-b-panel-feasibility",
+      "comparable-universe-research-readiness"
+    )
+    foreach ($Decision in @($Historical,$After)) {
+      foreach ($Command in $Commands) {
+        Invoke-ReadOnlyReport -Command $Command -Decision $Decision
+      }
+    }
+
+    # Diagnostic only: stored identity and classification visibility do not
+    # establish every liquidity, financial-strength, or factor-preview rule.
+    $IdentityProbePath = Join-Path $Reports "neu-identity-probe.py"
+    $IdentityStdout = Join-Path $Reports "neu-identity-probe.json"
+    $IdentityStderr = Join-Path $Reports "neu-identity-probe.stderr.txt"
+    $IdentityProbe = @'
+import duckdb, json, sys
+from datetime import datetime, timezone
+research, production, historical, after=sys.argv[1:]
+def aware(value):
+    if value is None: return None
+    if isinstance(value,str): value=datetime.fromisoformat(value.replace("Z","+00:00"))
+    if value.tzinfo is None or value.utcoffset() is None: return None
+    return value.astimezone(timezone.utc)
 symbols=set()
-for path in paths:
-    with duckdb.connect(path, read_only=True) as db:
+for path in (research,production):
+    with duckdb.connect(path,read_only=True) as db:
         tables={r[0] for r in db.execute("SHOW TABLES").fetchall()}
         for table in ("security_listings","security_classification_evidence","sec_issuers","sec_facts"):
             if table in tables:
-                cols={r[1] for r in db.execute(f"PRAGMA table_info('{table}')").fetchall()}
+                cols={r[1] for r in db.execute("PRAGMA table_info('%s')" % table).fetchall()}
                 if "qualified_symbol" in cols:
                     symbols.update(str(r[0]) for r in db.execute(
-                        f"SELECT DISTINCT qualified_symbol FROM {table} WHERE qualified_symbol IS NOT NULL"
-                    ).fetchall())
+                        "SELECT DISTINCT qualified_symbol FROM %s WHERE qualified_symbol IS NOT NULL" % table).fetchall())
 matches=sorted(s for s in symbols if s.upper()=="NEU.US" or s.split(".",1)[0].upper()=="NEU")
-if "NEU.US" in matches: print("NEU.US")
-elif len(matches)==1: print(matches[0])
-else: raise SystemExit(f"stored NEU/NEU.US identity is not unique: {matches}")
+if "NEU.US" in matches: symbol="NEU.US"
+elif len(matches)==1: symbol=matches[0]
+else: raise SystemExit("stored NEU/NEU.US identity is not unique: %r" % matches)
+rows=[]
+with duckdb.connect(research,read_only=True) as db:
+    if "security_classification_evidence" in {r[0] for r in db.execute("SHOW TABLES").fetchall()}:
+        cur=db.execute("SELECT * FROM security_classification_evidence WHERE qualified_symbol=? ORDER BY security_id",[symbol])
+        names=[d[0] for d in cur.description]
+        rows=[dict(zip(names,row)) for row in cur.fetchall()]
+def visible(row,boundary):
+    decision=aware(boundary)
+    public,retrieved,available=(aware(row.get(k)) for k in ("public_at","retrieved_at","available_at"))
+    return bool(row.get("security_type")=="us_operating_company" and public and retrieved and available
+        and available==max(public,retrieved) and max(public,retrieved,available)<=decision)
+print(json.dumps({"qualified_symbol":symbol,"classification_row_count":len(rows),
+    "classification_eligible_at_historical":sum(visible(r,historical) for r in rows),
+    "classification_eligible_at_after":sum(visible(r,after) for r in rows),
+    "classification_samples":[{k:str(r.get(k)) for k in ("security_id","security_type","public_at","retrieved_at","available_at")} for r in rows[:10]]},sort_keys=True))
 '@
-$SymbolOutput = & $Python -c $IdentityProbe $Research $Production
-if ($LASTEXITCODE -ne 0) { throw "NEU identity verification failed (exit $LASTEXITCODE)" }
-$PreviewSymbol = ($SymbolOutput -join "").Trim()
-if ([string]::IsNullOrWhiteSpace($PreviewSymbol)) { throw "NEU identity verification returned empty stdout" }
-Write-Host "Verified stored preview identity: $PreviewSymbol"
-
-foreach ($Decision in @($Historical, $After)) {
-  foreach ($Command in @(
-    "liquidity-company-preview",
-    "financial-strength-company-preview",
-    "company-investment-factor-preview"
-  )) {
-    $null = Invoke-ReadOnlyReport -Command $Command -Decision $Decision `
-      -Extra @("--qualified-symbol", $PreviewSymbol)
+    $Identity = $null
+    try {
+      [System.IO.File]::WriteAllText($IdentityProbePath,$IdentityProbe,(New-Object System.Text.UTF8Encoding($false)))
+      $IdentityProcess = Start-Process -FilePath $Python `
+        -ArgumentList @($IdentityProbePath,$Research,$Production,$Historical,$After) `
+        -Wait -PassThru -NoNewWindow -RedirectStandardOutput $IdentityStdout `
+        -RedirectStandardError $IdentityStderr -ErrorAction Stop
+      $IdentityExit = $IdentityProcess.ExitCode
+      $IdentityText = Read-TextFile $IdentityStdout "stored-preview-identity" "both" "stdout"
+      $IdentityError = Read-TextFile $IdentityStderr "stored-preview-identity" "both" "stderr"
+      if ($null -ne $IdentityText -and $null -ne $IdentityError) {
+        if ($IdentityExit -ne 0) {
+          Add-VerificationFailure "stored-preview-identity" "both" `
+            ("probe failed: {0}" -f $IdentityError) $IdentityExit
+        } elseif ([string]::IsNullOrWhiteSpace($IdentityText)) {
+          Add-VerificationFailure "stored-preview-identity" "both" "empty probe stdout" 0
+        } else {
+          try { $Identity=$IdentityText | ConvertFrom-Json -ErrorAction Stop }
+          catch { Add-VerificationFailure "stored-preview-identity" "both" `
+            ("invalid probe JSON: {0}" -f $_.Exception.Message) 0 }
+        }
+      }
+    } catch {
+      Add-VerificationFailure "stored-preview-identity" "both" $_.Exception.Message -1
+    }
+    if ($null -ne $Identity) {
+      $Identity | Format-List | Out-Host
+      $PreviewSymbol = [string]$Identity.qualified_symbol
+      foreach ($Decision in @($Historical,$After)) {
+        foreach ($Command in @(
+          "liquidity-company-preview",
+          "financial-strength-company-preview",
+          "company-investment-factor-preview"
+        )) {
+          Invoke-ReadOnlyReport -Command $Command -Decision $Decision `
+            -Extra @("--qualified-symbol",$PreviewSymbol)
+        }
+      }
+    } else {
+      foreach ($Decision in @($Historical,$After)) {
+        foreach ($Command in @(
+          "liquidity-company-preview",
+          "financial-strength-company-preview",
+          "company-investment-factor-preview"
+        )) {
+          Add-VerificationFailure $Command $Decision "not run because stored identity probe failed" -1
+        }
+      }
+    }
+  } catch {
+    Add-VerificationFailure "verification-harness" "all" $_.Exception.Message -1
+  } finally {
+    try {
+      $ResearchAfter=(Get-FileHash -Algorithm SHA256 -LiteralPath $Research -ErrorAction Stop).Hash
+      if ($null -eq $ResearchBefore -or $ResearchAfter -ne $ResearchBefore) {
+        Add-VerificationFailure "research-database-hash" "after" "database hash missing or changed" -1
+      }
+    } catch { Add-VerificationFailure "research-database-hash" "after" $_.Exception.Message -1; $ResearchAfter=$null }
+    try {
+      $ProductionAfter=(Get-FileHash -Algorithm SHA256 -LiteralPath $Production -ErrorAction Stop).Hash
+      if ($null -eq $ProductionBefore -or $ProductionAfter -ne $ProductionBefore) {
+        Add-VerificationFailure "production-database-hash" "after" "database hash missing or changed" -1
+      }
+    } catch { Add-VerificationFailure "production-database-hash" "after" $_.Exception.Message -1; $ProductionAfter=$null }
+    [pscustomobject]@{
+      research_sha256_before=$ResearchBefore; research_sha256_after=$ResearchAfter
+      production_sha256_before=$ProductionBefore; production_sha256_after=$ProductionAfter
+      completed_run_not_reapplied=$CompletedRun
+    } | Format-List | Out-Host
+    Pop-Location
   }
-}
 
-$ResearchAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
-$ProductionAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
-[pscustomobject]@{
-  research_sha256_before = $ResearchBefore
-  research_sha256_after = $ResearchAfter
-  production_sha256_before = $ProductionBefore
-  production_sha256_after = $ProductionAfter
-  completed_run_not_reapplied = $CompletedRun
-} | Format-List | Out-Host
-if ($ResearchAfter -ne $ResearchBefore) {
-  throw "Research changed during read-only verification"
-}
-if ($ProductionAfter -ne $ProductionBefore) {
-  throw "Production changed during read-only verification"
+  if ($Failures.Count -ne 0) {
+    $Failures | Format-Table -AutoSize | Out-Host
+    throw "Operator verification failed with $($Failures.Count) required check(s)"
+  }
+  Write-Host "Operator verification passed all required checks"
 }
 Pop-Location
 ```

@@ -12,6 +12,7 @@ from app.liquidity_inventory import raw_canonical_inventory, evidence_gap_assess
 from app.liquidity_measurement import VALIDATOR_VERSION, validate_measurement
 from app.liquidity_compatibility import (compatibility_audit,
     plan_canonical_materialization, reconcile_identity_sets)
+from app.investment_research import InvestmentResearchError
 
 DECISION=datetime(2026,10,2,18,15,tzinfo=timezone.utc)
 
@@ -67,6 +68,22 @@ def test_preview_exact_semantics_and_incompatible_decomposition(tmp_path):
     assert b["denominator_warnings"]==["zero_current_liabilities"]
     text=json.dumps(b,sort_keys=True)
     assert "99" not in text and "post-decision evidence only" not in text
+
+
+def test_preview_requires_identity_classification_visible_at_decision(tmp_path):
+    """A stored symbol is not a historical company identity before classification."""
+    research,production=fixture(tmp_path)
+    historical=datetime(2026,6,30,23,59,tzinfo=timezone.utc)
+    before=(research.read_bytes(),production.read_bytes())
+
+    with pytest.raises(InvestmentResearchError,match="company unavailable or ambiguous"):
+        company_preview(research_db=research,production_db=production,
+            decision_at=historical,qualified_symbol="AAA.US")
+
+    visible=company_preview(research_db=research,production_db=production,
+        decision_at=DECISION,qualified_symbol="AAA.US")
+    assert visible["company"]["security_id"]=="a"
+    assert (research.read_bytes(),production.read_bytes())==before
 
 def test_contract_denominators_quick_ratio_and_negative_working_capital(tmp_path):
     research,production=fixture(tmp_path)

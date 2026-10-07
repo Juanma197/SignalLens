@@ -23,3 +23,22 @@ def test_backend_test_modules_have_unique_top_level_test_names():
             duplicates[path.name] = repeated
 
     assert duplicates == {}
+
+
+def test_operator_verification_block_remains_windows_powershell_51_compatible():
+    repository = Path(__file__).parents[2]
+    runbook = (repository / "docs/milestone-41-liquidity-discovery.md").read_text(
+        encoding="utf-8"
+    )
+    heading = runbook.index("### Exact read-only post-merge verification")
+    start = runbook.index("```powershell", heading)
+    end = runbook.index("\n```", start)
+    block = runbook[start:end]
+
+    assert block.count("ConvertFrom-Json -ErrorAction Stop") == 3
+    assert "ConvertFrom-Json -Depth" not in block
+    assert block.startswith("```powershell\n& {")
+    assert "$Repo = \"C:\\Users\\Juan Estrada\\Projects\\SignalLens\"" in block
+    assert "finally {" in block
+    assert "research_sha256_after" in block
+    assert "production_sha256_after" in block
