@@ -126,6 +126,11 @@ def _visible(row, decision):
     public,retrieved,available=(_aware(row.get(x)) for x in ("public_at","retrieved_at","available_at"))
     if public is None or retrieved is None: return False,"missing_reliable_public_or_retrieval_timestamp"
     expected=max(public,retrieved)
+    if row.get("_canonical_revision"):
+        # Internal marker is added only after resolver validation.
+        materialized=_aware(row.get("materialized_at"))
+        if materialized is None: return False,"missing_canonical_materialization_timestamp"
+        expected=max(expected,materialized)
     if available is None: return False,"missing_canonical_availability_timestamp"
     if available != expected: return False,"invalid_canonical_availability_timestamp"
     if any(x>decision for x in (public,retrieved,available)): return False,"post_decision_evidence"
@@ -287,7 +292,10 @@ def _report(*, research_db: Path, production_db: Path, decision_at: datetime):
         controlled={str(x.get("evidence_key")) for x in canonical
           if _json(x.get("provenance")).get("operation_type")=="liquidity_canonical_materialization"}
         canonical=[x for x in canonical if str(x.get("evidence_key")) not in controlled]
-        canonical.extend(x for x in effective if x.get("_canonical_revision"))
+        # Measurement rows are source-shaped; use the validated canonical
+        # envelope so this reader retains materialization availability.
+        canonical.extend({**x["_canonical_row"], "_canonical_revision":True}
+          for x in effective if x.get("_canonical_revision"))
         companies=[_company(sid,symbol,canonical,decision) for sid,symbol in _companies(canonical,classifications,decision)]
     after=(fingerprint(Path(research_db)),fingerprint(Path(production_db)))
     if before != after: raise InvestmentResearchError("database changed during read-only audit")

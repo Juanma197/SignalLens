@@ -22,7 +22,9 @@ from tests.test_liquidity_evidence import DECISION, fixture
 from app.liquidity_compatibility import compatibility_audit
 from app.liquidity_evidence import evidence_discovery, contract_assessment, company_preview
 from app.liquidity_inventory import raw_canonical_inventory, evidence_gap_assessment
-from app.financial_strength import evidence_audit as financial_strength_audit
+from app.financial_strength import (evidence_audit as financial_strength_audit,
+    contract_assessment as financial_strength_assessment,
+    company_preview as financial_strength_preview)
 
 LEGACY_SCHEMA="""CREATE TABLE canonical_factor_evidence(
  evidence_key VARCHAR PRIMARY KEY, security_id VARCHAR NOT NULL, qualified_symbol VARCHAR,
@@ -260,6 +262,38 @@ def test_exact_187_revision_historical_invisibility_and_post_visibility(tmp_path
     new=post["database_immutability"]["canonical_liquidity_resolution"]
     assert (old["future_revision_count"],old["visible_selected_count"])==(187,0)
     assert (new["future_revision_count"],new["visible_selected_count"],new["deduplicated_source_count"])==(0,187,187)
+    with duckdb.connect(str(research)) as db:
+      for sid in ("empty-1","empty-2"):
+        db.execute("INSERT INTO security_classification_evidence VALUES (?,?,'us_operating_company',?,?,?)",
+          [sid,sid.upper()+".US",stamp,stamp,stamp])
+    snapshots=(research.read_bytes(),production.read_bytes())
+    for boundary,expected in ((DECISION,0),(issued+timedelta(minutes=1),61)):
+      audit=financial_strength_audit(research_db=research,production_db=production,decision_at=boundary)
+      assessment=financial_strength_assessment(research_db=research,production_db=production,decision_at=boundary)
+      assert audit["comparable_company_count"]==assessment["comparable_company_count"]==71
+      assert audit["field_coverage"]["current_assets"]==expected
+      assert audit["field_coverage"]["current_liabilities"]==expected
+      assert audit["field_coverage"]["cash_and_cash_equivalents"]==0
+      # BBB has explicit zero liabilities: coverage does not imply readiness.
+      ready=max(expected-1,0)
+      assert audit["component_counts"].get("liquidity:ready",0)==ready
+      assert assessment["metric_assessments"]["current_ratio"]["comparable_company_count"]==ready
+      assert assessment["contract_selected"] is None
+      preview=financial_strength_preview(research_db=research,production_db=production,
+        decision_at=boundary,qualified_symbol="AAA.US")["company"]
+      assert preview["components"]["liquidity"]==("ready" if expected else "unavailable")
+      assert preview["readiness"]["full_family_ready"] is False
+      if expected:
+        assert preview["selected_evidence"]["current_assets"]["available_at"]==str(issued)
+      else:
+        assert "current_assets" not in preview["selected_evidence"]
+      for report in (audit,assessment):
+        assert report["database_immutability"]["verified"] and report["read_only"]
+        for key in ("rankings","candidates","recommendations","selections","vintages","validation_observations"):
+          assert report[key]==[]
+        assert report["validation_credit"]==0
+    assert (research.read_bytes(),production.read_bytes())==snapshots
+
 
 
 def test_resolver_json_order_independence_and_stable_redacted_failure(tmp_path):
