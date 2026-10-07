@@ -976,17 +976,67 @@ selection, vintage, observation, or validation credit is produced.
 ### Exact read-only post-merge verification
 
 ```powershell
+$ErrorActionPreference = "Stop"
 git switch main
 git pull --ff-only
-$Research = "C:\SignalLens Data\research.duckdb"
-$Production = "C:\SignalLens Data\production.duckdb"
+$Backend = "C:\Users\Juan Estrada\Projects\SignalLens\backend"
+$Python = "..\.venv\Scripts\python.exe"
+$Research = "data\research\signallens-research.duckdb"
+$Production = "data\signallens.duckdb"
+$Reports = "data\research\reports"
 $Historical = "2026-10-04T21:30:00+00:00"
 $After = "2026-10-05T00:30:00+00:00"
+$CompletedRun = "46ab3c8a-975a-45a5-b161-1d97ee4099e4"
+
+Push-Location $Backend
+New-Item -ItemType Directory -Force -Path $Reports | Out-Null
 $ResearchBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
 $ProductionBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
 
-Push-Location backend
+function Invoke-ReadOnlyReport {
+  param([string]$Command, [string]$Decision, [string[]]$Extra = @())
+  $Stamp = $Decision.Replace(":", "-")
+  $Path = Join-Path $Reports "$Command-$Stamp.json"
+  $Output = & $Python -m app.investment_research_cli $Command `
+    --research-db $Research --production-db $Production `
+    --decision-at $Decision @Extra
+  $ExitCode = $LASTEXITCODE
+  if ($ExitCode -ne 0) { throw "$Command failed at $Decision (exit $ExitCode)" }
+  $Text = ($Output -join [Environment]::NewLine).Trim()
+  if ([string]::IsNullOrWhiteSpace($Text)) { throw "$Command returned empty stdout at $Decision" }
+  try { $Json = $Text | ConvertFrom-Json -Depth 100 }
+  catch { throw "$Command returned invalid JSON at $Decision`: $($_.Exception.Message)" }
+  $Text | Set-Content -Encoding utf8 -LiteralPath $Path
+  [pscustomobject]@{
+    command = $Command; decision_at = $Decision; report = $Path
+    status = $Json.status; state = $Json.state; read_only = $Json.read_only
+    compatible = $Json.compatible; reconciled = $Json.reconciled
+    readiness = $Json.readiness; assessment = $Json.assessment
+    company_count = $Json.company_count
+    observation_count = $Json.observation_count
+    comparable_universe_size = $Json.comparable_universe_size
+    future_panel_feasible = $Json.future_panel_feasible
+    provider_request_count = $Json.provider_request_count
+    model_output_count = $Json.model_output_count
+    validation_credit = $Json.validation_credit
+  } | Format-List | Out-Host
+  $Resolution = $Json.database_immutability.canonical_liquidity_resolution
+  if ($null -ne $Resolution) {
+    [pscustomobject]@{
+      controlled_revision_count = $Resolution.controlled_revision_count
+      visible_selected_count = $Resolution.visible_selected_count
+      future_revision_count = $Resolution.future_revision_count
+      deduplicated_source_count = $Resolution.deduplicated_source_count
+      issue_counts = ($Resolution.issue_counts | ConvertTo-Json -Compress -Depth 10)
+      samples = (@($Resolution.samples) | Select-Object -First 10 | ConvertTo-Json -Compress -Depth 10)
+      samples_truncated = $Resolution.samples_truncated
+    } | Format-List | Out-Host
+  }
+  return $Json
+}
+
 $Commands = @(
+  "liquidity-canonical-materialization-status",
   "liquidity-measurement-compatibility-audit",
   "liquidity-evidence-discovery",
   "liquidity-contract-assessment",
@@ -999,26 +1049,63 @@ $Commands = @(
 )
 foreach ($Decision in @($Historical, $After)) {
   foreach ($Command in $Commands) {
-    python -m app.investment_research_cli $Command `
-      --research-db "$Research" --production-db "$Production" `
-      --decision-at "$Decision"
-    if ($LASTEXITCODE -ne 0) { throw "$Command failed at $Decision" }
+    $null = Invoke-ReadOnlyReport -Command $Command -Decision $Decision
   }
 }
-python -m app.investment_research_cli liquidity-company-preview `
-  --research-db "$Research" --production-db "$Production" --decision-at "$After" `
-  --qualified-symbol "<EXCHANGE-QUALIFIED-SYMBOL>"
-python -m app.investment_research_cli company-investment-factor-preview `
-  --research-db "$Research" --production-db "$Production" --decision-at "$After" `
-  --qualified-symbol "<EXCHANGE-QUALIFIED-SYMBOL>"
-Pop-Location
 
-if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash -ne $ResearchBefore) {
+# Verify the stored NEU identity rather than inferring or substituting a company.
+$IdentityProbe = @'
+import duckdb, sys
+paths=sys.argv[1:]
+symbols=set()
+for path in paths:
+    with duckdb.connect(path, read_only=True) as db:
+        tables={r[0] for r in db.execute("SHOW TABLES").fetchall()}
+        for table in ("security_listings","security_classification_evidence","sec_issuers","sec_facts"):
+            if table in tables:
+                cols={r[1] for r in db.execute(f"PRAGMA table_info('{table}')").fetchall()}
+                if "qualified_symbol" in cols:
+                    symbols.update(str(r[0]) for r in db.execute(
+                        f"SELECT DISTINCT qualified_symbol FROM {table} WHERE qualified_symbol IS NOT NULL"
+                    ).fetchall())
+matches=sorted(s for s in symbols if s.upper()=="NEU.US" or s.split(".",1)[0].upper()=="NEU")
+if "NEU.US" in matches: print("NEU.US")
+elif len(matches)==1: print(matches[0])
+else: raise SystemExit(f"stored NEU/NEU.US identity is not unique: {matches}")
+'@
+$SymbolOutput = & $Python -c $IdentityProbe $Research $Production
+if ($LASTEXITCODE -ne 0) { throw "NEU identity verification failed (exit $LASTEXITCODE)" }
+$PreviewSymbol = ($SymbolOutput -join "").Trim()
+if ([string]::IsNullOrWhiteSpace($PreviewSymbol)) { throw "NEU identity verification returned empty stdout" }
+Write-Host "Verified stored preview identity: $PreviewSymbol"
+
+foreach ($Decision in @($Historical, $After)) {
+  foreach ($Command in @(
+    "liquidity-company-preview",
+    "financial-strength-company-preview",
+    "company-investment-factor-preview"
+  )) {
+    $null = Invoke-ReadOnlyReport -Command $Command -Decision $Decision `
+      -Extra @("--qualified-symbol", $PreviewSymbol)
+  }
+}
+
+$ResearchAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $Research).Hash
+$ProductionAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash
+[pscustomobject]@{
+  research_sha256_before = $ResearchBefore
+  research_sha256_after = $ResearchAfter
+  production_sha256_before = $ProductionBefore
+  production_sha256_after = $ProductionAfter
+  completed_run_not_reapplied = $CompletedRun
+} | Format-List | Out-Host
+if ($ResearchAfter -ne $ResearchBefore) {
   throw "Research changed during read-only verification"
 }
-if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash -ne $ProductionBefore) {
+if ($ProductionAfter -ne $ProductionBefore) {
   throw "Production changed during read-only verification"
 }
+Pop-Location
 ```
 
 These are verification reads only: do not plan, apply, restore, rematerialize, or
