@@ -1266,6 +1266,7 @@ print(json.dumps({"qualified_symbol":symbol,"classification_row_count":len(rows)
   }
   Write-Host "Operator verification passed all required checks"
 }
+Pop-Location
 ```
 
 These are verification reads only: do not plan, apply, restore, rematerialize, or
