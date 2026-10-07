@@ -120,7 +120,7 @@ def test_explicit_projection_and_no_outcome_tables(tmp_path, monkeypatch):
             assert 'research_shadow_outcomes' not in sql
             return self.db.execute(sql,*args)
     def connect(path, **kwargs):
-        assert kwargs == {'read_only':True}
+        assert kwargs == {'read_only':True, 'config':history._sql_config()}
         return Spy(original(path, **kwargs))
     monkeypatch.setattr(history.duckdb, 'connect', connect)
     run(paths)

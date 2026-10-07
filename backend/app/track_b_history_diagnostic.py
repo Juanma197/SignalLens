@@ -47,7 +47,9 @@ def diagnose(*, research_db, production_db, decision_at):
         def __enter__(self): self.db.__enter__(); return self
         def __exit__(self, *args): return self.db.__exit__(*args)
         def execute(self, sql, *args):
-            if sql.startswith('SELECT count(*)'):
+            if sql.startswith('SELECT count(*)') and ' WHERE length(' in sql:
+                current['phase'] = 'metadata_cell'
+            elif sql.startswith('SELECT count(*)'):
                 current['phase'] = 'row_count'
             elif 'SELECT min(try_cast' in sql:
                 current['phase'] = 'date_metadata'
@@ -72,13 +74,16 @@ def diagnose(*, research_db, production_db, decision_at):
             event(current['database'] + '.connect', 'METADATA_CONNECTION_FAILED')
             raise
 
-    def read(db, table):
+    def read(db, table, decision=None):
         stage = current['database'] + '.' + table
         current.update(phase='schema', count=0)
         try:
-            summary, rows = original_read(db, table)
-        except h.InventoryError:
-            reason = ('TABLE_ROW_WORK_LIMIT' if current['count'] > h.MAX_METADATA_ROWS
+            summary, rows = original_read(db, table, decision)
+        except h.InventoryError as exc:
+            reason = ('MARKET_SQL_RESOURCE_LIMIT' if str(exc) == 'market SQL resource bound exceeded'
+                      else 'MARKET_METADATA_CELL_LIMIT' if str(exc) == 'market metadata cell bound exceeded'
+                      else 'MARKET_DATE_STATE_LIMIT' if str(exc) == 'market distinct-date state bound exceeded'
+                      else 'TABLE_ROW_WORK_LIMIT' if table != 'global_price_observations' and current['count'] > h.MAX_METADATA_ROWS
                       else 'METADATA_COUNT_MISMATCH')
             event(stage, reason, row_count=current['count'])
             raise
@@ -142,7 +147,8 @@ def diagnose(*, research_db, production_db, decision_at):
                     event('inventory', 'INVENTORY_COMPLETED')
                 except Exception as exc:
                     # The public code is an allowlisted class property, never text from an exception.
-                    reason = ('INVENTORY_BOUND_FAILED' if isinstance(exc, h.InventoryError)
+                    reason = ('INVENTORY_SQL_RESOURCE_LIMIT' if isinstance(exc, h.InventoryError) and str(exc) == 'inventory SQL resource bound exceeded'
+                              else 'INVENTORY_BOUND_FAILED' if isinstance(exc, h.InventoryError)
                               else 'REPORT_CONTRACT_FAILED' if isinstance(exc, h.InvestmentResearchError)
                               else 'INVENTORY_INTERNAL_FAILED')
                     event('inventory', reason)
