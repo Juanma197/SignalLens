@@ -505,9 +505,14 @@ def track_b_panel_feasibility(*,research_db:Path,production_db:Path,decision_at:
         distribution[sum(x["full_family_ready"] for x in rows.values())]+=1
         patterns["|".join(sorted(name for name,x in rows.items() if not x["full_family_ready"])) or "none"]+=1
     total=report["ordinary_operating_company_universe_count"]
+    if sum(distribution.values()) != total:
+        raise InvestmentResearchError("family denominator does not reconcile")
     return {"command":"track-b-panel-feasibility","decision_at":report["decision_at"],"labels":TRACK_B_LABELS,
       "comparable_universe_size":total,"per_family_availability":report["factor_capability"],
-      "companies_by_usable_family_count":{str(k):distribution.get(k,0) for k in (3,4,5,6)},
+      "companies_by_usable_family_count":{str(k):distribution.get(k,0) for k in range(7)},
+      "usable_family_bin_semantics":"exact_full_family_counts_not_cumulative",
+      "companies_with_fewer_than_three_usable_families":sum(distribution.get(k,0) for k in range(3)),
+      "family_distribution_reconciled":sum(distribution.values())==total,
       "cross_sectional_sample_sizes":full,"classification_exclusions":report["exclusions_by_reason"],
       "missingness_patterns":[{"pattern":k,"count":v} for k,v in patterns.most_common(max(0,min(MAX_SAMPLES,max_samples)))],
       "future_panel_feasible":total>0 and distribution.get(4,0)+distribution.get(5,0)+distribution.get(6,0)>0,

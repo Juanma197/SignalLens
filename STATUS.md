@@ -657,3 +657,20 @@ Comparable-universe and evidence repair is implemented offline. Security-type ex
 # Milestone 38
 
 Research classification and factor-evidence stores can now be populated from stored evidence with explicit authorization. Status and enrichment planning remain bounded and read-only; production is fingerprint-protected. Track A is frozen unchanged and Track B has zero recommendations, candidates, rankings, selections, vintages, or validation credit.
+
+## Milestone 42 — draft Track B panel assessment
+
+Implemented from main `7822272`: versioned draft specification and deterministic,
+64-KiB-bounded, explicit-path, timezone-aware read-only CLI. Exact 0–6 full-family
+bins reconcile the entire comparable denominator; supplied operator bins imply
+nine below three, with individual lower bins unknown. Existing family semantics
+and financial component/Contract A–D counterfactuals are separate. Eight unresolved
+preregistration requirement groups remain; accounting/history/outcome/cost/sample
+approval is not established. Offline fixtures only; no operator DB/provider access,
+panel persistence, model execution, validation credit or Track A/frontend change.
+See [Milestone 42 runbook](docs/milestone-42-track-b-research-panel.md).
+
+Milestone 42 verification: 64 offline regressions passed across panel,
+investment-research, financial-strength and liquidity suites; focused final panel
+verification passed 8 tests. Whitespace checks passed. Windows operator execution
+remains pending; preregistration remains blocked.
