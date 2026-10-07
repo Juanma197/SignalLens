@@ -231,7 +231,8 @@ def test_offline_post_materialization_consumer_lifecycle_is_read_only(tmp_path):
       assert report.get("recommendations",[])==[] and report.get("validation_credit",0)==0
 
 
-def test_exact_187_revision_historical_invisibility_and_post_visibility(tmp_path):
+@pytest.mark.parametrize('duckdb_session_timezone', ['UTC', 'Europe/London'], indirect=True)
+def test_exact_187_revision_historical_invisibility_and_post_visibility(tmp_path, duckdb_session_timezone):
     research,production=legacy_fixture(tmp_path)
     stamp=datetime(2026,7,1,tzinfo=timezone.utc)
     with duckdb.connect(str(research)) as db:
@@ -267,7 +268,8 @@ def test_exact_187_revision_historical_invisibility_and_post_visibility(tmp_path
         db.execute("INSERT INTO security_classification_evidence VALUES (?,?,'us_operating_company',?,?,?)",
           [sid,sid.upper()+".US",stamp,stamp,stamp])
     snapshots=(research.read_bytes(),production.read_bytes())
-    for boundary,expected in ((DECISION,0),(issued+timedelta(minutes=1),61)):
+    for boundary,expected in ((DECISION,0),(issued-timedelta(microseconds=1),0),
+                              (issued,61),(issued+timedelta(minutes=1),61)):
       audit=financial_strength_audit(research_db=research,production_db=production,decision_at=boundary)
       assessment=financial_strength_assessment(research_db=research,production_db=production,decision_at=boundary)
       assert audit["comparable_company_count"]==assessment["comparable_company_count"]==71
@@ -284,7 +286,9 @@ def test_exact_187_revision_historical_invisibility_and_post_visibility(tmp_path
       assert preview["components"]["liquidity"]==("ready" if expected else "unavailable")
       assert preview["readiness"]["full_family_ready"] is False
       if expected:
-        assert preview["selected_evidence"]["current_assets"]["available_at"]==str(issued)
+        available = preview["selected_evidence"]["current_assets"]["available_at"]
+        assert timestamp_text(available) is not None
+        assert timestamp_text(available)==timestamp_text(issued)
       else:
         assert "current_assets" not in preview["selected_evidence"]
       for report in (audit,assessment):
