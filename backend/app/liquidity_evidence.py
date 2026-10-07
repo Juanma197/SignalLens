@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-import json, math, re
+import hashlib, json, math, re
 from pathlib import Path
 from typing import Any
 
@@ -275,10 +275,31 @@ def contract_assessment(*,research_db,production_db,decision_at):
     report.update({"comparable_company_count":len(companies),"construction_assessments":metrics,"counterfactual_coverage":{"current_liquidity_readiness_under_existing_contract":current,"high_confidence_direct_aliases":hi,"documented_compatible_constructions":metrics["current_ratio"]["company_coverage"],"cash_direct_unrestricted_only":cash_direct,"cash_direct_or_compatible_construction":cash_construct,"contracts_A_to_D":{"existing":existing_contracts,"high_confidence_aliases":alias_contracts,"compatible_constructions":alias_contracts}},"contract_selected":None,"alias_activation":False})
     return _finish(report,CONTRACT_MAXIMUM_BYTES)
 
+def _preview_observation(observation):
+    """Summarize the cohort-wide ingestion capability without changing evidence.
+
+    The persisted plan identifier embeds the entire issuer cohort. Repeating it
+    in every observation can exhaust the response contract despite sample bounds.
+    Its UTF-8 digest is an exact reference to the stored token, not an alias or
+    a change to measurement validation.
+    """
+    validation=observation["validation"]
+    provenance=validation["lossless_normalization_provenance"]
+    controlled=provenance["controlled_ingestion"]
+    plan=controlled.get("plan_id")
+    if not isinstance(plan,str):return observation
+    encoded=plan.encode("utf-8")
+    summarized={k:v for k,v in controlled.items() if k!="plan_id"}
+    summarized["plan_id_reference"]={"representation":"sha256_utf8",
+      "sha256":hashlib.sha256(encoded).hexdigest(),"utf8_bytes":len(encoded)}
+    return {**observation,"validation":{**validation,
+      "lossless_normalization_provenance":{**provenance,"controlled_ingestion":summarized}}}
+
 def company_preview(*,research_db,production_db,decision_at,qualified_symbol):
     decision,companies,immutable=_load(research_db,production_db,decision_at); match=[c for c in companies if c["qualified_symbol"]==qualified_symbol]
     if len(match)!=1:raise InvestmentResearchError("company unavailable or ambiguous")
-    c=match[0]; observations=[x for x in c.pop("observations") if x["acceptance_or_withholding_reason"]!="post-decision evidence only"]
+    c=match[0]; observations=[_preview_observation(x) for x in c.pop("observations") if x["acceptance_or_withholding_reason"]!="post-decision evidence only"]
+    c["selected"]={k:_preview_observation(v) for k,v in c["selected"].items()}
     grouped={str(k or "unsupported_concept"):_bounded(sorted(v,key=lambda x:(x["period_end"] or "",str(x["accession_or_filing_reference"])),reverse=True),3) for k,v in sorted(_group(observations,"proposed_canonical_field").items(),key=lambda z:str(z[0]))}
     citations=_bounded(sorted({str(x["accession_or_filing_reference"]) for x in observations if x["accession_or_filing_reference"]}),10)
     c["candidate_observations"]=grouped;c["citations"]=citations;c["observation_population"]={"total_count":len(observations),"returned_count":sum(x["returned_count"] for x in grouped.values()),"sample_limit":3,"truncated":len(observations)>sum(x["returned_count"] for x in grouped.values())}
