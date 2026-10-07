@@ -23,11 +23,12 @@ import duckdb
 from .financial_strength import ZERO_OUTPUTS
 from .liquidity_compatibility import TARGET_FIELDS, _snapshot
 from .liquidity_measurement import CONCEPT_FIELDS, VALIDATOR_VERSION
+from .liquidity_canonical_contract import (OPERATION_TYPE,OPERATION_CONTRACT_VERSION,
+    canonical_available_at,canonical_evidence_key,operation_identity as _operation_identity,
+    timestamp_text)
 from .model_readiness import fingerprint
 from .sec_ingestion import validate_paths
 
-OPERATION_TYPE = "liquidity_canonical_materialization"
-OPERATION_CONTRACT_VERSION = "1.0.0"
 PLAN_TOKEN_VERSION = "lcm1"
 PLAN_LIFETIME = timedelta(hours=24)
 AUTHORIZATION_PHRASE = "I AUTHORIZE RESEARCH-ONLY CANONICAL LIQUIDITY MATERIALIZATION"
@@ -69,8 +70,7 @@ CONTRACT_HASH = hashlib.sha256(json.dumps(CONTRACT_DOCUMENT,sort_keys=True,separ
 
 
 def operation_identity() -> dict[str,str]:
-    return {"operation_type":OPERATION_TYPE,"operation_contract_version":OPERATION_CONTRACT_VERSION,
-            "operation_contract_hash":CONTRACT_HASH,"validator_version":VALIDATOR_VERSION}
+    return _operation_identity(CONTRACT_HASH,VALIDATOR_VERSION)
 
 
 def _canonical(value: Any) -> bytes:
@@ -120,7 +120,7 @@ def _proposal(research_db: Path, production_db: Path, decision_at: Any):
     for field in TARGET_FIELDS:
         for source_key,(company,obs) in accepted[field].items():
             source=obs["validation"]; available=max(datetime.fromisoformat(str(obs["public_at"])),datetime.fromisoformat(str(obs["retrieval_at"])))
-            key=hashlib.sha256(_canonical([OPERATION_TYPE,source_key,field,decision.isoformat()])).hexdigest()
+            key=canonical_evidence_key(source_key,field,decision)
             rows.append({"evidence_key":key,"source_evidence_key":source_key,"security_id":company["security_id"],
               "qualified_symbol":company["qualified_symbol"],"canonical_field":field,"value":source["lossless_normalization_provenance"]["normalized_value"],
               "unit":"USD","currency":"USD","applied_scale_factor":source["applied_scale_factor"],"measurement_nature":"instant",
@@ -129,7 +129,7 @@ def _proposal(research_db: Path, production_db: Path, decision_at: Any):
               "taxonomy":obs["taxonomy"],"original_concept":obs["exact_concept"],"original_value":source["lossless_normalization_provenance"]["original_value"],
               "original_unit":source["source_unit"],"original_currency":source["source_currency"],"original_scale":source["scale"],
               "filed_at":source["lossless_normalization_provenance"]["filed_at"],"public_at":obs["public_at"],"retrieved_at":obs["retrieval_at"],
-              "available_at":available.isoformat(),"ingestion_provenance":source["lossless_normalization_provenance"]["controlled_ingestion"],
+              "available_at":timestamp_text(available),"ingestion_provenance":source["lossless_normalization_provenance"]["controlled_ingestion"],
               "normalization":source["lossless_normalization_provenance"]})
     rows.sort(key=lambda x:(x["security_id"],x["canonical_field"],x["source_evidence_key"]))
     return decision,rows,reconciliation,immutability
@@ -169,7 +169,7 @@ def validate_plan(*,research_db,production_db,decision_at,plan_identifier,now: d
     if any(bound.get(k)!=v for k,v in operation_identity().items()): return {**base,"reason_code":ERRORS["contract"]}
     expected_fingerprints=bound.get("fingerprints",{})
     actual_fingerprints={"research":str(fingerprint(Path(research_db))),"production":str(fingerprint(Path(production_db)))}
-    retry_fingerprint=False
+    retry_fingerprint=False; retry_run_id=None
     if actual_fingerprints!=expected_fingerprints and actual_fingerprints.get("production")==expected_fingerprints.get("production"):
       # A completed application necessarily changes research's bytes.  Permit an
       # exact retry only at its recorded post-commit fingerprint and only when
@@ -178,11 +178,49 @@ def validate_plan(*,research_db,production_db,decision_at,plan_identifier,now: d
         with duckdb.connect(str(research_db),read_only=True) as db:
           if {"liquidity_canonical_materialization_runs","liquidity_canonical_materialization_revisions"} <= _tables(db):
             identity=hashlib.sha256(plan_identifier.encode()).hexdigest()
-            post=db.execute("SELECT production_sha256_after FROM liquidity_canonical_materialization_runs WHERE plan_identity=? AND status='completed' ORDER BY finished_at DESC LIMIT 1",[identity]).fetchone()
-            count=db.execute("SELECT count(*) FROM liquidity_canonical_materialization_revisions WHERE plan_identity=?",[identity]).fetchone()[0]
-            retry_fingerprint=bool(post and post[0]==actual_fingerprints["production"] and count==bound.get("proposed_observation_count"))
+            run=db.execute("""SELECT run_id,operation_type,operation_contract_version,operation_contract_hash,
+              validator_version,decision_at,inserted_count,unchanged_count,conflict_count,counts_by_field,
+              production_sha256_before,production_sha256_after FROM liquidity_canonical_materialization_runs
+              WHERE plan_identity=? AND status='completed' ORDER BY finished_at DESC LIMIT 1""",[identity]).fetchone()
+            rows=db.execute("""SELECT evidence_key,operation_type,operation_contract_version,
+              operation_contract_hash,validator_version,materialization_run_id FROM
+              liquidity_canonical_materialization_revisions WHERE plan_identity=? ORDER BY evidence_key""",[identity]).fetchall()
+            keys=sorted(str(x) for x in bound.get("evidence_keys",[]))
+            canonical_count=db.execute("""SELECT count(*) FROM canonical_factor_evidence c JOIN
+              liquidity_canonical_materialization_revisions r ON r.evidence_key=c.evidence_key
+              WHERE r.plan_identity=? AND c.source_fact_key=r.source_evidence_key
+              AND c.security_id=r.security_id AND c.canonical_field=r.canonical_field
+              AND c.value=r.normalized_value AND c.unit=r.canonical_unit AND c.currency=r.canonical_currency
+              AND c.original_concept_or_field=r.original_concept
+              AND c.accession_or_source_identifier=r.accession
+              AND c.public_at=r.public_at AND c.retrieved_at=r.retrieved_at
+              AND c.materialized_at=r.materialized_at
+              AND c.available_at=greatest(r.public_at,r.retrieved_at,r.materialized_at)""",[identity]).fetchone()[0]
+            source_count=db.execute("""SELECT count(*) FROM liquidity_canonical_materialization_revisions r
+              JOIN sec_facts s ON s.fact_key=r.source_evidence_key AND s.security_id=r.security_id
+              AND s.concept=r.original_concept AND s.value=r.original_value
+              AND s.unit=r.original_unit AND coalesce(nullif(trim(s.currency),''),'USD')=
+                coalesce(nullif(trim(r.original_currency),''),'USD')
+              AND s.period_end=r.period_end AND s.accession_number=r.accession
+              AND s.public_at=r.public_at AND s.retrieved_at=r.retrieved_at
+              WHERE r.plan_identity=?""",[identity]).fetchone()[0]
+            expected=operation_identity(); count=bound.get("proposed_observation_count")
+            retry_fingerprint=bool(run and
+              tuple(run[1:5])==(expected["operation_type"],expected["operation_contract_version"],expected["operation_contract_hash"],expected["validator_version"]) and
+              timestamp_text(run[5])==timestamp_text(bound.get("decision_at"))==timestamp_text(decision_at) and
+              run[6]==count and run[7]==0 and run[8]==0 and
+              json.loads(run[9])==bound.get("counts_by_canonical_field") and
+              run[10]==expected_fingerprints.get("production") and run[11]==actual_fingerprints["production"] and
+              len(rows)==count==canonical_count==source_count and [x[0] for x in rows]==keys and
+              hashlib.sha256(_canonical(bound.get("evidence_keys"))).hexdigest()==bound.get("evidence_keys_digest") and
+              all(tuple(x[1:5])==(expected["operation_type"],expected["operation_contract_version"],expected["operation_contract_hash"],expected["validator_version"]) and x[5]==run[0] for x in rows))
+            if retry_fingerprint: retry_run_id=run[0]
       except duckdb.Error: retry_fingerprint=False
     if actual_fingerprints!=expected_fingerprints and not retry_fingerprint: return {**base,"reason_code":ERRORS["fingerprint"]}
+    if retry_fingerprint:
+      return {**base,"valid":True,"reason_code":None,"idempotent_retry":True,"completed_run_id":retry_run_id,
+        "issued_at":issued.isoformat(),"expires_at":expires.isoformat(),
+        "remaining_validity_seconds":max(0,int((expires-checked).total_seconds())),"capacity":_capacity(Path(research_db)),**operation_identity()}
     try: current=plan(research_db=research_db,production_db=production_db,decision_at=decision_at,now=issued)
     except Exception: return {**base,"reason_code":ERRORS["invalid"]}
     current_bound=_decode(current["plan_identifier"])
@@ -192,7 +230,7 @@ def validate_plan(*,research_db,production_db,decision_at,plan_identifier,now: d
     compare=dict(current_bound)
     if retry_fingerprint: compare["fingerprints"]=bound["fingerprints"]
     if bound!=compare: return {**base,"reason_code":ERRORS["source"]}
-    return {**base,"valid":True,"reason_code":None,"issued_at":issued.isoformat(),"expires_at":expires.isoformat(),
+    return {**base,"valid":True,"reason_code":None,"idempotent_retry":False,"issued_at":issued.isoformat(),"expires_at":expires.isoformat(),
       "remaining_validity_seconds":max(0,int((expires-checked).total_seconds())),"capacity":_capacity(Path(research_db)),**operation_identity()}
 
 
@@ -256,6 +294,17 @@ def apply(*,research_db,production_db,decision_at,plan_identifier,authorization,
     timestamp=_utc(now); validation=validate_plan(research_db=research_db,production_db=production_db,
       decision_at=decision_at,plan_identifier=plan_identifier,now=timestamp)
     if not validation["valid"]: raise LiquidityMaterializationError(validation["reason_code"])
+    if validation.get("idempotent_retry"):
+      bound=_decode(plan_identifier); identity=hashlib.sha256(plan_identifier.encode()).hexdigest()
+      with duckdb.connect(str(research_db),read_only=True) as db:
+        company_counts=dict(db.execute("SELECT security_id,count(*) FROM liquidity_canonical_materialization_revisions WHERE plan_identity=? GROUP BY security_id ORDER BY security_id",[identity]).fetchall())
+      production_fingerprint=fingerprint(production_db)
+      return {"command":"apply-liquidity-canonical-materialization","status":"completed",
+        "run_id":validation["completed_run_id"],"plan_identity":identity,"idempotent_retry":True,
+        "inserted_count":0,"unchanged_count":bound["proposed_observation_count"],"conflict_count":0,
+        "counts_by_canonical_field":bound["counts_by_canonical_field"],"counts_by_company":company_counts,
+        "production_fingerprint_before":production_fingerprint,"production_fingerprint_after":production_fingerprint,
+        "provider_request_count":0,**operation_identity(),**ZERO_OUTPUTS}
     cap=_capacity(research_db); available=cap["available_filesystem_bytes"] if capacity_available_bytes is None else capacity_available_bytes
     if available is None or available<cap["required_free_space_bytes"]: raise LiquidityMaterializationError(ERRORS["capacity"])
     # Every preflight above occurs before this first writable open.
@@ -309,16 +358,16 @@ def apply(*,research_db,production_db,decision_at,plan_identifier,authorization,
                 "normalization_rationale":row["normalization"],"operation_type":OPERATION_TYPE,
                 "operation_contract_version":OPERATION_CONTRACT_VERSION,"operation_contract_hash":CONTRACT_HASH,
                 "validator_version":VALIDATOR_VERSION,"plan_identity":plan_identity,"materialization_run_id":run_id,
-                "decision_at":str(decision_at),"original_timestamps":{"filed_at":row["filed_at"],"public_at":row["public_at"],
-                "retrieved_at":row["retrieved_at"],"available_at":row["available_at"]}}
+                "decision_at":timestamp_text(decision_at),"original_timestamps":{"filed_at":row["filed_at"],"public_at":timestamp_text(row["public_at"]),
+                "retrieved_at":timestamp_text(row["retrieved_at"]),"available_at":timestamp_text(row["available_at"])}}
               lineage={"source_evidence_key":row["source_evidence_key"],"source_fact_key":row["source_evidence_key"],
                 "operation_type":OPERATION_TYPE,"operation_contract_hash":CONTRACT_HASH,"validator_version":VALIDATOR_VERSION,
-                "plan_identity":plan_identity,"materialization_run_id":run_id,"decision_at":str(decision_at)}
+                "plan_identity":plan_identity,"materialization_run_id":run_id,"decision_at":timestamp_text(decision_at)}
               canonical={"evidence_key":row["evidence_key"],"security_id":row["security_id"],
                 "qualified_symbol":row["qualified_symbol"],"canonical_field":row["canonical_field"],"value":row["value"],"unit":"USD","currency":"USD",
                 "period_start":None,"period_end":row["period_end"],"instant_date":row["instant_date"],"fiscal_period":row["fiscal_period"],
                 "form":row["ingestion_provenance"].get("form"),"accession_or_source_identifier":row["accession"],
-                "public_at":row["public_at"],"retrieved_at":row["retrieved_at"],"available_at":max(datetime.fromisoformat(row["available_at"]),timestamp),
+                "public_at":row["public_at"],"retrieved_at":row["retrieved_at"],"available_at":canonical_available_at(public_at=row["public_at"],retrieved_at=row["retrieved_at"],materialized_at=timestamp),
                 "materialized_at":timestamp,"original_concept_or_field":row["original_concept"],
                 "alias_contract_version":OPERATION_CONTRACT_VERSION,"sign_convention":"reported_nonnegative",
                 "reliability_state":"usable","withholding_reason":None,"provenance":json.dumps(provenance),
@@ -339,7 +388,7 @@ def apply(*,research_db,production_db,decision_at,plan_identifier,authorization,
     except LiquidityMaterializationError: raise
     except Exception as exc: raise LiquidityMaterializationError(ERRORS["internal"]) from exc
     return {"command":"apply-liquidity-canonical-materialization","status":"completed","run_id":run_id,
-      "plan_identity":plan_identity,"inserted_count":inserted,"unchanged_count":unchanged,"conflict_count":conflicts,
+      "plan_identity":plan_identity,"idempotent_retry":False,"inserted_count":inserted,"unchanged_count":unchanged,"conflict_count":conflicts,
       "counts_by_canonical_field":counts_field,"counts_by_company":counts_company,"production_fingerprint_before":prod_before,
       "production_fingerprint_after":fingerprint(production_db),"provider_request_count":0,**operation_identity(),**ZERO_OUTPUTS}
 

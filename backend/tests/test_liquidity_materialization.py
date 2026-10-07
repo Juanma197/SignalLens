@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 import json
 import subprocess
 import sys
@@ -7,9 +8,16 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from app.liquidity_materialization import (AUTHORIZATION_PHRASE, ERRORS,
-    LiquidityMaterializationError, apply, plan, status, validate_plan)
+from app.liquidity_materialization import (
+    AUTHORIZATION_PHRASE, ERRORS, LiquidityMaterializationError,
+    apply, plan, status, validate_plan,
+)
 from app.model_readiness import fingerprint
+from app.liquidity_canonical_contract import (
+    canonical_evidence_key, date_value, identity_scale,
+    redundant_currency, same_number, timestamp_text,
+)
+from app.liquidity_resolution import CanonicalLiquidityResolutionError
 from tests.test_liquidity_evidence import DECISION, fixture
 from app.liquidity_compatibility import compatibility_audit
 from app.liquidity_evidence import evidence_discovery, contract_assessment, company_preview
@@ -69,6 +77,7 @@ def test_plan_validation_authorization_apply_retry_and_provenance(tmp_path):
     second=apply(research_db=research,production_db=production,decision_at=DECISION,
       plan_identifier=token,authorization=AUTHORIZATION_PHRASE,now=issued)
     assert second["inserted_count"]==0 and second["unchanged_count"]==5
+    assert second["idempotent_retry"] is True
     assert production.read_bytes()==original_production
     assert status(research_db=research,production_db=production)["state"]=="completed"
 
@@ -125,6 +134,7 @@ def test_exact_legacy_schema_first_apply_retry_provenance_and_immutability(tmp_p
     retry=apply(research_db=research,production_db=production,decision_at=DECISION,
       plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
     assert (retry["inserted_count"],retry["unchanged_count"])==(0,5)
+    assert retry["idempotent_retry"] is True
     assert research.read_bytes()==retry_before
     report=status(research_db=research,production_db=production)
     assert report["state"]=="completed" and report["latest_run"]["inserted_count"]==5
@@ -270,6 +280,100 @@ def test_resolver_json_order_independence_and_stable_redacted_failure(tmp_path):
     result=subprocess.run(command,cwd=Path(__file__).parents[1],capture_output=True,text=True)
     error=json.loads(result.stderr)
     assert result.returncode==1
+    assert result.stdout==""
     assert error=={"error":{"code":"LIQUIDITY_CANONICAL_RESOLUTION_FAILED",
       "message":"investment research request failed; details redacted"},"status":"failed"}
     assert str(research) not in result.stderr and "source_evidence_key" not in result.stderr
+
+
+def test_valid_liquidity_consumer_clis_emit_nonempty_json_not_null(tmp_path):
+    research,production=legacy_fixture(tmp_path); issued=DECISION+timedelta(minutes=1)
+    planned=plan(research_db=research,production_db=production,decision_at=DECISION,now=issued)
+    apply(research_db=research,production_db=production,decision_at=DECISION,
+      plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
+    later=issued+timedelta(minutes=1)
+    commands=("liquidity-measurement-compatibility-audit","liquidity-evidence-discovery",
+      "liquidity-contract-assessment","liquidity-raw-canonical-inventory","liquidity-evidence-gap-assessment")
+    for name in commands:
+      command=[sys.executable,"-m","app.investment_research_cli",name,"--research-db",str(research),
+        "--production-db",str(production),"--decision-at",later.isoformat()]
+      result=subprocess.run(command,cwd=Path(__file__).parents[1],capture_output=True,text=True)
+      assert result.returncode==0 and result.stderr=="" and result.stdout.strip()
+      report=json.loads(result.stdout)
+      assert isinstance(report,dict) and report and report["command"]==name
+      assert report.get("rankings",[])==[] and report.get("validation_credit",0)==0
+
+
+def test_shared_contract_normalizes_timezone_duckdb_types_currency_and_numbers(tmp_path):
+    london="2026-07-01T13:00:00+01:00"; utc="2026-07-01T12:00:00+00:00"
+    assert timestamp_text(london)==timestamp_text(utc)=="2026-07-01T12:00:00+00:00"
+    assert canonical_evidence_key("fact","current_assets",london)==canonical_evidence_key("fact","current_assets",utc)
+    assert date_value(date(2026,6,30))==date_value("2026-06-30")
+    assert redundant_currency(None,"USD")==redundant_currency(" ","USD")==redundant_currency("usd","USD")=="USD"
+    assert identity_scale(None)==identity_scale(0)==identity_scale(1.0)==identity_scale(Decimal("1.00"))
+    assert same_number(1,1.0) and same_number(Decimal("1.00"),"1")
+    path=tmp_path/"timestamp types.duckdb"
+    with duckdb.connect(str(path)) as db:
+      db.execute("SET TimeZone='Europe/London'")
+      value=db.execute("SELECT TIMESTAMPTZ '2026-07-01 12:00:00+00', DATE '2026-06-30'").fetchone()
+    assert timestamp_text(value[0])==timestamp_text(utc) and date_value(value[1])==date_value("2026-06-30")
+
+
+@pytest.mark.parametrize(("reason","mutation"),[
+  ("duplicate_or_missing_revision","DELETE FROM liquidity_canonical_materialization_revisions WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("incompatible_operation_identity","UPDATE liquidity_canonical_materialization_revisions SET validator_version='wrong' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("canonical_field_mismatch","UPDATE canonical_factor_evidence SET canonical_field='wrong' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("security_id_mismatch","UPDATE canonical_factor_evidence SET security_id='wrong' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("conflicting_canonical_value","UPDATE canonical_factor_evidence SET value=value+1 WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("accounting_meaning_mismatch","UPDATE liquidity_canonical_materialization_revisions SET original_concept='wrong' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("source_unit_or_currency_mismatch","UPDATE liquidity_canonical_materialization_revisions SET original_unit='shares' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("unsupported_scale","UPDATE liquidity_canonical_materialization_revisions SET original_scale=1000 WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("unit_or_currency_mismatch","UPDATE canonical_factor_evidence SET currency='EUR' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("period_mismatch","UPDATE canonical_factor_evidence SET period_end=DATE '2026-06-29' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("source_identity_mismatch","UPDATE canonical_factor_evidence SET accession_or_source_identifier='wrong' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("source_timestamp_mismatch","UPDATE canonical_factor_evidence SET public_at=public_at+INTERVAL 1 SECOND WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("revision_timestamp_mismatch","UPDATE liquidity_canonical_materialization_revisions SET retrieved_at=retrieved_at+INTERVAL 1 SECOND WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("availability_timestamp_mismatch","UPDATE canonical_factor_evidence SET available_at=available_at+INTERVAL 1 SECOND WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+])
+def test_each_resolver_corruption_reports_exact_bounded_reason(tmp_path,reason,mutation):
+    research,production=legacy_fixture(tmp_path); issued=DECISION+timedelta(minutes=1)
+    planned=plan(research_db=research,production_db=production,decision_at=DECISION,now=issued)
+    apply(research_db=research,production_db=production,decision_at=DECISION,
+      plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
+    with duckdb.connect(str(research)) as db: db.execute(mutation)
+    with pytest.raises(CanonicalLiquidityResolutionError) as caught:
+      compatibility_audit(research_db=research,production_db=production,decision_at=issued+timedelta(minutes=1))
+    assert caught.value.diagnostics["issue_counts"]=={reason:1}
+    assert caught.value.diagnostics["sample_limit"]==10
+    assert len(caught.value.diagnostics["samples"])==1
+
+
+@pytest.mark.parametrize("reason",[
+  "ambiguous_or_unmatched_source","source_lineage_mismatch",
+  "materialization_decision_mismatch","canonical_evidence_key_mismatch","malformed_lineage",
+])
+def test_structural_resolver_corruptions_report_exact_reason(tmp_path,reason):
+    research,production=legacy_fixture(tmp_path); issued=DECISION+timedelta(minutes=1)
+    planned=plan(research_db=research,production_db=production,decision_at=DECISION,now=issued)
+    apply(research_db=research,production_db=production,decision_at=DECISION,
+      plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
+    with duckdb.connect(str(research)) as db:
+      key,source,provenance,lineage=db.execute("""SELECT evidence_key,source_fact_key,provenance,lineage
+        FROM canonical_factor_evidence WHERE evidence_key<>'unrelated' ORDER BY evidence_key LIMIT 1""").fetchone()
+      if reason=="ambiguous_or_unmatched_source":
+        db.execute("DELETE FROM sec_facts WHERE fact_key=?",[source])
+      elif reason=="source_lineage_mismatch":
+        value=json.loads(lineage); value["source_fact_key"]="wrong"
+        db.execute("UPDATE canonical_factor_evidence SET lineage=? WHERE evidence_key=?",[json.dumps(value),key])
+      elif reason=="materialization_decision_mismatch":
+        value=json.loads(provenance); value["decision_at"]="2026-01-01T00:00:00+00:00"
+        db.execute("UPDATE canonical_factor_evidence SET provenance=? WHERE evidence_key=?",[json.dumps(value),key])
+      elif reason=="canonical_evidence_key_mismatch":
+        wrong="f"*64 if key!="f"*64 else "e"*64
+        db.execute("UPDATE liquidity_canonical_materialization_revisions SET evidence_key=? WHERE evidence_key=?",[wrong,key])
+        db.execute("UPDATE canonical_factor_evidence SET evidence_key=? WHERE evidence_key=?",[wrong,key])
+      else:
+        db.execute("UPDATE canonical_factor_evidence SET lineage='[]' WHERE evidence_key=?",[key])
+    with pytest.raises(CanonicalLiquidityResolutionError) as caught:
+      compatibility_audit(research_db=research,production_db=production,decision_at=issued+timedelta(minutes=1))
+    assert caught.value.diagnostics["issue_counts"]=={reason:1}

@@ -1024,3 +1024,57 @@ if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Production).Hash -ne $Producti
 These are verification reads only: do not plan, apply, restore, rematerialize, or
 invoke a provider.  The existing completed run requires no rollback and no repeat
 apply.
+
+## Urgent post-merge portability correction
+
+The first merged consumer repair was not portable.  On the post-merge Windows
+checkout its own focused command reported five failures and fifteen passes: both
+idempotent-retry tests, the offline lifecycle test, the exact 187-row historical
+test, and the JSON-order test failed.  The bounded resolver diagnostics, once
+surfaced internally, showed `source_timestamp_mismatch` for every otherwise valid
+controlled row (5 in the small fixture and 187 in the operator-shaped fixture).
+Because rejection uses an ordered first-failure taxonomy, later comparisons were
+not reached for those rows.  The cause was raw `isoformat()`/`str()` comparison of
+equivalent TIMESTAMPTZ representations rather than comparison of UTC instants.
+DATE, numeric, redundant-currency, and scale checks had the same portability risk.
+
+The identical retry had a second root cause.  Validation noticed the expected
+post-apply research fingerprint, but then rebuilt a fresh plan against the mutated
+database.  That rebuild traversed the failing consumer resolver and its exception
+was collapsed to `LIQUIDITY_MATERIALIZATION_PLAN_INVALID`.  Retry recognition now
+occurs before ordinary fingerprint rejection or plan reconstruction.  It requires
+the exact token identity, unexpired token, operation/contract/hash/validator,
+decision boundary, evidence-key digest and complete key set, field counts,
+completed manifest, zero conflicts, matching revision/canonical pairs, and the
+unchanged production fingerprint.  A valid retry returns zero inserted, the
+original count unchanged, `idempotent_retry=true`, and performs no write.
+
+Producer and consumer now share canonical serialization helpers for UTC timestamp
+instants, DATE values, finite decimal values, null/blank/USD redundant currency,
+identity scale, evidence keys, operation identity, decision timestamps, and
+canonical availability.  Valid future revisions have their durable lineage
+checked but are not substituted before `available_at`; after that instant the one
+revision replaces its one raw source.  Individual corruption regressions retain
+the bounded reason taxonomy, while the CLI continues to emit only one stable
+redacted error and empty stdout on failure.
+
+During the operator verification all listed consumers failed closed, including
+both boundaries, discovery, both contract/inventory reports, financial strength,
+Track B, comparable-universe readiness, and both previews.  Those attempts were
+read-only and changed neither database hash.  Empty failed-command output must not
+be converted through `@($null).Count`; it is a command failure, not one ranking,
+candidate, or recommendation.  No model output was produced.
+
+The read-only PowerShell sequence above remains the post-merge verification
+sequence.  Capture stdout only after checking `$LASTEXITCODE`, require nonempty
+JSON before `ConvertFrom-Json`, and stop immediately on an empty report.  The
+completed operator run remains valid and needs no rollback, rewrite, or repeat
+apply.
+
+### Hotfix merge-resolution status
+
+The conflict resolution retains the semantic-contract resolver and the complete
+combined regression history.  It does not record a successful operator
+verification: the final PowerShell sequence above remains an operator action to
+run only after this hotfix is merged.  Resolving the source conflict neither
+accessed nor changed the operator databases or the completed materialization.
