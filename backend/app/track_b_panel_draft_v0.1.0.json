@@ -1,0 +1,297 @@
+{
+  "version": "track-b-research-panel-0.1.0-draft",
+  "status": "draft_not_preregistered",
+  "weights": null,
+  "universe": {
+    "scope": "Point-in-time classified US ordinary operating companies in the active catalogue; current membership feasibility only. Historical membership including delistings is required before evaluation.",
+    "identity": "Durable security_id and effective-dated listing, issuer CIK and corporate-action lineage. CIK identifies issuer, not share class; ticker is never the durable join key.",
+    "exclusions": [
+      "funds",
+      "ETFs",
+      "ETNs",
+      "preferreds",
+      "warrants",
+      "SPAC shells",
+      "unclassified or ambiguous securities",
+      "banks and insurers pending separate accounting contract",
+      "REITs and BDCs pending separate comparability contract",
+      "foreign issuers and ADRs outside this US ordinary-company scope"
+    ],
+    "sample_policy": "Do not choose a family threshold to maximize coverage. No sample minimum or historical start is approved."
+  },
+  "schedule": {
+    "draft": "Monthly final completed US exchange session, decision_at at 23:59 UTC; exchange calendar and timestamp convention require review.",
+    "entry": "Next regular-session open after decision_at; no same-close execution.",
+    "timezone": "All timestamps timezone-aware, normalized UTC; holidays and early closes use exchange calendar."
+  },
+  "availability": {
+    "rule": "public_at and retrieved_at required; available_at=max(public_at,retrieved_at); all <= decision_at. Equality is included. Missing timestamps fail closed.",
+    "revisions": "Only revisions eligible at decision_at under existing canonical-liquidity resolver and contract hash. Restatements never rewrite past decisions.",
+    "classification": "Effective-dated classification and issuer/listing mappings must be visible at decision_at. Current membership cannot establish historical membership."
+  },
+  "factors": [
+    {
+      "family": "value",
+      "name": "free_cash_flow_yield",
+      "rationale": "Relates owner cash generation to the price paid.",
+      "numerator": "TTM operating cash flow minus TTM capital expenditure",
+      "denominator": "decision-date market capitalisation",
+      "inputs": [
+        "NetCashProvidedByUsedInOperatingActivities",
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+        "split-adjusted decision price",
+        "diluted shares"
+      ],
+      "construction": "TTM",
+      "currency_unit": "same currency; numerator and denominator monetary",
+      "direction": "higher",
+      "negative_treatment": "retain signed value for research; withhold ranking",
+      "denominator_guard": "strictly positive and above configured materiality floor",
+      "minimum_history": "four quarters",
+      "staleness": "filing no older than 180 days",
+      "missing": "withhold",
+      "sector_limitations": "financial companies require separate comparability review",
+      "failure_modes": [
+        "unreliable_denominator",
+        "currency_mismatch",
+        "stale_filing"
+      ]
+    },
+    {
+      "family": "business_quality",
+      "name": "return_on_assets",
+      "rationale": "Measures earnings generated per unit of assets.",
+      "numerator": "TTM NetIncomeLoss",
+      "denominator": "average beginning and ending Assets",
+      "inputs": [
+        "NetIncomeLoss",
+        "Assets"
+      ],
+      "construction": "TTM plus two annual instants",
+      "currency_unit": "same currency monetary values",
+      "direction": "higher",
+      "negative_treatment": "negative is valid but not converted to a score in this draft",
+      "denominator_guard": "positive average assets above materiality floor",
+      "minimum_history": "five quarters",
+      "staleness": "180 days",
+      "missing": "withhold",
+      "sector_limitations": "industry balance sheets may not be comparable",
+      "failure_modes": [
+        "negative_or_near_zero_denominator",
+        "stale_filing"
+      ]
+    },
+    {
+      "family": "financial_strength",
+      "name": "net_debt_to_operating_cash_flow",
+      "rationale": "Tests debt burden against internally generated cash.",
+      "numerator": "current debt plus non-current debt minus cash",
+      "denominator": "TTM operating cash flow",
+      "inputs": [
+        "ShortTermBorrowings",
+        "LongTermDebtNoncurrent",
+        "CashAndCashEquivalentsAtCarryingValue",
+        "NetCashProvidedByUsedInOperatingActivities"
+      ],
+      "construction": "latest instant / TTM",
+      "currency_unit": "same currency monetary values",
+      "direction": "lower",
+      "negative_treatment": "net cash is retained; non-positive cash flow withholds ratio",
+      "denominator_guard": "positive and above materiality floor",
+      "minimum_history": "four quarters",
+      "staleness": "180 days",
+      "missing": "withhold",
+      "sector_limitations": "not comparable for financial companies",
+      "failure_modes": [
+        "unreliable_denominator",
+        "unsupported_taxonomy"
+      ]
+    },
+    {
+      "family": "growth",
+      "name": "revenue_growth",
+      "rationale": "Measures expansion in customer-derived activity.",
+      "numerator": "current TTM revenue minus prior TTM revenue",
+      "denominator": "absolute prior TTM revenue",
+      "inputs": [
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "Revenues"
+      ],
+      "construction": "two non-overlapping TTM windows",
+      "currency_unit": "same reporting currency and USD monetary unit",
+      "direction": "higher",
+      "negative_treatment": "negative growth is valid",
+      "denominator_guard": "prior revenue positive and material",
+      "minimum_history": "eight quarters",
+      "staleness": "180 days",
+      "missing": "withhold",
+      "sector_limitations": "taxonomy and acquisition comparability review",
+      "failure_modes": [
+        "unreliable_denominator",
+        "currency_mismatch"
+      ]
+    },
+    {
+      "family": "shareholder_treatment",
+      "name": "diluted_share_growth",
+      "rationale": "Identifies dilution or contraction in owners' claim count.",
+      "numerator": "current diluted shares minus prior comparable diluted shares",
+      "denominator": "absolute prior diluted shares",
+      "inputs": [
+        "WeightedAverageNumberOfDilutedSharesOutstanding"
+      ],
+      "construction": "annual comparable duration",
+      "currency_unit": "shares",
+      "direction": "lower",
+      "negative_treatment": "buybacks may yield negative values; retain signed value",
+      "denominator_guard": "prior shares positive",
+      "minimum_history": "two comparable annual observations",
+      "staleness": "180 days",
+      "missing": "withhold",
+      "sector_limitations": "major reorganisations require action review",
+      "failure_modes": [
+        "unresolved_corporate_action",
+        "incompatible_units"
+      ]
+    },
+    {
+      "family": "price_and_risk",
+      "name": "total_return_volatility",
+      "rationale": "Describes variability of shareholder total returns.",
+      "numerator": "annualised standard deviation of split-adjusted daily total returns",
+      "denominator": "not applicable",
+      "inputs": [
+        "split-adjusted closes",
+        "cash dividends",
+        "corporate actions"
+      ],
+      "construction": "252 exact completed sessions",
+      "currency_unit": "dimensionless returns in one currency",
+      "direction": "lower",
+      "negative_treatment": "not applicable",
+      "denominator_guard": "positive prices required",
+      "minimum_history": "253 completed sessions",
+      "staleness": "latest completed session within seven calendar days",
+      "missing": "withhold",
+      "sector_limitations": "none; security actions can make series incomparable",
+      "failure_modes": [
+        "incomplete_horizon",
+        "security_delisted",
+        "unresolved_corporate_action"
+      ]
+    }
+  ],
+  "financial_strength": {
+    "selected_contract": null,
+    "contracts": {
+      "A": "All four components mandatory",
+      "B": "Leverage and liquidity mandatory, coverage optional",
+      "C": "Two independent ready components",
+      "D": "Explicit zero-debt branch or leveraged branch with leverage and coverage"
+    },
+    "components": [
+      "leverage",
+      "liquidity",
+      "coverage",
+      "cash_generation_debt_service"
+    ],
+    "review": [
+      "Debt composition and overlap; commercial paper, convertibles and lease inclusion",
+      "Unrestricted versus restricted cash",
+      "Gross interest versus net interest; defensible EBIT bridge, never pre-tax income alone",
+      "NCI-inclusive equity and negative/zero denominators",
+      "Same reporting periods, currency and duration; no latest-field mixing",
+      "Explicit debt-free evidence and applicability; missing is never zero",
+      "Financial-sector comparability; independent components cannot be redundant"
+    ],
+    "audit_policy": "Reuse Milestone 40 counterfactual contracts for evidence feasibility, not validated factor calculations. Existing audit EBIT and period alignment limitations remain blockers.",
+    "contract_tradeoffs": {
+      "A": "Preserves all-component coverage; absent gross interest/defensible EBIT blocks leveraged companies. Applicability policy still requires review.",
+      "B": "Omitting coverage and cash-generation requirements changes the economic hypothesis; leverage and current ratio cannot certify debt-service capacity.",
+      "C": "Two ready components can omit coverage and debt service; establish economic independence and comparability before approval.",
+      "D": "Explicit zero debt must include the approved debt and lease perimeter; missing interest or debt never establishes the zero-debt branch. Leveraged coverage still needs defensible EBIT."
+    }
+  },
+  "history": {
+    "accounting": "Four comparable quarters for TTM; five quarters for ROA beginning/ending assets; eight non-overlapping quarters for growth; two comparable annual share durations. No mixing annual/YTD/quarter duration or double-counting.",
+    "prices": "253 completed sessions for 252 daily returns; exact horizon sessions plus entry/exit and complete corporate actions.",
+    "staleness": "Accounting filing <=180 calendar days; last completed price session <=7 calendar days. Thresholds and materiality floors require review.",
+    "assessment_limit": "Single-boundary field readiness is an input proxy, not proof of TTM, aligned periods, history, identity continuity or completed outcomes."
+  },
+  "missingness": {
+    "states": [
+      "available",
+      "missing",
+      "withheld",
+      "not_applicable"
+    ],
+    "policy": "Never impute missing debt, interest, cash, dividends or returns to zero. Explicit not_applicable requires evidence under approved contract. Retain signed numerators and distress flags; withhold invalid denominators.",
+    "bins": "Exact count of full families, 0 through 6, over complete comparable denominator; cumulative thresholds separately labelled.",
+    "exclusions": "Report exclusion and missingness counts before samples; no return-driven removal or complete-case threshold selection."
+  },
+  "outcomes": {
+    "draft_horizons_completed_sessions": [
+      126,
+      252
+    ],
+    "primary": "252-session benchmark-relative net total return; 126 secondary, subject to preregistration review.",
+    "benchmark": "Predeclare investable broad US total-return benchmark, currency, source, version and calendar. No benchmark chosen from observed performance.",
+    "requirements": "Split/action adjusted entry and exit prices, dividends with declared reinvestment convention, mergers, spinoffs, delisting proceeds and benchmark total returns. No price-only substitution or silent dropping of failed securities.",
+    "completeness": "Incomplete horizons withheld and counted; outcome tables not read in this assessment."
+  },
+  "costs": {
+    "draft_assumptions": {
+      "estimated_spread_bps": 25,
+      "commission_bps": 5,
+      "fx_bps": 10,
+      "slippage_bps": 10,
+      "turnover": 1,
+      "position_value": 10000
+    },
+    "policy": "Reuse CostAssumptions validator. Combined 50 bps at turnover=1 is illustrative, not approved round-trip economics. Review half/full spread, per-side commissions, USD FX applicability, impact, participation, entry/exit turnover and capacity. Missing observed spread cannot establish execution feasibility. No sensitivity tuning against returns."
+  },
+  "evaluation": {
+    "splits": "Chronological development, specification-lock review, then untouched final holdout; exact dates and minimum cross-sectional/time sample sizes unresolved.",
+    "purge": "Remove observations whose outcome windows cross split boundaries; embargo at least maximum 252-session horizon. Group share classes by issuer when estimating dependence.",
+    "controls": [
+      "No random temporal split",
+      "Freeze universe, definitions, costs, benchmark, horizons, exclusions and multiplicity policy before outcome access",
+      "No use of future filings, revised membership, aliases or corporate actions in features",
+      "Separate outcome-only future actions from point-in-time features",
+      "Predeclare dependence-aware intervals and multiplicity for six families/two horizons; no performance-based contract selection",
+      "Untouched holdout access ledger and prospective registration timestamp required"
+    ],
+    "execution": "No backtest, model execution, panel persistence or return tuning authorized."
+  },
+  "provenance": {
+    "required": [
+      "security_id",
+      "effective listing and issuer mapping",
+      "decision_at",
+      "source record/accession",
+      "public_at",
+      "retrieved_at",
+      "available_at",
+      "period_start/end",
+      "unit/currency/scale",
+      "original concept",
+      "alias and resolver contract versions/hashes",
+      "revision and deduplication lineage",
+      "withholding reason",
+      "database fingerprints",
+      "specification version/hash",
+      "code commit"
+    ],
+    "policy": "Aggregate read-only assessment only; no panel rows are persisted."
+  },
+  "preregistration_blockers": [
+    "accounting_contract_unapproved",
+    "historical_universe_and_identity_unproven",
+    "sample_policy_and_minima_unapproved",
+    "aligned_history_and_staleness_unproven",
+    "outcomes_and_benchmark_unapproved",
+    "execution_costs_unapproved",
+    "temporal_splits_and_inference_unapproved",
+    "registration_and_holdout_controls_unlocked"
+  ]
+}

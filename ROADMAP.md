@@ -430,3 +430,13 @@ Each milestone must end with passing tests, a production frontend build, an upda
 # Milestone 38 — complete
 
 Added authorized, transactional stored-evidence materialization, fail-closed classification, canonical SEC factor lineage, explicit corporate-action coverage, read-only enrichment planning, and a bounded SEC capability. Track B remains a research foundation and produces no ranking or recommendation.
+
+## Milestone 42 — read-only Track B research-panel draft
+
+- [x] Define versioned universe, identity, schedule, PIT/history/factor/missingness/provenance specification.
+- [x] Reconcile exact 0–6 family bins and report complete-denominator input/component blockers.
+- [x] Reuse financial-strength A–D and liquidity resolution without selecting a contract.
+- [x] Draft horizons, benchmark/total return, costs, temporal splits and leakage controls.
+- [x] Add bounded immutable CLI, offline regressions and PowerShell 5.1 runbook.
+- [ ] Resolve accounting, historical sample/history, outcome/benchmark, cost and registration requirements.
+- [ ] Approve preregistration before any historical panel persistence or independent evaluation.
