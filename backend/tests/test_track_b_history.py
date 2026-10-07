@@ -11,6 +11,7 @@ import app.track_b_history as history
 from app.track_b_history import inventory, _accounting_state, _chains, SOURCES
 from app.track_b_panel import PROHIBITED_ARRAYS
 from app.investment_research import InvestmentResearchError
+from app.global_universe import utc_naive
 
 DECISION = datetime(2026, 10, 5, 0, 30, tzinfo=timezone.utc)
 
@@ -166,11 +167,25 @@ def test_chain_work_bound_fails_closed(monkeypatch):
     with pytest.raises(history.InventoryError): _chains(quarters(),8)
 
 
-def test_market_utc_storage_and_absent_incompatible_schema_distinction(tmp_path):
+@pytest.mark.parametrize('duckdb_session_timezone', ['UTC', 'Europe/London'], indirect=True)
+def test_market_utc_storage_and_absent_incompatible_schema_distinction(tmp_path, duckdb_session_timezone):
     paths=fixture(tmp_path)
     with duckdb.connect(str(paths[0])) as db:
-        db.execute('ALTER TABLE global_price_observations ALTER COLUMN retrieved_at TYPE TIMESTAMP')
-        db.execute('ALTER TABLE global_corporate_actions ALTER COLUMN retrieved_at TYPE TIMESTAMP')
+        assert db.execute("SELECT current_setting('TimeZone')").fetchone()[0] == duckdb_session_timezone
+        # A plain cast retains session-local wall time, not the producer's UTC
+        # wall time. Demonstrate the defect before constructing UTC-naive storage.
+        plain, utc = db.execute("SELECT CAST(? AS TIMESTAMP), timezone('UTC', ?)",
+                                [DECISION, DECISION]).fetchone()
+        assert utc == utc_naive(DECISION)
+        assert plain == utc + timedelta(hours=duckdb_session_timezone == 'Europe/London')
+        for table in ('global_price_observations', 'global_corporate_actions'):
+            db.execute(f"ALTER TABLE {table} ALTER COLUMN retrieved_at TYPE TIMESTAMP USING timezone('UTC', retrieved_at)")
+            assert db.execute(f'SELECT retrieved_at FROM {table}').fetchone()[0] == utc
+        # One microsecond after the boundary must remain excluded.
+        db.execute("INSERT INTO global_price_observations VALUES ('FUTURE.US','2026-10-02',?,'POISON','POISON')",
+                   [utc + timedelta(microseconds=1)])
+        db.execute("INSERT INTO global_corporate_actions VALUES ('FUTURE.US','2026-09-01','cash_distribution',?,'POISON')",
+                   [utc + timedelta(microseconds=1)])
     with duckdb.connect(str(paths[1])) as db:
         db.execute('CREATE TABLE global_corporate_actions(unknown_column VARCHAR)')
         db.execute("INSERT INTO global_corporate_actions VALUES ('unknown')")
@@ -179,6 +194,8 @@ def test_market_utc_storage_and_absent_incompatible_schema_distinction(tmp_path)
     r=run(paths)
     assert r['databases']['research']['market_metadata']['dividends']['retrieved_by_boundary_count']==1
     assert r['databases']['research']['market_metadata']['price_and_risk']['metadata_observation_states']['metadata_compatible_unverified']==1
+    assert r['databases']['research']['market_metadata']['dividends']['metadata_row_count']==2
+    assert r['databases']['research']['market_metadata']['price_and_risk']['metadata_observation_states']['post_boundary']==1
     other=r['databases']['production']
     assert other['market_metadata']['dividends']['state']=='incompatible_evidence'
     assert other['market_metadata']['dividends']['metadata_row_count'] is None
