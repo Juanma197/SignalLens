@@ -24,8 +24,10 @@ from .financial_strength import (
     company_preview as financial_strength_company_preview,
 )
 from .track_b_panel import assessment as track_b_preregistration_assessment
+from .track_b_history import inventory as track_b_historical_evidence_inventory
 
-COMMANDS={"track-b-preregistration-assessment":track_b_preregistration_assessment,
+COMMANDS={"track-b-historical-evidence-inventory":track_b_historical_evidence_inventory,
+          "track-b-preregistration-assessment":track_b_preregistration_assessment,
           "investment-grade-coverage-audit":coverage_audit,
           "plan-investment-data-repair":repair_plan,
           "execution-cost-capability":execution_cost_capability,
