@@ -21,6 +21,10 @@ MAXIMUM_BYTES = 128 * 1024
 SAMPLE_LIMIT = 10
 MAX_METADATA_ROWS = 500_000
 MAX_CHAIN_WORK = 50_000
+MARKET_BATCH_ROWS = 2048
+MAX_MARKET_DATES_PER_SYMBOL = 50_000
+MARKET_SQL_MEMORY = '128MB'
+MAX_MARKET_METADATA_CHARS = 1024
 
 
 class InventoryError(InvestmentResearchError):
@@ -104,7 +108,7 @@ def _bounded(items):
             'truncated': len(items) > SAMPLE_LIMIT}
 
 
-def _read(db, table):
+def _read(db, table, decision=None):
     schema = db.execute('''SELECT column_name FROM information_schema.columns
         WHERE table_catalog=current_database() AND table_schema='main' AND table_name=?
         ORDER BY ordinal_position''', [table]).fetchall()
@@ -115,7 +119,8 @@ def _read(db, table):
         return {'state': 'incompatible_evidence', 'reason': 'views_not_evaluated', 'row_count': None, 'columns': [], 'date_ranges': {}}, []
     columns = [c for c in SOURCES[table] if c in {r[0] for r in schema}]
     count = db.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
-    if count > MAX_METADATA_ROWS: raise InventoryError('metadata work bound exceeded')
+    if table != 'global_price_observations' and count > MAX_METADATA_ROWS:
+        raise InventoryError('metadata work bound exceeded')
     ranges = {}
     for c in columns:
         if c not in DATE_COLUMNS: continue
@@ -132,6 +137,8 @@ def _read(db, table):
     if not columns:
         if count: summary.update(state='incompatible_evidence', reason='no_supported_metadata_columns')
         return summary, []
+    if table == 'global_price_observations':
+        return summary, _stream_market_prices(db, columns, count, decision)
     projection = ','.join(f'"{c}"' for c in columns)
     # Exact complete metadata within the explicit work cap; output never exposes
     # stored endpoint/source strings or raw identifiers. Ordering is in Python.
@@ -140,6 +147,67 @@ def _read(db, table):
     while batch := cursor.fetchmany(2048): rows.extend(dict(zip(columns, r)) for r in batch)
     if len(rows) != count: raise InventoryError('metadata count mismatch')
     return summary, rows
+
+
+def _price_state(row, decision):
+    day, retrieved = _date(row.get('trading_date')), _market_stamp(row.get('retrieved_at'))
+    if not day or row.get('status') not in (None, 'available'): return 'incompatible_evidence', day
+    if not retrieved or not row.get('qualified_symbol'): return 'unverified_provenance', day
+    if day > decision.date() or retrieved > decision: return 'post_boundary', day
+    return 'metadata_compatible_unverified', day
+
+
+def _sql_config():
+    # Configure the dedicated read-only inventory connection at creation, rather
+    # than changing/restoring process settings using rounded human-readable sizes.
+    return {'memory_limit': MARKET_SQL_MEMORY, 'threads': '1',
+            'temp_directory': '', 'max_temp_directory_size': '0B'}
+
+
+def _stream_market_prices(db, columns, count, decision):
+    """Complete ordered stream; only one symbol's visible dates are retained.
+
+    The SQL sort has a hard memory budget and cannot spill to disk. Python
+    retains one fixed batch and at most 50,000 dates, independent of total rows.
+    Exceeding a resource budget fails closed, never samples population counts.
+    """
+    if 'trading_date' not in columns:
+        return {'symbols_with_253_date_metadata_rows': 0, 'boundary_visible_distinct_symbol_date_count': 0,
+                'metadata_observation_states': {s: count if s == 'incompatible_evidence' else 0 for s in ROW_STATES}}
+    keys = [c for c in ('qualified_symbol', 'trading_date', 'status', 'retrieved_at') if c in columns]
+    projection = ','.join(f'"{c}"' for c in keys)
+    # Binary byte ordering prevents case-insensitive persisted collations from
+    # interleaving different symbols. Within-symbol ordering is irrelevant.
+    ordering = 'encode(CAST("qualified_symbol" AS VARCHAR))' if 'qualified_symbol' in keys else '"trading_date"'
+    oversized = ' OR '.join(f'length(CAST("{c}" AS VARCHAR)) > {MAX_MARKET_METADATA_CHARS}' for c in keys)
+    if db.execute(f'SELECT count(*) FROM "global_price_observations" WHERE {oversized}').fetchone()[0]:
+        raise InventoryError('market metadata cell bound exceeded')
+    states = Counter(); dates = set(); previous = None; symbols = 0; distinct = 0; read_count = 0
+    try:
+        cursor = db.execute(f'SELECT {projection} FROM "global_price_observations" ORDER BY {ordering}')
+        while batch := cursor.fetchmany(MARKET_BATCH_ROWS):
+            for values in batch:
+                row = dict(zip(keys, values)); read_count += 1
+                if read_count > count: raise InventoryError('metadata count mismatch')
+                symbol = str(row['qualified_symbol']) if row.get('qualified_symbol') is not None else None
+                if symbol != previous:
+                    symbols += len(dates) >= 253
+                    distinct += len(dates)
+                    dates.clear(); previous = symbol
+                state, day = _price_state(row, decision)
+                states[state] += 1
+                if state == 'metadata_compatible_unverified':
+                    if day not in dates and len(dates) >= MAX_MARKET_DATES_PER_SYMBOL:
+                        raise InventoryError('market distinct-date state bound exceeded')
+                    dates.add(day)
+        symbols += len(dates) >= 253
+        distinct += len(dates)
+    except duckdb.OutOfMemoryException:
+        raise InventoryError('market SQL resource bound exceeded') from None
+    if read_count != count: raise InventoryError('metadata count mismatch')
+    return {'symbols_with_253_date_metadata_rows': symbols,
+            'boundary_visible_distinct_symbol_date_count': distinct,
+            'metadata_observation_states': {s: states[s] for s in ROW_STATES}}
 
 
 def _accounting_state(row, field, layer, decision):
@@ -358,17 +426,11 @@ def _market(data, decision, action_source):
             'completeness_certified': False}
     result['other_action_metadata_row_count'] = sum(r.get('action_type') not in
         {x for names in types.values() for x in names} for r in actions)
-    sessions = defaultdict(set); price_states = Counter()
-    for r in data['global_price_observations']:
-        day, retrieved = _date(r.get('trading_date')), _market_stamp(r.get('retrieved_at'))
-        if not day or r.get('status') not in (None, 'available'): price_states['incompatible_evidence'] += 1
-        elif not retrieved or not r.get('qualified_symbol'): price_states['unverified_provenance'] += 1
-        elif day > decision.date() or retrieved > decision: price_states['post_boundary'] += 1
-        else:
-            price_states['metadata_compatible_unverified'] += 1
-            sessions[str(r.get('qualified_symbol'))].add(day)
-    result['price_and_risk'] = {'symbols_with_253_date_metadata_rows': sum(len(v)>=253 for v in sessions.values()),
-        'metadata_observation_states': {s: price_states[s] for s in ROW_STATES},
+    prices = data['global_price_observations']
+    if not prices: prices = {'symbols_with_253_date_metadata_rows': 0,
+                            'boundary_visible_distinct_symbol_date_count': 0,
+                            'metadata_observation_states': {s: 0 for s in ROW_STATES}}
+    result['price_and_risk'] = {**prices,
         'certified_formula_count': 0, 'interpretation': 'Distinct dates only; exact exchange-session continuity, identity, price positivity, actions and total returns are unverified. Numerical price/outcome values were not read.'}
     result['market_timestamp_convention'] = 'global_market_data utc_naive storage is interpreted as UTC for retrieval metadata only; public availability and source provenance remain unverified.'
     result['benchmark'] = {'state': 'unverified_provenance', 'approved_benchmark': None,
@@ -387,7 +449,7 @@ def inventory(*, research_db, production_db, decision_at):
         sources = []; datasets = {}; schema_metadata = {}
         for name, path in (('research', research), ('production', production)):
             datasets[name] = {}
-            with duckdb.connect(str(path), read_only=True) as db:
+            with duckdb.connect(str(path), read_only=True, config=_sql_config()) as db:
                 base_tables = {r[0] for r in db.execute('''SELECT table_name FROM information_schema.tables
                     WHERE table_catalog=current_database() AND table_schema='main' AND table_type='BASE TABLE' ''').fetchall()}
                 schema_metadata[name] = {'base_table_count': len(base_tables),
@@ -395,7 +457,7 @@ def inventory(*, research_db, production_db, decision_at):
                     'uninspected_base_table_count': len(base_tables - set(SOURCES)),
                     'scope': 'Only fixed adapters inspected; unknown and model/outcome tables are not evaluated.'}
                 for table in SOURCES:
-                    summary, rows = _read(db, table)
+                    summary, rows = _read(db, table, decision)
                     sources.append({'database': name, 'table': table, **summary})
                     datasets[name][table] = rows
         # Never combine raw/canonical or research/production counts: they may be
@@ -411,7 +473,7 @@ def inventory(*, research_db, production_db, decision_at):
                 'market_metadata': _market(data, decision, source_by_table['global_corporate_actions']),
                 'denominator': 'Union of persisted security IDs across listings, snapshot members, SEC mappings, canonical evidence and SEC facts; not an approved historical universe.'}
         spec = json.loads(SPEC_PATH.read_text(encoding='utf-8'))
-        result = {'command': 'track-b-historical-evidence-inventory', 'version': 'track-b-history-inventory-1.0.0',
+        result = {'command': 'track-b-historical-evidence-inventory', 'version': 'track-b-history-inventory-1.1.0',
             'specification': {'version': spec['version'], 'status': spec['status'],
                 'sha256': hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(',', ':')).encode()).hexdigest()},
             'decision_at': decision.isoformat(), 'labels': TRACK_B_LABELS, 'read_only': True,
@@ -437,8 +499,15 @@ def inventory(*, research_db, production_db, decision_at):
             **{key: [] for key in PROHIBITED_ARRAYS},
             'bounds': {'maximum_compact_utf8_bytes': MAXIMUM_BYTES, 'security_sample_limit': SAMPLE_LIMIT,
                 'maximum_metadata_rows_per_table': MAX_METADATA_ROWS, 'source_count': len(SOURCES)*2,
+                'metadata_row_cap_exempt_tables': ['global_price_observations'],
                 'maximum_chain_work_per_call': MAX_CHAIN_WORK,
+                'market_metadata': {'method': 'complete_ordered_stream', 'batch_rows': MARKET_BATCH_ROWS,
+                    'maximum_metadata_cell_characters': MAX_MARKET_METADATA_CHARS,
+                    'maximum_visible_dates_per_symbol': MAX_MARKET_DATES_PER_SYMBOL,
+                    'sql_memory_limit': MARKET_SQL_MEMORY, 'sql_threads': 1, 'disk_spill_allowed': False},
                 'unsupported_tables_read': False}}
+    except duckdb.OutOfMemoryException:
+        raise InventoryError('inventory SQL resource bound exceeded') from None
     finally:
         after = {name: fingerprint(path) for name, path in (('research', research), ('production', production))}
         if before != after: raise InventoryError('database changed during inventory')

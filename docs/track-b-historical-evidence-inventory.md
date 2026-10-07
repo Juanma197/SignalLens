@@ -115,9 +115,16 @@ No stored path, endpoint, source string or unbounded identifier is returned.
 Security samples use SHA-256 identity references, with deterministic ordering.
 
 The compact UTF-8 response limit is 128 KiB; each family returns at most 10
-security summaries with exact total/returned/truncated metadata. Each supported
-table has a 500,000-row work cap: exceeding it fails closed, never returns a
-partial inventory. Unknown schemas cannot acquire dynamic adapters. Period-chain
+security summaries with exact total/returned/truncated metadata. Collected table
+adapters retain a 500,000-row work cap: exceeding it fails closed, never returns a
+partial inventory. Version 1.1.0 streams the complete `global_price_observations`
+population instead: exact SQL row/date aggregates, metadata batches of 2,048 rows,
+and at most 50,000 visible dates for one symbol at a time. SQL connections have a
+128 MB memory budget, one thread and no disk spill; projected market metadata
+cells have a 1,024-character bound. Resource exhaustion fails closed without
+sampling population counts. The report explicitly identifies the streaming
+exemption and adds the exact boundary-visible distinct symbol/date count.
+Unknown schemas cannot acquire dynamic adapters. Period-chain
 construction has a 50,000-operation/state work cap per call and fails closed
 if exceeded. Errors use the existing stable redacted CLI envelope and nonzero
 exit status. A work/hash
@@ -129,6 +136,12 @@ columns, explicit query-projection assertions, canonical/raw separation,
 boundary equality/future materialization, incompatible metadata, chain gaps,
 output/work bounds and pre/post fingerprint checks on failure. No operator
 database or provider was accessed during development.
+
+The confirmed post-PR #93 operator failure was 1,035,884 market metadata rows
+exceeding the collection cap. The independent legacy canonical schema warning
+lacks only optional `materialization_run_id`; legacy availability rules remain
+unchanged. See `track-b-history-operator-diagnosis.md` for the repair and the
+complete current verification script `scripts/track-b-history-verify.ps1`.
 
 ## Windows PowerShell 5.1 verification — complete block
 
@@ -159,7 +172,7 @@ verification fail. No expected live coverage count is hardcoded.
     $BeforeResearch = (Get-FileHash -LiteralPath $Research -Algorithm SHA256).Hash
     $BeforeProduction = (Get-FileHash -LiteralPath $Production -Algorithm SHA256).Hash
     try {
-      & $Python -m pytest tests/test_track_b_history.py tests/test_track_b_panel.py tests/test_investment_research.py tests/test_financial_strength.py tests/test_liquidity_materialization.py -q
+      & $Python -m pytest tests/test_track_b_history_market_stream.py tests/test_track_b_history_diagnostic.py tests/test_track_b_history.py tests/test_track_b_panel.py tests/test_investment_research.py tests/test_financial_strength.py tests/test_liquidity_materialization.py -q
       if ($LASTEXITCODE -ne 0) { throw "Offline regression failed" }
       $Reports = Join-Path $Backend "data\research\reports"
       New-Item -ItemType Directory -Force -Path $Reports | Out-Null
