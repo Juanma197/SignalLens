@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 import json
 import subprocess
 import sys
@@ -7,10 +8,21 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from app.liquidity_materialization import (AUTHORIZATION_PHRASE, ERRORS,
-    LiquidityMaterializationError, apply, plan, status, validate_plan)
+from app.liquidity_materialization import (
+    AUTHORIZATION_PHRASE, ERRORS, LiquidityMaterializationError,
+    apply, plan, status, validate_plan,
+)
 from app.model_readiness import fingerprint
+from app.liquidity_canonical_contract import (
+    canonical_evidence_key, date_value, identity_scale,
+    redundant_currency, same_number, timestamp_text,
+)
+from app.liquidity_resolution import CanonicalLiquidityResolutionError
 from tests.test_liquidity_evidence import DECISION, fixture
+from app.liquidity_compatibility import compatibility_audit
+from app.liquidity_evidence import evidence_discovery, contract_assessment, company_preview
+from app.liquidity_inventory import raw_canonical_inventory, evidence_gap_assessment
+from app.financial_strength import evidence_audit as financial_strength_audit
 
 LEGACY_SCHEMA="""CREATE TABLE canonical_factor_evidence(
  evidence_key VARCHAR PRIMARY KEY, security_id VARCHAR NOT NULL, qualified_symbol VARCHAR,
@@ -65,6 +77,7 @@ def test_plan_validation_authorization_apply_retry_and_provenance(tmp_path):
     second=apply(research_db=research,production_db=production,decision_at=DECISION,
       plan_identifier=token,authorization=AUTHORIZATION_PHRASE,now=issued)
     assert second["inserted_count"]==0 and second["unchanged_count"]==5
+    assert second["idempotent_retry"] is True
     assert production.read_bytes()==original_production
     assert status(research_db=research,production_db=production)["state"]=="completed"
 
@@ -121,6 +134,7 @@ def test_exact_legacy_schema_first_apply_retry_provenance_and_immutability(tmp_p
     retry=apply(research_db=research,production_db=production,decision_at=DECISION,
       plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
     assert (retry["inserted_count"],retry["unchanged_count"])==(0,5)
+    assert retry["idempotent_retry"] is True
     assert research.read_bytes()==retry_before
     report=status(research_db=research,production_db=production)
     assert report["state"]=="completed" and report["latest_run"]["inserted_count"]==5
@@ -179,3 +193,187 @@ def test_conflicting_canonical_key_fails_closed(tmp_path):
       apply(research_db=research,production_db=production,decision_at=DECISION,
         plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
     assert failure.value.code==ERRORS["conflict"]
+
+
+def test_offline_post_materialization_consumer_lifecycle_is_read_only(tmp_path):
+    """Reproduces the apply/before/after lifecycle without external resources."""
+    research,production=legacy_fixture(tmp_path); production_before=production.read_bytes()
+    issued=DECISION+timedelta(minutes=1)
+    planned=plan(research_db=research,production_db=production,decision_at=DECISION,now=issued)
+    applied=apply(research_db=research,production_db=production,decision_at=DECISION,
+      plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
+    assert applied["inserted_count"]==5 and applied["provider_request_count"]==0
+    research_after_apply=research.read_bytes()
+
+    before=compatibility_audit(research_db=research,production_db=production,decision_at=DECISION)
+    assert before["database_immutability"]["canonical_liquidity_resolution"]["future_revision_count"]==5
+    assert before["database_immutability"]["canonical_liquidity_resolution"]["visible_selected_count"]==0
+
+    later=issued+timedelta(minutes=1)
+    reports=[
+      compatibility_audit(research_db=research,production_db=production,decision_at=later),
+      evidence_discovery(research_db=research,production_db=production,decision_at=later),
+      contract_assessment(research_db=research,production_db=production,decision_at=later),
+      company_preview(research_db=research,production_db=production,decision_at=later,qualified_symbol="AAA.US"),
+      raw_canonical_inventory(research_db=research,production_db=production,decision_at=later),
+      evidence_gap_assessment(research_db=research,production_db=production,decision_at=later),
+      financial_strength_audit(research_db=research,production_db=production,decision_at=later),
+    ]
+    resolution=reports[0]["database_immutability"]["canonical_liquidity_resolution"]
+    assert resolution["visible_selected_count"]==5
+    assert resolution["deduplicated_source_count"]==5
+    assert all(report["read_only"] for report in reports)
+    assert research.read_bytes()==research_after_apply and production.read_bytes()==production_before
+    for report in reports:
+      assert report.get("rankings",[])==[] and report.get("candidates",[])==[]
+      assert report.get("recommendations",[])==[] and report.get("validation_credit",0)==0
+
+
+def test_exact_187_revision_historical_invisibility_and_post_visibility(tmp_path):
+    research,production=legacy_fixture(tmp_path)
+    stamp=datetime(2026,7,1,tzinfo=timezone.utc)
+    with duckdb.connect(str(research)) as db:
+      for index in range(3,70):
+        sid=f"company-{index}"; symbol=f"C{index:02}.US"
+        db.execute("INSERT INTO security_classification_evidence VALUES (?,?,'us_operating_company',?,?,?)",
+          [sid,symbol,stamp,stamp,stamp])
+        concepts=[]
+        if index<=61: concepts.extend((("AssetsCurrent",100+index),("LiabilitiesCurrent",40+index)))
+        if index>=6: concepts.append(("CashAndCashEquivalentsAtCarryingValue",20+index))
+        for concept,value in concepts:
+          db.execute("INSERT INTO sec_facts VALUES (?,?,?,?,?,?,?,?,NULL,NULL,DATE '2026-06-30','10-Q',?,?,?)",
+            [f"{sid}-{concept}",sid,symbol,"us-gaap","2026",concept,value,"USD",
+             f"acc-{sid}-{concept}",stamp,stamp])
+    issued=DECISION+timedelta(minutes=1)
+    planned=plan(research_db=research,production_db=production,decision_at=DECISION,now=issued)
+    assert planned["proposed_observation_count"]==187
+    assert planned["proposed_company_count"]==69
+    assert planned["counts_by_canonical_field"]=={
+      "current_assets":61,"current_liabilities":61,"unrestricted_cash":65}
+    applied=apply(research_db=research,production_db=production,decision_at=DECISION,
+      plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
+    assert applied["inserted_count"]==187 and applied["provider_request_count"]==0
+    historical=compatibility_audit(research_db=research,production_db=production,decision_at=DECISION)
+    post=compatibility_audit(research_db=research,production_db=production,
+      decision_at=issued+timedelta(minutes=1))
+    old=historical["database_immutability"]["canonical_liquidity_resolution"]
+    new=post["database_immutability"]["canonical_liquidity_resolution"]
+    assert (old["future_revision_count"],old["visible_selected_count"])==(187,0)
+    assert (new["future_revision_count"],new["visible_selected_count"],new["deduplicated_source_count"])==(0,187,187)
+
+
+def test_resolver_json_order_independence_and_stable_redacted_failure(tmp_path):
+    research,production=legacy_fixture(tmp_path); issued=DECISION+timedelta(minutes=1)
+    planned=plan(research_db=research,production_db=production,decision_at=DECISION,now=issued)
+    apply(research_db=research,production_db=production,decision_at=DECISION,
+      plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
+    with duckdb.connect(str(research)) as db:
+      key,lineage=db.execute("SELECT evidence_key,lineage FROM canonical_factor_evidence WHERE evidence_key<>'unrelated' ORDER BY evidence_key LIMIT 1").fetchone()
+      reordered=dict(reversed(list(json.loads(lineage).items())))
+      db.execute("UPDATE canonical_factor_evidence SET lineage=? WHERE evidence_key=?",[json.dumps(reordered),key])
+    later=issued+timedelta(minutes=1)
+    assert compatibility_audit(research_db=research,production_db=production,decision_at=later)["reconciled"]
+    with duckdb.connect(str(research)) as db:
+      db.execute("UPDATE canonical_factor_evidence SET lineage='{}' WHERE evidence_key=?",[key])
+    command=[sys.executable,"-m","app.investment_research_cli","liquidity-measurement-compatibility-audit",
+      "--research-db",str(research),"--production-db",str(production),"--decision-at",later.isoformat()]
+    result=subprocess.run(command,cwd=Path(__file__).parents[1],capture_output=True,text=True)
+    error=json.loads(result.stderr)
+    assert result.returncode==1
+    assert result.stdout==""
+    assert error=={"error":{"code":"LIQUIDITY_CANONICAL_RESOLUTION_FAILED",
+      "message":"investment research request failed; details redacted"},"status":"failed"}
+    assert str(research) not in result.stderr and "source_evidence_key" not in result.stderr
+
+
+def test_valid_liquidity_consumer_clis_emit_nonempty_json_not_null(tmp_path):
+    research,production=legacy_fixture(tmp_path); issued=DECISION+timedelta(minutes=1)
+    planned=plan(research_db=research,production_db=production,decision_at=DECISION,now=issued)
+    apply(research_db=research,production_db=production,decision_at=DECISION,
+      plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
+    later=issued+timedelta(minutes=1)
+    commands=("liquidity-measurement-compatibility-audit","liquidity-evidence-discovery",
+      "liquidity-contract-assessment","liquidity-raw-canonical-inventory","liquidity-evidence-gap-assessment")
+    for name in commands:
+      command=[sys.executable,"-m","app.investment_research_cli",name,"--research-db",str(research),
+        "--production-db",str(production),"--decision-at",later.isoformat()]
+      result=subprocess.run(command,cwd=Path(__file__).parents[1],capture_output=True,text=True)
+      assert result.returncode==0 and result.stderr=="" and result.stdout.strip()
+      report=json.loads(result.stdout)
+      assert isinstance(report,dict) and report and report["command"]==name
+      assert report.get("rankings",[])==[] and report.get("validation_credit",0)==0
+
+
+def test_shared_contract_normalizes_timezone_duckdb_types_currency_and_numbers(tmp_path):
+    london="2026-07-01T13:00:00+01:00"; utc="2026-07-01T12:00:00+00:00"
+    assert timestamp_text(london)==timestamp_text(utc)=="2026-07-01T12:00:00+00:00"
+    assert canonical_evidence_key("fact","current_assets",london)==canonical_evidence_key("fact","current_assets",utc)
+    assert date_value(date(2026,6,30))==date_value("2026-06-30")
+    assert redundant_currency(None,"USD")==redundant_currency(" ","USD")==redundant_currency("usd","USD")=="USD"
+    assert identity_scale(None)==identity_scale(0)==identity_scale(1.0)==identity_scale(Decimal("1.00"))
+    assert same_number(1,1.0) and same_number(Decimal("1.00"),"1")
+    path=tmp_path/"timestamp types.duckdb"
+    with duckdb.connect(str(path)) as db:
+      db.execute("SET TimeZone='Europe/London'")
+      value=db.execute("SELECT TIMESTAMPTZ '2026-07-01 12:00:00+00', DATE '2026-06-30'").fetchone()
+    assert timestamp_text(value[0])==timestamp_text(utc) and date_value(value[1])==date_value("2026-06-30")
+
+
+@pytest.mark.parametrize(("reason","mutation"),[
+  ("duplicate_or_missing_revision","DELETE FROM liquidity_canonical_materialization_revisions WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("incompatible_operation_identity","UPDATE liquidity_canonical_materialization_revisions SET validator_version='wrong' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("canonical_field_mismatch","UPDATE canonical_factor_evidence SET canonical_field='wrong' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("security_id_mismatch","UPDATE canonical_factor_evidence SET security_id='wrong' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("conflicting_canonical_value","UPDATE canonical_factor_evidence SET value=value+1 WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("accounting_meaning_mismatch","UPDATE liquidity_canonical_materialization_revisions SET original_concept='wrong' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("source_unit_or_currency_mismatch","UPDATE liquidity_canonical_materialization_revisions SET original_unit='shares' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("unsupported_scale","UPDATE liquidity_canonical_materialization_revisions SET original_scale=1000 WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("unit_or_currency_mismatch","UPDATE canonical_factor_evidence SET currency='EUR' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("period_mismatch","UPDATE canonical_factor_evidence SET period_end=DATE '2026-06-29' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("source_identity_mismatch","UPDATE canonical_factor_evidence SET accession_or_source_identifier='wrong' WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("source_timestamp_mismatch","UPDATE canonical_factor_evidence SET public_at=public_at+INTERVAL 1 SECOND WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("revision_timestamp_mismatch","UPDATE liquidity_canonical_materialization_revisions SET retrieved_at=retrieved_at+INTERVAL 1 SECOND WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+  ("availability_timestamp_mismatch","UPDATE canonical_factor_evidence SET available_at=available_at+INTERVAL 1 SECOND WHERE evidence_key=(SELECT min(evidence_key) FROM liquidity_canonical_materialization_revisions)"),
+])
+def test_each_resolver_corruption_reports_exact_bounded_reason(tmp_path,reason,mutation):
+    research,production=legacy_fixture(tmp_path); issued=DECISION+timedelta(minutes=1)
+    planned=plan(research_db=research,production_db=production,decision_at=DECISION,now=issued)
+    apply(research_db=research,production_db=production,decision_at=DECISION,
+      plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
+    with duckdb.connect(str(research)) as db: db.execute(mutation)
+    with pytest.raises(CanonicalLiquidityResolutionError) as caught:
+      compatibility_audit(research_db=research,production_db=production,decision_at=issued+timedelta(minutes=1))
+    assert caught.value.diagnostics["issue_counts"]=={reason:1}
+    assert caught.value.diagnostics["sample_limit"]==10
+    assert len(caught.value.diagnostics["samples"])==1
+
+
+@pytest.mark.parametrize("reason",[
+  "ambiguous_or_unmatched_source","source_lineage_mismatch",
+  "materialization_decision_mismatch","canonical_evidence_key_mismatch","malformed_lineage",
+])
+def test_structural_resolver_corruptions_report_exact_reason(tmp_path,reason):
+    research,production=legacy_fixture(tmp_path); issued=DECISION+timedelta(minutes=1)
+    planned=plan(research_db=research,production_db=production,decision_at=DECISION,now=issued)
+    apply(research_db=research,production_db=production,decision_at=DECISION,
+      plan_identifier=planned["plan_identifier"],authorization=AUTHORIZATION_PHRASE,now=issued)
+    with duckdb.connect(str(research)) as db:
+      key,source,provenance,lineage=db.execute("""SELECT evidence_key,source_fact_key,provenance,lineage
+        FROM canonical_factor_evidence WHERE evidence_key<>'unrelated' ORDER BY evidence_key LIMIT 1""").fetchone()
+      if reason=="ambiguous_or_unmatched_source":
+        db.execute("DELETE FROM sec_facts WHERE fact_key=?",[source])
+      elif reason=="source_lineage_mismatch":
+        value=json.loads(lineage); value["source_fact_key"]="wrong"
+        db.execute("UPDATE canonical_factor_evidence SET lineage=? WHERE evidence_key=?",[json.dumps(value),key])
+      elif reason=="materialization_decision_mismatch":
+        value=json.loads(provenance); value["decision_at"]="2026-01-01T00:00:00+00:00"
+        db.execute("UPDATE canonical_factor_evidence SET provenance=? WHERE evidence_key=?",[json.dumps(value),key])
+      elif reason=="canonical_evidence_key_mismatch":
+        wrong="f"*64 if key!="f"*64 else "e"*64
+        db.execute("UPDATE liquidity_canonical_materialization_revisions SET evidence_key=? WHERE evidence_key=?",[wrong,key])
+        db.execute("UPDATE canonical_factor_evidence SET evidence_key=? WHERE evidence_key=?",[wrong,key])
+      else:
+        db.execute("UPDATE canonical_factor_evidence SET lineage='[]' WHERE evidence_key=?",[key])
+    with pytest.raises(CanonicalLiquidityResolutionError) as caught:
+      compatibility_audit(research_db=research,production_db=production,decision_at=issued+timedelta(minutes=1))
+    assert caught.value.diagnostics["issue_counts"]=={reason:1}

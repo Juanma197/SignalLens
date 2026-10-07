@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
@@ -7,8 +7,11 @@ import pytest
 
 from app.investment_research import (CONFIGURATION_HASH, CostAssumptions, REASON_CODES,
     TRACK_B_LABELS, comparable_universe_readiness, company_factor_preview, total_return,
-    validate_alias)
+    validate_alias, track_b_panel_feasibility)
 from app.investment_evidence import initialize_schema
+from app.liquidity_materialization import (AUTHORIZATION_PHRASE as LIQUIDITY_AUTHORIZATION,
+    apply as apply_liquidity,plan as plan_liquidity)
+from app.liquidity_evidence import company_preview as liquidity_company_preview
 from model_readiness_fixture import create_research_fixture
 
 def test_track_a_frozen_and_track_b_has_required_boundaries():
@@ -72,10 +75,27 @@ def test_operator_shaped_materialized_classification_is_consumed_read_only(tmp_p
           provenance,lineage) VALUES ('f1','security-us-0','ALPHA0.US','revenue',100,'USD','USD',
           'fixture',?,?,?,?, 'Revenues','test','reported_signed','usable','{}','{}')""",
           [decision,decision,decision,decision])
+        db.execute("""CREATE TABLE sec_facts(fact_key VARCHAR,security_id VARCHAR,
+          qualified_symbol VARCHAR,taxonomy VARCHAR,taxonomy_version VARCHAR,concept VARCHAR,
+          value DOUBLE,unit VARCHAR,currency VARCHAR,period_start DATE,period_end DATE,
+          form VARCHAR,accession_number VARCHAR,public_at TIMESTAMPTZ,retrieved_at TIMESTAMPTZ)""")
+        for concept,value in (("AssetsCurrent",100),("LiabilitiesCurrent",40)):
+            db.execute("INSERT INTO sec_facts VALUES (?,?,?,?,?,?,?,?,NULL,NULL,DATE '2026-06-30','10-Q',?,?,?)",
+              [f"raw-{concept}","security-us-0","ALPHA0.US","us-gaap","2026",concept,value,"USD",
+               f"acc-{concept}",decision,decision])
+    materialized_at=decision+timedelta(minutes=1)
+    planned=plan_liquidity(research_db=research,production_db=production,decision_at=decision,now=materialized_at)
+    applied=apply_liquidity(research_db=research,production_db=production,decision_at=decision,
+      plan_identifier=planned["plan_identifier"],authorization=LIQUIDITY_AUTHORIZATION,now=materialized_at)
+    assert applied["inserted_count"]==2
+    decision=materialized_at+timedelta(minutes=1)
     before=(research.read_bytes(),production.read_bytes())
     readiness=comparable_universe_readiness(research_db=research,production_db=production,
       decision_at=decision,max_samples=10)
     preview=company_factor_preview(research_db=research,production_db=production,
+      decision_at=decision,qualified_symbol="ALPHA0.US")
+    track_b=track_b_panel_feasibility(research_db=research,production_db=production,decision_at=decision)
+    liquidity_preview=liquidity_company_preview(research_db=research,production_db=production,
       decision_at=decision,qualified_symbol="ALPHA0.US")
     assert readiness["counts_by_security_type"]=={
       "classification_unavailable":29,"us_operating_company":71}
@@ -86,6 +106,8 @@ def test_operator_shaped_materialized_classification_is_consumed_read_only(tmp_p
     assert preview["comparable_universe_eligible"]
     assert preview["calculations"]["financial_strength"].get("reason_code")!="financial_sector_not_comparable"
     assert not any(preview[key] for key in ("recommendations","candidates","rankings"))
+    assert track_b["comparable_universe_size"]==71 and track_b["validation_credit"]==0
+    assert liquidity_preview["company"]["selected"]["current_assets"]["value"]==100
     assert readiness["validation_credit"]==0 and (research.read_bytes(),production.read_bytes())==before
 
 def test_absent_materialization_uses_only_explicit_legacy_instrument_type(tmp_path):
