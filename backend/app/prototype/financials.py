@@ -52,9 +52,10 @@ def _day(value):
     return value if isinstance(value, date) else None
 
 
-def _latest(rows, stamp):
-    """Latest visible revision for one exact period; None if it conflicts."""
-    public = max(stamp(r['public_at']) for r in rows)
+def _latest(rows, stamp, revision='latest'):
+    """Latest (or first-reported) visible revision for one exact period; None if
+    that revision has conflicting values."""
+    public = (max if revision == 'latest' else min)(stamp(r['public_at']) for r in rows)
     latest = [r for r in rows if stamp(r['public_at']) == public]
     values = {float(r['value']) for r in latest}
     if len(values) != 1: return None
@@ -63,7 +64,7 @@ def _latest(rows, stamp):
             'known_at': max(stamp(r['public_at']), stamp(r['retrieved_at']))}
 
 
-def annual_brief(sec, facts, decision, *, stamp, finite):
+def annual_brief(sec, facts, decision, *, stamp, finite, revision='latest'):
     """Series for up to YEARS fiscal years plus rule-based observations."""
     wanted = set(REVENUE) | {c for cs in DURATIONS.values() for c in cs} | {c for cs in INSTANTS.values() for c in cs}
     rows = [r for r in facts if str(r.get('security_id')) == sec['security_id'] and r.get('concept') in wanted
@@ -79,7 +80,7 @@ def annual_brief(sec, facts, decision, *, stamp, finite):
         if r.get('unit') != expected_unit: continue
         if start is None: periods[(r['concept'], None, end)].append(r)
         elif ANNUAL_DAYS[0] <= (end - start).days <= ANNUAL_DAYS[1]: periods[(r['concept'], start, end)].append(r)
-    chosen = {key: _latest(group, stamp) for key, group in periods.items()}
+    chosen = {key: _latest(group, stamp, revision) for key, group in periods.items()}
     # Fiscal years are the ends of annual net income or revenue periods.
     ends = sorted({end for (concept, start, end), v in chosen.items() if v and start
                    and concept in REVENUE + ('NetIncomeLoss',)}, reverse=True)[:YEARS]
@@ -239,3 +240,78 @@ def valuation(size, brief):
     if 'net_income' in v: out['earnings_yield'] = v['net_income'] / cap
     if 'free_cash_flow' in c: out['free_cash_flow_yield'] = c['free_cash_flow'] / cap
     return out
+
+
+HISTORY_MULTIPLES = ('price_to_earnings', 'price_to_sales', 'price_to_free_cash_flow', 'price_to_book')
+LABELS = {'price_to_earnings': 'P/E', 'price_to_sales': 'P/S', 'price_to_free_cash_flow': 'P/FCF', 'price_to_book': 'P/B'}
+
+
+def _multiples(cap, values, calculated):
+    out = {}
+    for name, denominator in (('price_to_earnings', values.get('net_income')), ('price_to_sales', values.get('revenue')),
+                              ('price_to_free_cash_flow', calculated.get('free_cash_flow')), ('price_to_book', values.get('equity'))):
+        if denominator is not None and denominator > 0: out[name] = cap / denominator
+    return out
+
+
+def valuation_history(first_reported, prices, current_close):
+    """Multiples at each fiscal year end on one basis: the unadjusted close on the
+    last session on or before the year end x that year's weighted diluted shares,
+    with the figures as first reported in that year's 10-K (so a later split or
+    restatement is not paired with an old price). The current row uses the same
+    basis with today's close and the latest year's shares. Approximate: weighted
+    average shares differ from shares outstanding on any one day."""
+    rows = []
+    for year in first_reported.get('years', []):
+        end = year['fiscal_year_end']
+        values = {k: x['value'] for k, x in year['values'].items()}
+        price = prices.get(end)
+        if not price or not values.get('diluted_shares'): continue
+        cap = price['close'] * values['diluted_shares']
+        rows.append({'fiscal_year_end': end, 'price_session': price['session'], 'close': price['close'],
+                     'diluted_shares': values['diluted_shares'], 'approximate_market_cap_usd': cap,
+                     'multiples': _multiples(cap, values, year['calculated'])})
+    current = None
+    if rows and current_close:
+        latest = first_reported['years'][-1]
+        values = {k: x['value'] for k, x in latest['values'].items()}
+        if values.get('diluted_shares'):
+            cap = current_close * values['diluted_shares']
+            current = {'basis_fiscal_year_end': latest['fiscal_year_end'], 'close': current_close,
+                       'multiples': _multiples(cap, values, latest['calculated'])}
+    comparisons = []
+    for name in HISTORY_MULTIPLES:
+        past = sorted(r['multiples'][name] for r in rows if name in r['multiples'])
+        if current and name in current['multiples'] and len(past) >= 3:
+            median = past[len(past) // 2] if len(past) % 2 else (past[len(past) // 2 - 1] + past[len(past) // 2]) / 2
+            now = current['multiples'][name]
+            position = 'below' if now < past[0] else 'above' if now > past[-1] else 'within'
+            comparisons.append({'multiple': name, 'current': now, 'historical_median': median, 'historical_low': past[0],
+                                'historical_high': past[-1], 'years': len(past), 'position': position,
+                                'text': f'{LABELS[name]} {now:.1f} vs its own {len(past)}-year range '
+                                        f'{past[0]:.1f}-{past[-1]:.1f} (median {median:.1f}): {position} the range.'})
+    unavailable = None
+    if not first_reported.get('years'): unavailable = 'No full fiscal years are visible.'
+    elif not rows: unavailable = 'No fiscal year has both a stored year-end price and a reported diluted share count.'
+    elif not comparisons: unavailable = 'Fewer than three comparable years for any multiple.'
+    return {'basis': 'Fiscal-year-end unadjusted close x weighted diluted shares, figures as first reported; approximate. '
+                     'This share basis differs from the cover-page count used in the snapshot above, so current values differ slightly.',
+            'years': rows, 'current': current, 'comparisons': comparisons, 'unavailable': unavailable}
+
+
+# Business models where the standard ratios mislead. Shown as context, never used.
+SECTOR_NOTES = (
+    ((1311, 1389), 'Oil and gas: results follow commodity prices; depletion and reserve values matter more than one year of earnings.'),
+    ((2833, 2836), 'Pharmaceuticals and biotech: value often rests on pipelines and approvals; losses and low revenue are common before launch.'),
+    ((3570, 3579), 'Computer hardware: cyclical demand and inventory swings move margins.'),
+    ((5500, 5599), 'Auto dealers: floor-plan financing for inventory is debt-like but may sit outside reported long-term debt.'),
+    ((7350, 7359), 'Equipment rental and lease-to-own: purchases of lease assets can run through operating cash flow, inflating free cash flow.'),
+    ((7370, 7379), 'Software and IT services: stock-based compensation is a real cost that free cash flow excludes.'),
+    ((4400, 4499), 'Water transportation and cruise lines: heavy capital spending and debt; results swing with fuel and demand.'),
+    ((8000, 8099), 'Health services: reimbursement rates and regulation drive margins.'),
+)
+
+
+def sector_notes(industry):
+    if not industry or industry.get('sic') is None: return []
+    return [note for (low, high), note in SECTOR_NOTES if low <= int(industry['sic']) <= high]

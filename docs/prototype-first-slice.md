@@ -274,10 +274,36 @@ context and comparison with the company's own history (next step), and
 business-model caveats (for example lease-to-own companies whose purchases run
 through operating cash flow).
 
+## Stage 3 (continued): valuation against the company's own history
+
+For eligible companies the valuation section adds "Against its own history":
+
+- **Basis**: at each fiscal year end, the unadjusted close on the last stored US
+  session on or before that date (within 7 days, visible by the cutoff) x that
+  year's weighted diluted shares, with every figure **as first reported** in that
+  year's 10-K. Later filings restate history (for example share counts after a
+  split); pairing a restated figure with an old unadjusted price would be wrong.
+  The current row uses the same basis with today's close and the latest year's
+  shares, so it is comparable with the history but differs slightly from the
+  cover-page snapshot above. Approximate, and labelled so.
+- **Comparison**: for each multiple with at least three comparable years, the
+  current value is placed below, within or above the company's own range, with
+  the median. The page says a low multiple is a question to research, not a
+  conclusion.
+- **Sector notes**: fixed SIC-based notes for business models where standard
+  ratios mislead (oil and gas, pharma/biotech, auto dealers' floor-plan debt,
+  lease-to-own cash flows, software stock compensation, cruise lines, health
+  services, hardware). Context only.
+
+Operator check (read-only, 2026-10-08): 11 of 12 eligible companies have a
+history (NPK.US has no year with both a year-end price and diluted shares). LKQ.US
+and MMS.US sit below their own five-year range on every available multiple;
+NEU.US and ALSN.US sit above on P/E and P/S. Hashes unchanged.
+
 ## Remaining work
 
-1. Stage 3 continued: each company's multiples against its own history (fiscal
-   year-end prices are stored), sector notes, and conservative scenario ranges.
+1. Stage 3 remainder: conservative scenario ranges with explicit assumptions.
+   Then Stage 4 (filings-based catalysts) and Stage 5 (one-page analyst brief).
 2. Fresh prices for a current-month shortlist and for tracking to advance
    (operator-run acquisition with the existing ingestion). Corporate-action
    coverage for the 39 `coverage_missing` companies would widen the eligible pool.

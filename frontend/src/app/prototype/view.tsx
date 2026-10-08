@@ -2,12 +2,17 @@ import Link from "next/link";
 
 export type Calculation = {formula: string; start_session: string; end_session: string; start_adjusted_close: number; end_adjusted_close: number; session_intervals: number; momentum_return: number; source: string[]; latest_input_retrieved_at: string};
 export type Fact = {field: string; value: number; unit: string; concept: string; reported_start: string|null; reported_end: string; period_kind: string; reported_days?: number|null; form: string; public_at: string; retrieved_at: string; known_at: string; citation: {fact_key: string; accession: string; cik: string; source_endpoint: string}};
-export type Company = {security_id: string; qualified_symbol: string|null; company_name: string|null; eligible: boolean; reasons: string[]; calculation: Calculation|null; direct_evidence: Fact[]; missing_data: {field: string; reasons: string[]}[]; risks: string[]; identity_evidence: Record<string, string|null>|null; action_coverage: ActionCoverage|null; industry?: Industry|null; size?: Size|null; financials?: Financials|null; valuation?: Valuation|null};
+export type Company = {security_id: string; qualified_symbol: string|null; company_name: string|null; eligible: boolean; reasons: string[]; calculation: Calculation|null; direct_evidence: Fact[]; missing_data: {field: string; reasons: string[]}[]; risks: string[]; identity_evidence: Record<string, string|null>|null; action_coverage: ActionCoverage|null; industry?: Industry|null; size?: Size|null; financials?: Financials|null; valuation?: Valuation|null; sector_notes?: string[]};
 export type FinValue = {value: number; concept: string; accession: string; form: string; known_at: string};
 export type FinYear = {fiscal_year_end: string; values: Record<string, FinValue>; calculated: Record<string, number>};
 export type Observation = {kind: "strength"|"weakness"|"neutral"|"gap"; area: string; text: string; fiscal_years: string[]};
 export type Financials = {years: FinYear[]; observations: Observation[]; method: string; not_available: string[]; tables_omitted?: string; fiscal_years_available?: number};
-export type Valuation = {market_cap_usd: number; fiscal_year_end: string; multiples: Partial<Record<"price_to_earnings"|"price_to_sales"|"price_to_free_cash_flow"|"price_to_book", number>>; not_meaningful: string[]; basis: string; earnings_yield?: number; free_cash_flow_yield?: number};
+export type Valuation = {market_cap_usd: number; fiscal_year_end: string; multiples: Partial<Record<"price_to_earnings"|"price_to_sales"|"price_to_free_cash_flow"|"price_to_book", number>>; not_meaningful: string[]; basis: string; earnings_yield?: number; free_cash_flow_yield?: number; history?: ValuationHistory|null};
+type MultipleKey = "price_to_earnings"|"price_to_sales"|"price_to_free_cash_flow"|"price_to_book";
+export type ValuationHistory = {basis: string; unavailable: string|null;
+  years: {fiscal_year_end: string; price_session: string; close: number; diluted_shares: number; multiples: Partial<Record<MultipleKey, number>>}[];
+  current: {basis_fiscal_year_end: string; close: number; multiples: Partial<Record<MultipleKey, number>>}|null;
+  comparisons: {multiple: MultipleKey; position: "below"|"within"|"above"; text: string}[]};
 export type ActionCoverage = Record<string, string|null> & {extension?: {stored_record_through: string; dividend_refresh_completed_at: string; source: string}|null};
 export type Industry = {sic: number; sic_description: string|null; entity_type: string|null; sec_name: string|null; retrieved_at: string; response_sha256: string};
 export type Size = {market_cap_usd: number; shares_outstanding: number; share_classes_summed: number; shares_as_of: string; shares_accession: string; shares_filed: string; shares_form: string; close: number; close_session: string; band_usd: [number, number]};
@@ -20,8 +25,13 @@ const healthLine = (f: Financials) => {
   const n = (kind: string) => f.observations.filter(o => o.kind === kind).length;
   return `Financial health: ${n("strength")} strengths · ${n("weakness")} weaknesses · ${n("gap")} gaps`;
 };
-const valuationLine = (v: Valuation) => [v.multiples.price_to_earnings && `P/E ${v.multiples.price_to_earnings.toFixed(1)}`,
-  v.free_cash_flow_yield !== undefined && `FCF yield ${(v.free_cash_flow_yield * 100).toFixed(1)}%`].filter(Boolean).join(" · ") || "Valuation multiples not meaningful";
+const valuationLine = (v: Valuation) => {
+  const below = v.history?.comparisons.filter(c => c.position === "below").length ?? 0;
+  const above = v.history?.comparisons.filter(c => c.position === "above").length ?? 0;
+  return [v.multiples.price_to_earnings && `P/E ${v.multiples.price_to_earnings.toFixed(1)}`,
+    v.free_cash_flow_yield !== undefined && `FCF yield ${(v.free_cash_flow_yield * 100).toFixed(1)}%`,
+    v.history && v.history.comparisons.length > 0 && `vs own history: ${below} below, ${above} above range`].filter(Boolean).join(" · ") || "Valuation multiples not meaningful";
+};
 const sizeLine = (c: Company) => [c.size ? `${money(c.size.market_cap_usd)} market cap` : null, c.industry?.sic_description ?? null].filter(Boolean).join(" · ");
 export const detailHref = (id: string, decision: string, target=15) => `/prototype/company/${encodeURIComponent(id)}?decision_at=${encodeURIComponent(decision)}&target_members=${target}`;
 const words = (value: string) => value.replaceAll("_", " ");
@@ -71,6 +81,7 @@ export function CompanyView({detail}: {detail: Detail}) {
         : <p>Market cap unavailable from stored evidence.</p>}
       {c.industry ? <p>SIC {c.industry.sic}: {c.industry.sic_description ?? "no description"} · SEC entity type {c.industry.entity_type ?? "unknown"} · from the stored SEC submissions document retrieved {c.industry.retrieved_at} (<code>{c.industry.response_sha256}</code>)</p>
         : <p>Industry classification unavailable from stored evidence.</p>}
+      {(c.sector_notes ?? []).map(note => <p key={note} className="notice">Sector note: {note}</p>)}
     </section>
     {c.valuation && <ValuationView valuation={c.valuation}/>}
     {c.financials && <FinancialHealthView financials={c.financials}/>}
@@ -124,5 +135,19 @@ export function ValuationView({valuation}: {valuation: Valuation}) {
       {valuation.earnings_yield !== undefined && <div><dt>Earnings yield</dt><dd>{(valuation.earnings_yield * 100).toFixed(1)}%</dd></div>}
       {valuation.free_cash_flow_yield !== undefined && <div><dt>Free cash flow yield</dt><dd>{(valuation.free_cash_flow_yield * 100).toFixed(1)}%</dd></div>}</dl>
     {valuation.not_meaningful.length > 0 && <p>Not meaningful: {valuation.not_meaningful.join("; ")}.</p>}
+    {valuation.history && <HistoryView history={valuation.history}/>}
   </section>;
+}
+
+function HistoryView({history}: {history: ValuationHistory}) {
+  const keys = MULTIPLES.filter(([key]) => history.years.some(y => y.multiples[key] !== undefined));
+  return <div className="prototype-fin"><h3>Against its own history</h3>
+    <p>{history.basis} A multiple below its usual range can mean the market expects worse results; it is a question to research, not a conclusion.</p>
+    {history.comparisons.length > 0 ? <ul>{history.comparisons.map(c => <li key={c.multiple}><b>{c.position} range:</b> {c.text}</li>)}</ul>
+      : <p>{history.unavailable ?? "No comparison available."}</p>}
+    {history.years.length > 0 && <div className="prototype-table-wrap"><table><thead><tr><th>Fiscal year end</th><th>Close</th>{keys.map(([key, label]) => <th key={key}>{label}</th>)}</tr></thead><tbody>
+      {history.years.map(y => <tr key={y.fiscal_year_end}><td>{y.fiscal_year_end}<small>price {y.price_session}</small></td><td>${y.close.toFixed(2)}</td>{keys.map(([key]) => <td key={key}>{y.multiples[key] !== undefined ? `${y.multiples[key]!.toFixed(1)}×` : "—"}</td>)}</tr>)}
+      {history.current && <tr><td><b>Now (same basis)</b></td><td>${history.current.close.toFixed(2)}</td>{keys.map(([key]) => <td key={key}><b>{history.current!.multiples[key] !== undefined ? `${history.current!.multiples[key]!.toFixed(1)}×` : "—"}</b></td>)}</tr>}
+    </tbody></table></div>}
+  </div>;
 }
