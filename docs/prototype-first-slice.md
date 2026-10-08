@@ -228,9 +228,57 @@ unavailable. Both protected database hashes unchanged.
 The version change also changes the membership hash seed, so the proposed 15
 differ from version 1.1.0; nothing had been frozen under the earlier version.
 
+## Stage 2: financial-health brief (annual SEC figures)
+
+Each company page has a "Financial health (annual 10-K figures)" section, and
+result cards show counts of strengths, weaknesses and gaps. Context only: it never
+affects eligibility, membership or ordering.
+
+- **Data**: stored `sec_facts` from 10-K/10-K/A only. Full fiscal years are
+  durations of 350-380 days; balance-sheet items are instants at those year ends.
+  Up to 5 latest fiscal years. For each concept and exact period the latest visible
+  revision is used (known at the later of public and retrieval time); a period
+  with conflicting values in that revision is withheld. Revenue uses
+  `RevenueFromContractWithCustomerExcludingAssessedTax`, then `Revenues`, then
+  `SalesRevenueNet`; the concept is kept per year and growth is not compared
+  across a concept change.
+- **Calculations** (marked `*`): operating and net margin, revenue growth, free
+  cash flow = operating cash flow - capital expenditure (both full-year 10-K
+  figures), free-cash-flow margin, cash conversion, current ratio,
+  liabilities/assets, diluted share change. Multi-year rates use only the latest
+  run of consecutive fiscal years, so a missing year (often a merger or change of
+  reporting entity) ends the comparison.
+- **Observations**: fixed rules in `financials.FINANCIAL_RULES` (for example 10%
+  revenue growth a year, 10% operating margin, current ratio 1.5/1.0, liabilities
+  70% of assets, 3% annual dilution). Each names its evidence years. They are
+  interpretation, not a rating; there is no overall score.
+- **Not available**: interest coverage (no interest-expense facts stored), total
+  debt (borrowing components are not combined), quarterly or TTM figures.
+- Yearly tables are included for eligible companies; others carry observations
+  only, keeping the report bounded (about 0.76 MB on operator data).
+
+Operator check (read-only, 2026-10-08): all 12 eligible companies have at least
+3 full years. NSP.US (top momentum result) shows a latest operating margin of
+-0.1% and free cash flow of -309M USD; NEU.US shows positive margins and free
+cash flow in all 5 years and a falling share count. Hashes unchanged.
+
+## Stage 3 (first step): current valuation multiples
+
+Each company page has a "Valuation snapshot": price/earnings, price/sales,
+price/free cash flow and price/book, plus earnings and free-cash-flow yields,
+from the calculated market cap against the last full fiscal year (the two dates
+differ, and the page says so). Zero or negative denominators are listed as not
+meaningful instead of producing negative multiples. Result cards show P/E and FCF
+yield. There is deliberately no cheap/expensive verdict yet: that needs sector
+context and comparison with the company's own history (next step), and
+business-model caveats (for example lease-to-own companies whose purchases run
+through operating cash flow).
+
 ## Remaining work
 
-1. Fresh prices for a current-month shortlist and for tracking to advance
+1. Stage 3 continued: each company's multiples against its own history (fiscal
+   year-end prices are stored), sector notes, and conservative scenario ranges.
+2. Fresh prices for a current-month shortlist and for tracking to advance
    (operator-run acquisition with the existing ingestion). Corporate-action
    coverage for the 39 `coverage_missing` companies would widen the eligible pool.
 2. Optional later aids for the thesis, each separately reviewed: comparable
