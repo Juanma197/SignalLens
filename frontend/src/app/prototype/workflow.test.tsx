@@ -157,3 +157,13 @@ test("analyst brief renders sections, counterarguments and missing evidence from
   assert.match(html,/Missing evidence \(\d+\)/);
   assert.match(html,/not a forecast or a recommendation/);
 });
+
+test("comparison table lists every eligible company in membership order with dashes for missing data",()=>{
+  const html=renderToStaticMarkup(<RosterView report={ready}/>);
+  assert.match(html,/Compare eligible companies/);
+  assert.match(html,/not ranked by any column/);
+  const table=html.slice(html.indexOf("Compare eligible companies"), html.indexOf("Actual eligible roster for review"));
+  const order=[...table.matchAll(/>(SYN\d\d\.US)</g)].map(m=>m[1]);
+  assert.deepEqual(order, ready.eligible_roster.map(id=>ready.companies.find(c=>c.security_id===id)!.qualified_symbol));
+  assert.match(table,/—/);
+});

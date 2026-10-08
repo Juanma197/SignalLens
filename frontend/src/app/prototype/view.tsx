@@ -63,6 +63,7 @@ export function RosterView({report}: {report: Report}) {
       {report.blockers.length > 0 && <p role="status" className="notice warning">Results withheld: {report.blockers.map(words).join(" · ")}. Requirements remain unchanged.</p>}
       {report.results.length === 0 ? <p>No qualifying results at this cutoff.</p> : <div className="prototype-cards">{report.results.map((id,index)=>{const c=companies.get(id)!;return <article key={id}><p className="eyebrow">Research result {index+1}</p><h3>{c.qualified_symbol}</h3><p>{c.company_name}</p><p>{sizeLine(c)}</p>{c.financials && <p>{healthLine(c.financials)}</p>}{c.valuation && <p>{valuationLine(c.valuation)}</p>}{c.events && <p>{eventsLine(c.events)}</p>}<b>{percent(c.calculation!.momentum_return)} over 126 sessions</b><p>Qualified with positive momentum, identity checked at the cutoff, complete price/action coverage and direct financial context.</p><p>{c.risks.join(" ")}</p><Link href={detailHref(id,report.decision_at,report.target_members)}>View calculation and evidence</Link></article>;})}</div>}
     </section>
+    {report.eligible_roster.length > 0 && <CompareView report={report} companies={companies}/>}
     <section className="panel prototype-panel"><h2>Actual eligible roster for review</h2><p>All eligible identities are listed below. Proposed membership is the first {report.target_members} in the fixed hash order. No universe has been frozen.</p><p><code>{report.configuration.membership_order}</code></p>
       <div className="prototype-table-wrap"><table><thead><tr><th>Order</th><th>Company / durable ID</th><th>Membership proposal</th><th>Evidence</th></tr></thead><tbody>{report.eligible_roster.map((id,index)=>{const c=companies.get(id)!;return <tr key={id}><td>{index+1}</td><td><Link href={detailHref(id,report.decision_at,report.target_members)}>{c.qualified_symbol} · {c.company_name}</Link><small>{sizeLine(c)}</small><small>{id}</small></td><td>{report.proposed_membership.includes(id)?"Proposed · unfrozen":"Outside bounded proposal"}</td><td>{new Set(c.direct_evidence.map(f=>f.field)).size} direct fields; {c.missing_data.length} missing</td></tr>;})}</tbody></table></div>
       {report.eligible_roster.length===0 && <p>No eligible identities can be established.</p>}
@@ -180,4 +181,28 @@ export function AnalystBriefView({brief}: {brief: AnalystBrief}) {
     <h3>Counterarguments</h3><ul>{brief.counterarguments.map(point => <li key={point}>{point}</li>)}</ul>
     <details><summary>Missing evidence ({brief.missing_evidence.length})</summary><ul>{brief.missing_evidence.map(point => <li key={point}>{point}</li>)}</ul></details>
   </section>;
+}
+
+/** Every eligible company side by side, from the same report. Sorted by durable-ID
+ *  hash order (the membership order), never by any of these columns. */
+export function CompareView({report, companies}: {report: Report; companies: Map<string, Company>}) {
+  const rows = report.eligible_roster.map(id => companies.get(id)!).filter(Boolean);
+  const count = (c: Company, kind: string) => c.financials?.observations.filter(o => o.kind === kind).length ?? 0;
+  const position = (c: Company) => { const cs = c.valuation?.history?.comparisons ?? [];
+    return cs.length ? `${cs.filter(x => x.position === "below").length}↓ ${cs.filter(x => x.position === "within").length}= ${cs.filter(x => x.position === "above").length}↑` : "—"; };
+  return <section className="panel prototype-panel"><h2>Compare eligible companies</h2>
+    <p>Same data as each company page, in membership order (not ranked by any column). Vs own history counts multiples below (↓), within (=) and above (↑) the company&apos;s own range. A low multiple or a high momentum figure is a question to research, not a signal to act.</p>
+    <div className="prototype-table-wrap"><table><thead><tr><th>Company</th><th>Market cap</th><th>126-session move</th><th>P/E</th><th>FCF yield</th><th>Vs own history</th><th>Health ✓/✗</th><th>Filing risks</th><th>Next results ≈</th></tr></thead><tbody>
+      {rows.map(c => <tr key={c.security_id}>
+        <td><Link href={detailHref(c.security_id, report.decision_at, report.target_members)}>{c.qualified_symbol}</Link>{report.results.includes(c.security_id) ? " · result" : ""}<small>{c.industry?.sic_description ?? ""}</small></td>
+        <td>{c.size ? money(c.size.market_cap_usd) : "—"}</td>
+        <td>{c.calculation ? percent(c.calculation.momentum_return) : "—"}</td>
+        <td>{c.valuation?.multiples.price_to_earnings !== undefined ? c.valuation.multiples.price_to_earnings.toFixed(1) : "—"}</td>
+        <td>{c.valuation?.free_cash_flow_yield !== undefined ? percent(c.valuation.free_cash_flow_yield) : "—"}</td>
+        <td>{position(c)}</td>
+        <td>{c.financials ? `${count(c, "strength")} / ${count(c, "weakness")}` : "—"}</td>
+        <td>{c.events ? c.events.flags.filter(f => f.kind === "risk").length : "—"}</td>
+        <td>{c.events?.results_timing?.next_results_estimate ?? "—"}</td>
+      </tr>)}
+    </tbody></table></div></section>;
 }
