@@ -23,6 +23,7 @@ from ..price_segments import detect_price_segments
 from ..research_observations import ObservationPolicy
 from ..sec_ingestion import validate_paths
 from ..track_b_gaps import _reconcile
+from .events import event_brief, read_events
 from .financials import annual_brief, sector_notes, summary_only, valuation, valuation_history
 
 CONFIG = json.loads(Path(__file__).with_name('config_v1.json').read_text(encoding='utf-8'))
@@ -454,6 +455,7 @@ def _build(db, decision, target):
     sessions, calendar = _sessions(data, decision)
     industries, schema['sec_liquidity_raw_provenance'] = _industry(db, decision)
     share_counts = _share_counts(db, decision)
+    filing_events, schema['sec_event_metadata'] = read_events(db, decision, stamp)
     companies = []
     for sid in sorted(roster_ids):
         listings = [r for r in selected if str(r.get('security_id')) == sid]
@@ -491,6 +493,7 @@ def _build(db, decision, target):
     for c in companies:
         if c.get('financials') is not None: c['valuation'] = valuation(c.get('size'), c['financials'])
         if c.get('industry'): c['sector_notes'] = sector_notes(c['industry'])
+        if c.get('cik'): c['events'] = event_brief(c, filing_events.get(c['security_id'], []), decision, full=c['eligible'])
         if c['eligible'] and c.get('valuation'):
             first = annual_brief({'security_id': c['security_id'], 'cik': c['cik']}, data['sec_facts'], decision,
                                  stamp=stamp, finite=finite, revision='first')

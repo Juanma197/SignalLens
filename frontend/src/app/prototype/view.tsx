@@ -2,12 +2,16 @@ import Link from "next/link";
 
 export type Calculation = {formula: string; start_session: string; end_session: string; start_adjusted_close: number; end_adjusted_close: number; session_intervals: number; momentum_return: number; source: string[]; latest_input_retrieved_at: string};
 export type Fact = {field: string; value: number; unit: string; concept: string; reported_start: string|null; reported_end: string; period_kind: string; reported_days?: number|null; form: string; public_at: string; retrieved_at: string; known_at: string; citation: {fact_key: string; accession: string; cik: string; source_endpoint: string}};
-export type Company = {security_id: string; qualified_symbol: string|null; company_name: string|null; eligible: boolean; reasons: string[]; calculation: Calculation|null; direct_evidence: Fact[]; missing_data: {field: string; reasons: string[]}[]; risks: string[]; identity_evidence: Record<string, string|null>|null; action_coverage: ActionCoverage|null; industry?: Industry|null; size?: Size|null; financials?: Financials|null; valuation?: Valuation|null; sector_notes?: string[]};
+export type Company = {security_id: string; qualified_symbol: string|null; company_name: string|null; eligible: boolean; reasons: string[]; calculation: Calculation|null; direct_evidence: Fact[]; missing_data: {field: string; reasons: string[]}[]; risks: string[]; identity_evidence: Record<string, string|null>|null; action_coverage: ActionCoverage|null; industry?: Industry|null; size?: Size|null; financials?: Financials|null; valuation?: Valuation|null; sector_notes?: string[]; events?: Events|null};
 export type FinValue = {value: number; concept: string; accession: string; form: string; known_at: string};
 export type FinYear = {fiscal_year_end: string; values: Record<string, FinValue>; calculated: Record<string, number>};
 export type Observation = {kind: "strength"|"weakness"|"neutral"|"gap"; area: string; text: string; fiscal_years: string[]};
 export type Financials = {years: FinYear[]; observations: Observation[]; method: string; not_available: string[]; tables_omitted?: string; fiscal_years_available?: number};
 export type Valuation = {market_cap_usd: number; fiscal_year_end: string; multiples: Partial<Record<"price_to_earnings"|"price_to_sales"|"price_to_free_cash_flow"|"price_to_book", number>>; not_meaningful: string[]; basis: string; earnings_yield?: number; free_cash_flow_yield?: number; history?: ValuationHistory|null};
+export type FilingEvent = {accession: string; form: string; filing_date: string; known_at: string; items: string[]; category: string; label: string; confidence: number; amendment: boolean; url: string|null};
+export type Events = {window_days: number; event_count: number; counts: Record<string, number>; note: string; latest_known_at: string|null;
+  flags: {kind: "risk"|"catalyst"; category: string; count: number; text: string}[];
+  results_timing: {last_results_filed: string; typical_gap_days: number; next_results_estimate: string; text: string}|null; events: FilingEvent[]};
 type MultipleKey = "price_to_earnings"|"price_to_sales"|"price_to_free_cash_flow"|"price_to_book";
 export type ValuationHistory = {basis: string; unavailable: string|null;
   years: {fiscal_year_end: string; price_session: string; close: number; diluted_shares: number; multiples: Partial<Record<MultipleKey, number>>}[];
@@ -25,6 +29,8 @@ const healthLine = (f: Financials) => {
   const n = (kind: string) => f.observations.filter(o => o.kind === kind).length;
   return `Financial health: ${n("strength")} strengths · ${n("weakness")} weaknesses · ${n("gap")} gaps`;
 };
+const eventsLine = (e: Events) => [e.results_timing && `Next results ≈ ${e.results_timing.next_results_estimate}`,
+  e.flags.filter(f => f.kind === "risk").length > 0 && `${e.flags.filter(f => f.kind === "risk").length} filing risk flag(s)`].filter(Boolean).join(" · ") || `${e.event_count} filing events in the last year`;
 const valuationLine = (v: Valuation) => {
   const below = v.history?.comparisons.filter(c => c.position === "below").length ?? 0;
   const above = v.history?.comparisons.filter(c => c.position === "above").length ?? 0;
@@ -54,7 +60,7 @@ export function RosterView({report}: {report: Report}) {
     {report.synthetic_fixture && <p className="notice warning">SYNTHETIC FIXTURE — invented companies and evidence. This is not the actual operator roster.</p>}
     <section className="panel prototype-panel"><h2>Proposed research shortlist</h2><p>Known at {report.decision_at}. {report.proposed_membership.length} proposed members from {report.eligible_count} eligible companies; minimum {report.minimum_members}, target {report.target_members}.</p>
       {report.blockers.length > 0 && <p role="status" className="notice warning">Results withheld: {report.blockers.map(words).join(" · ")}. Requirements remain unchanged.</p>}
-      {report.results.length === 0 ? <p>No qualifying results at this cutoff.</p> : <div className="prototype-cards">{report.results.map((id,index)=>{const c=companies.get(id)!;return <article key={id}><p className="eyebrow">Research result {index+1}</p><h3>{c.qualified_symbol}</h3><p>{c.company_name}</p><p>{sizeLine(c)}</p>{c.financials && <p>{healthLine(c.financials)}</p>}{c.valuation && <p>{valuationLine(c.valuation)}</p>}<b>{percent(c.calculation!.momentum_return)} over 126 sessions</b><p>Qualified with positive momentum, identity checked at the cutoff, complete price/action coverage and direct financial context.</p><p>{c.risks.join(" ")}</p><Link href={detailHref(id,report.decision_at,report.target_members)}>View calculation and evidence</Link></article>;})}</div>}
+      {report.results.length === 0 ? <p>No qualifying results at this cutoff.</p> : <div className="prototype-cards">{report.results.map((id,index)=>{const c=companies.get(id)!;return <article key={id}><p className="eyebrow">Research result {index+1}</p><h3>{c.qualified_symbol}</h3><p>{c.company_name}</p><p>{sizeLine(c)}</p>{c.financials && <p>{healthLine(c.financials)}</p>}{c.valuation && <p>{valuationLine(c.valuation)}</p>}{c.events && <p>{eventsLine(c.events)}</p>}<b>{percent(c.calculation!.momentum_return)} over 126 sessions</b><p>Qualified with positive momentum, identity checked at the cutoff, complete price/action coverage and direct financial context.</p><p>{c.risks.join(" ")}</p><Link href={detailHref(id,report.decision_at,report.target_members)}>View calculation and evidence</Link></article>;})}</div>}
     </section>
     <section className="panel prototype-panel"><h2>Actual eligible roster for review</h2><p>All eligible identities are listed below. Proposed membership is the first {report.target_members} in the fixed hash order. No universe has been frozen.</p><p><code>{report.configuration.membership_order}</code></p>
       <div className="prototype-table-wrap"><table><thead><tr><th>Order</th><th>Company / durable ID</th><th>Membership proposal</th><th>Evidence</th></tr></thead><tbody>{report.eligible_roster.map((id,index)=>{const c=companies.get(id)!;return <tr key={id}><td>{index+1}</td><td><Link href={detailHref(id,report.decision_at,report.target_members)}>{c.qualified_symbol} · {c.company_name}</Link><small>{sizeLine(c)}</small><small>{id}</small></td><td>{report.proposed_membership.includes(id)?"Proposed · unfrozen":"Outside bounded proposal"}</td><td>{new Set(c.direct_evidence.map(f=>f.field)).size} direct fields; {c.missing_data.length} missing</td></tr>;})}</tbody></table></div>
@@ -85,6 +91,7 @@ export function CompanyView({detail}: {detail: Detail}) {
     </section>
     {c.valuation && <ValuationView valuation={c.valuation}/>}
     {c.financials && <FinancialHealthView financials={c.financials}/>}
+    {c.events && <EventsView events={c.events}/>}
     <section className="panel prototype-panel"><h2>Direct reported evidence and citations</h2><p>Context only — no ranking effect. Stored fact references are not certification of complete financial statements or accounting contexts.</p>
       {c.direct_evidence.map(f=><div className="prototype-fact" key={f.citation.fact_key}><h3>{words(f.field)}{f.reported_days?` · ${f.reported_days}-day reported period`:""}</h3><p><b>{f.value.toLocaleString("en-GB")} {f.unit}</b> · {f.concept}</p><p>{f.period_kind}: {f.reported_start?`${f.reported_start} to `:""}{f.reported_end} · {f.form}</p><p>Public: {f.public_at} · Retrieved: {f.retrieved_at} · Known at: {f.known_at}</p><p>CIK {f.citation.cik} · Accession <code>{f.citation.accession}</code></p><p>Stored fact key <code>{f.citation.fact_key}</code></p><p className="prototype-source">Stored source reference: <code>{f.citation.source_endpoint}</code></p></div>)}
       {c.direct_evidence.length===0 && <p>No usable direct financial facts.</p>}
@@ -150,4 +157,16 @@ function HistoryView({history}: {history: ValuationHistory}) {
       {history.current && <tr><td><b>Now (same basis)</b></td><td>${history.current.close.toFixed(2)}</td>{keys.map(([key]) => <td key={key}><b>{history.current!.multiples[key] !== undefined ? `${history.current!.multiples[key]!.toFixed(1)}×` : "—"}</b></td>)}</tr>}
     </tbody></table></div>}
   </div>;
+}
+
+/** Stored SEC 8-K/6-K events: potential catalysts and risks. Context only. */
+export function EventsView({events}: {events: Events}) {
+  return <section className="panel prototype-panel prototype-fin"><h2>Recent filing events (last {events.window_days} days)</h2>
+    <p>{events.event_count} SEC event filings. {events.note}{events.latest_known_at ? ` Latest stored retrieval: ${events.latest_known_at}.` : ""}</p>
+    {events.results_timing && <p><b>Next results:</b> {events.results_timing.text}</p>}
+    {events.flags.length > 0 && <><h3>Flags</h3><ul>{events.flags.map(f => <li key={f.category}><b>{f.kind === "risk" ? "Risk" : "Possible catalyst"}:</b> {f.text} ({f.count})</li>)}</ul></>}
+    {events.events.length > 0 && <><h3>Filings</h3><ul>{events.events.map(e => <li key={e.accession + e.category}>
+      {e.filing_date} · {e.label}{e.amendment ? " (amendment)" : ""} · {e.form} items {e.items.join(", ") || "none"} · confidence {e.confidence.toFixed(2)}
+      {e.url && <> · <a href={e.url} target="_blank" rel="noopener noreferrer">SEC filing</a></>}</li>)}</ul></>}
+  </section>;
 }

@@ -300,10 +300,33 @@ history (NPK.US has no year with both a year-end price and diluted shares). LKQ.
 and MMS.US sit below their own five-year range on every available multiple;
 NEU.US and ALSN.US sit above on P/E and P/S. Hashes unchanged.
 
+## Stage 4 (first step): recent filing events
+
+Each company page has "Recent filing events (last 365 days)" from the stored,
+already-classified SEC 8-K/6-K metadata (`sec_event_metadata`; no requests):
+date, category, item codes, classifier confidence and a link to the filing on
+sec.gov (built from CIK, accession and a validated document name). An event is
+visible from the later of its public and retrieval times, and matched on CIK.
+
+- **Flags** (fixed rules): bankruptcy/distress, listing compliance/delisting,
+  capital raise or new debt, three or more management/board changes (risks);
+  acquisition or disposal (possible catalyst). Material agreements are counted
+  but not flagged, because nearly every company files them.
+- **Next results estimate**: the median gap between results filings (60-200
+  days) added to the last one; labelled an estimate from filing cadence, not an
+  announced date.
+- Event data is only as recent as its last retrieval (2026-10-01 on the operator
+  database); keeping it current needs the separate, operator-run SEC event
+  ingestion.
+
+Operator check (read-only, 2026-10-08): all 12 eligible companies have 6-19
+events in the last year; 11 have a next-results estimate (late October to early
+November 2026 for most). Hashes unchanged.
+
 ## Remaining work
 
-1. Stage 3 remainder: conservative scenario ranges with explicit assumptions.
-   Then Stage 4 (filings-based catalysts) and Stage 5 (one-page analyst brief).
+1. Stage 5: a one-page analyst brief that combines the sections, with
+   counterarguments and missing evidence. Then conservative scenario ranges.
 2. Fresh prices for a current-month shortlist and for tracking to advance
    (operator-run acquisition with the existing ingestion). Corporate-action
    coverage for the 39 `coverage_missing` companies would widen the eligible pool.
