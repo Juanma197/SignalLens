@@ -23,7 +23,7 @@ from ..price_segments import detect_price_segments
 from ..research_observations import ObservationPolicy
 from ..sec_ingestion import validate_paths
 from ..track_b_gaps import _reconcile
-from .financials import annual_brief, summary_only
+from .financials import annual_brief, summary_only, valuation
 
 CONFIG = json.loads(Path(__file__).with_name('config_v1.json').read_text(encoding='utf-8'))
 NOTICE = 'UNVALIDATED RESEARCH PROTOTYPE — ZERO VALIDATION CREDIT'
@@ -473,6 +473,7 @@ def _build(db, decision, target):
             'financials': annual_brief(sec, data['sec_facts'], decision, stamp=stamp, finite=finite)})
     eligible = sorted([c for c in companies if c['eligible']], key=lambda c: (hashlib.sha256((CONFIG['version'] + ':' + c['security_id']).encode()).hexdigest(), c['security_id']))
     for c in companies:
+        if c.get('financials') is not None: c['valuation'] = valuation(c.get('size'), c['financials'])
         if not c['eligible'] and c.get('financials'): c['financials'] = summary_only(c['financials'])
     members = eligible[:target]
     blockers = ['eligible_population_below_minimum'] if len(members) < CONFIG['minimum_members'] else []

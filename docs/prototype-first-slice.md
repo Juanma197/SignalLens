@@ -262,9 +262,23 @@ Operator check (read-only, 2026-10-08): all 12 eligible companies have at least
 -0.1% and free cash flow of -309M USD; NEU.US shows positive margins and free
 cash flow in all 5 years and a falling share count. Hashes unchanged.
 
+## Stage 3 (first step): current valuation multiples
+
+Each company page has a "Valuation snapshot": price/earnings, price/sales,
+price/free cash flow and price/book, plus earnings and free-cash-flow yields,
+from the calculated market cap against the last full fiscal year (the two dates
+differ, and the page says so). Zero or negative denominators are listed as not
+meaningful instead of producing negative multiples. Result cards show P/E and FCF
+yield. There is deliberately no cheap/expensive verdict yet: that needs sector
+context and comparison with the company's own history (next step), and
+business-model caveats (for example lease-to-own companies whose purchases run
+through operating cash flow).
+
 ## Remaining work
 
-1. Fresh prices for a current-month shortlist and for tracking to advance
+1. Stage 3 continued: each company's multiples against its own history (fiscal
+   year-end prices are stored), sector notes, and conservative scenario ranges.
+2. Fresh prices for a current-month shortlist and for tracking to advance
    (operator-run acquisition with the existing ingestion). Corporate-action
    coverage for the 39 `coverage_missing` companies would widen the eligible pool.
 2. Optional later aids for the thesis, each separately reviewed: comparable

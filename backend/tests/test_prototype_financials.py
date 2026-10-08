@@ -84,3 +84,16 @@ def test_summary_only_keeps_observations_without_tables():
     b = brief(year(2024, 100, 10, 8, 12, 2, 50) + year(2025, 120, 12, 9, 14, 3, 50))
     s = summary_only(b)
     assert s['years'] == [] and s['fiscal_years_available'] == 2 and s['observations'] == b['observations']
+
+
+def test_valuation_multiples_and_not_meaningful_cases():
+    from app.prototype.financials import valuation
+    b = brief(year(2024, 100, 10, 8, 12, 2, 50) + year(2025, 200, 30, 20, 40, 10, 50) + [fact('StockholdersEquity', -5, date(2025, 12, 31))])
+    v = valuation({'market_cap_usd': 600}, b)
+    assert v['multiples']['price_to_earnings'] == pytest.approx(30) and v['multiples']['price_to_sales'] == pytest.approx(3)
+    assert v['multiples']['price_to_free_cash_flow'] == pytest.approx(20) and 'price_to_book' not in v['multiples']
+    assert v['free_cash_flow_yield'] == pytest.approx(0.05) and v['earnings_yield'] == pytest.approx(20 / 600)
+    assert "Shareholders' equity is zero or negative" in v['not_meaningful']
+    loss = valuation({'market_cap_usd': 600}, brief(year(2025, 100, -10, -8, -12, 2, 50)))
+    assert 'price_to_earnings' not in loss['multiples'] and 'Net income is zero or negative' in loss['not_meaningful']
+    assert valuation(None, b) is None and valuation({'market_cap_usd': 1}, brief([])) is None

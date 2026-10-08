@@ -5,7 +5,7 @@ import {tmpdir} from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {renderToStaticMarkup} from "react-dom/server";
-import {CompanyView,FinancialHealthView,PrototypeNotice,RosterView,detailHref, type Detail, type Report} from "./view";
+import {CompanyView,FinancialHealthView,PrototypeNotice,RosterView,ValuationView,detailHref, type Detail, type Report} from "./view";
 import {SnapshotView, ThesisHistory} from "./store-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
@@ -115,4 +115,12 @@ test("financial health renders annual figures, calculations and grouped observat
   assert.match(html,/FY2025<small>to 2025-12-31/);
   assert.match(html,/interpretation, not a rating/);
   assert.doesNotMatch(html,/NaN|undefined/);
+});
+
+test("valuation snapshot shows multiples without a verdict",()=>{
+  const html=renderToStaticMarkup(<ValuationView valuation={{market_cap_usd:6e8,fiscal_year_end:"2025-12-31",multiples:{price_to_earnings:30,price_to_sales:3},not_meaningful:["Free cash flow is zero or negative"],basis:"Market cap at the decision session against the last full fiscal year; the two dates differ.",earnings_yield:0.0333}}/>);
+  assert.match(html,/Price \/ earnings<\/dt><dd>30\.0×/);
+  assert.match(html,/Earnings yield<\/dt><dd>3\.3%/);
+  assert.match(html,/not a verdict/);
+  assert.match(html,/Free cash flow is zero or negative/);
 });

@@ -216,3 +216,26 @@ def summary_only(brief):
     return {'years': [], 'fiscal_years_available': len(brief['years']), 'observations': brief['observations'],
             'method': brief['method'], 'rules': brief['rules'], 'not_available': brief['not_available'],
             'tables_omitted': 'Yearly tables are shown for eligible companies only.'}
+
+
+def valuation(size, brief):
+    """Current multiples: market cap (latest cover-page shares x decision-session
+    close) against the last full fiscal year. No verdict: what counts as cheap
+    depends on the sector and the company's own history (not yet assessed)."""
+    if not size or not brief or not brief.get('years'): return None
+    last = brief['years'][-1]
+    v, c = {k: x['value'] for k, x in last['values'].items()}, last['calculated']
+    cap = size['market_cap_usd']
+    out = {'market_cap_usd': cap, 'fiscal_year_end': last['fiscal_year_end'], 'multiples': {}, 'not_meaningful': [],
+           'basis': 'Market cap at the decision session against the last full fiscal year; the two dates differ.'}
+    def multiple(name, value, label):
+        if value is None: return
+        if value > 0: out['multiples'][name] = cap / value
+        else: out['not_meaningful'].append(f'{label} is zero or negative')
+    multiple('price_to_earnings', v.get('net_income'), 'Net income')
+    multiple('price_to_sales', v.get('revenue'), 'Revenue')
+    multiple('price_to_free_cash_flow', c.get('free_cash_flow'), 'Free cash flow')
+    multiple('price_to_book', v.get('equity'), "Shareholders' equity")
+    if 'net_income' in v: out['earnings_yield'] = v['net_income'] / cap
+    if 'free_cash_flow' in c: out['free_cash_flow_yield'] = c['free_cash_flow'] / cap
+    return out
