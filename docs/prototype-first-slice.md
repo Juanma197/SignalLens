@@ -108,7 +108,7 @@ checked when you stop it):
 
 Or against a new synthetic fixture: `.\scripts\start-prototype.ps1`. The script
 prints the URL and the cutoff to paste. Login: if `SIGNALLENS_DASHBOARD_USERNAME`
-and `SIGNALLENS_DASHBOARD_PASSWORD` are set (as environment variables, or both in
+and `SIGNALLENS_DASHBOARD_PASSWORD` are set (as Windows user environment variables, or both in
 `frontend\.env.local`, which Git ignores) it uses them and never prints the
 password; otherwise it prints a one-time login `prototype / <random>`. Press Enter in
 that window to stop both services; it then confirms the hashes are unchanged.

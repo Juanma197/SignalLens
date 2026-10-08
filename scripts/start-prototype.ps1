@@ -43,11 +43,18 @@ $ResearchBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $ResearchDb).Hash
 $ProductionBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $ProductionDb).Hash
 
 $Token = [guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")
-# Login: an environment variable pair, else a pair in frontend\.env.local, else a
-# one-time login generated for this run. A configured password is never printed.
-$Username = $env:SIGNALLENS_DASHBOARD_USERNAME
-$Password = $env:SIGNALLENS_DASHBOARD_PASSWORD
-$LoginSource = "environment variables"
+# Login: a persistent (User/Machine) environment variable pair, else a pair in
+# frontend\.env.local, else a one-time login for this run. Session values are
+# ignored: an earlier run in the same window must not supply a stale login.
+# A configured password is never printed.
+function Get-PersistentVariable([string]$Name) {
+    $Value = [Environment]::GetEnvironmentVariable($Name, "User")
+    if (-not $Value) { $Value = [Environment]::GetEnvironmentVariable($Name, "Machine") }
+    return $Value
+}
+$Username = Get-PersistentVariable "SIGNALLENS_DASHBOARD_USERNAME"
+$Password = Get-PersistentVariable "SIGNALLENS_DASHBOARD_PASSWORD"
+$LoginSource = "Windows user environment variables"
 if (-not $Username -or -not $Password) {
     $Username = $null; $Password = $null
     $EnvLocal = Join-Path $Project "frontend\.env.local"
@@ -64,6 +71,14 @@ if (-not $Username -or -not $Password) {
     $Password = [guid]::NewGuid().ToString("N").Substring(0, 16)
     $LoginSource = $null
 }
+# Every variable set below is restored when the script ends, so nothing from this
+# run (including the login) remains in the calling PowerShell window.
+$SessionNames = @("SIGNALLENS_ENVIRONMENT", "SIGNALLENS_STAGING_MODE", "SIGNALLENS_SCHEDULER_ENABLED",
+    "SIGNALLENS_DATABASE_PATH", "SIGNALLENS_RESEARCH_DATABASE_PATH", "SIGNALLENS_PERSISTENT_VOLUME_PATH",
+    "SIGNALLENS_API_TOKEN", "SIGNALLENS_API_URL", "NEXT_PUBLIC_API_URL", "SIGNALLENS_ALLOWED_ORIGINS",
+    "SIGNALLENS_DASHBOARD_USERNAME", "SIGNALLENS_DASHBOARD_PASSWORD")
+$SavedSession = @{}
+foreach ($Name in $SessionNames) { $SavedSession[$Name] = [Environment]::GetEnvironmentVariable($Name, "Process") }
 $env:SIGNALLENS_ENVIRONMENT = "development"
 $env:SIGNALLENS_STAGING_MODE = "true"
 $env:SIGNALLENS_SCHEDULER_ENABLED = "false"
@@ -103,6 +118,7 @@ try {
     foreach ($Process in @($Web, $Api)) {
         if ($null -ne $Process -and -not $Process.HasExited) { & taskkill.exe /PID $Process.Id /T /F | Out-Null }
     }
+    foreach ($Name in $SessionNames) { [Environment]::SetEnvironmentVariable($Name, $SavedSession[$Name], "Process") }
     $ResearchAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $ResearchDb).Hash
     $ProductionAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $ProductionDb).Hash
     if ($ResearchAfter -ne $ResearchBefore -or $ProductionAfter -ne $ProductionBefore) {
