@@ -7,6 +7,8 @@ param(
   [string]$Python = "",
   [string]$Reports = "",
   [string]$DecisionAt = "2026-10-05T00:30:00+00:00",
+  [ValidateSet("metadata-patterns", "flow-focused")]
+  [string]$SelectionMode = "metadata-patterns",
   [switch]$SkipOfflineTests
 )
 & {
@@ -83,7 +85,7 @@ def execute(argv,cwd):
     if reader.is_alive() or overflow:raise RuntimeError('COMMAND_OUTPUT_LIMIT')
     return code,b''.join(chunks)
 
-def verify(repo,paths,reports,decision,skip):
+def verify(repo,paths,reports,decision,skip,selection="metadata-patterns"):
     repo=pathlib.Path(repo);paths={k:pathlib.Path(v) for k,v in paths.items()};reports=pathlib.Path(reports)
     result={'command':'track-b-provenance-replay','status':'proposed_not_authorized','execution_state':'failed',
      'errors':['NOT_RUN'],'blockers':[{'code':k,'state':'unresolved'} for k in BLOCKERS],
@@ -106,14 +108,15 @@ def verify(repo,paths,reports,decision,skip):
         if not skip:
             stage='OFFLINE_TESTS'
             code,_=execute([sys.executable,'-m','pytest','tests/test_track_b_provenance_replay.py',
-                'tests/test_track_b_provenance_verification.py','tests/test_track_b_provenance_cell_diagnostic.py','tests/test_track_b_provenance_plan_identity.py','-q'],repo/'backend')
+                'tests/test_track_b_provenance_verification.py','tests/test_track_b_provenance_cell_diagnostic.py','tests/test_track_b_provenance_plan_identity.py','tests/test_track_b_provenance_flow.py','-q'],repo/'backend')
             verification['offline_tests']='passed' if code==0 else 'failed'
             if code:raise RuntimeError('TESTS_FAILED')
         stage='REPLAY_COMMAND'
         code,output=execute([sys.executable,'-m','app.track_b_provenance_replay','--research-db',str(paths['research']),
-            '--production-db',str(paths['production']),'--decision-at',decision],repo/'backend')
+            '--production-db',str(paths['production']),'--decision-at',decision,'--selection-mode',selection],repo/'backend')
         stage='REPLAY_REPORT_VALIDATION'
         candidate=json.loads(output.decode('utf-8'))
+        if candidate.get('selection_mode')!=selection:raise RuntimeError('SELECTION_MODE_MISMATCH')
         if candidate['command']!='track-b-provenance-replay' or candidate['status']!='proposed_not_authorized':raise RuntimeError('REPORT_IDENTITY')
         if candidate['blockers']!=result['blockers'] or candidate['unresolved_requirement_count']!=8:raise RuntimeError('BLOCKERS_CHANGED')
         if candidate['provider_requests']!=0 or candidate['model_outputs']!=[]:raise RuntimeError('FORBIDDEN_OUTPUT')
@@ -159,11 +162,11 @@ def verify(repo,paths,reports,decision,skip):
     return verification
 
 if __name__=='__main__':
-    summary=verify(sys.argv[1],{'research':sys.argv[2],'production':sys.argv[3]},sys.argv[4],sys.argv[5],sys.argv[6]=='True')
+    summary=verify(sys.argv[1],{'research':sys.argv[2],'production':sys.argv[3]},sys.argv[4],sys.argv[5],sys.argv[6]=='True',sys.argv[7])
     sys.exit(0 if summary['execution_state']=='completed' and not summary['errors'] else 1)
 
 '@
-    $Verify | & $Python -X utf8 - $Repo $ResearchDb $ProductionDb $Reports $DecisionAt $SkipOfflineTests.IsPresent
+    $Verify | & $Python -X utf8 - $Repo $ResearchDb $ProductionDb $Reports $DecisionAt $SkipOfflineTests.IsPresent $SelectionMode
     $ExitCode = $LASTEXITCODE
     $PythonCompleted = $true
     if ($ExitCode -ne 0) { $Errors.Add("PYTHON_VERIFIER_FAILED") }

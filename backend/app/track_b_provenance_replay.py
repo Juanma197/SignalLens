@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import duckdb
@@ -19,7 +20,7 @@ from .sec_ingestion import validate_paths
 from .sec_liquidity_contract import (OPERATION_TYPE, OPERATION_CONTRACT_VERSION,
                                      CONCEPT_CONTRACT_HASH, PARSER_VERSION)
 
-VERSION = 'track-b-provenance-replay-proposed-0.1.2'
+VERSION = 'track-b-provenance-replay-proposed-0.1.3'
 MAX_ROWS = 500_000
 MAX_MANIFEST = 10_000
 MAX_PAYLOAD = 5_000_000  # decimal MB, never MiB
@@ -261,7 +262,36 @@ def pattern_rows(rows):
             'repeated_period_across_accessions': redisclosure, 'missing_reported_label': missing_label}
 
 
-def select_pilot(manifest, rows, decision):
+def flow_witness(rows):
+    """Reported duration pattern only; not fiscal/calendar/context certification.
+
+    Select one OCF OR capex concept with the same reported start/unit and two
+    distinct reported ends. Preserve entire semantic duplicate groups. Accessions
+    and fact keys break ties; no values, counts or expected coverage rank choices.
+    """
+    groups = defaultdict(list)
+    for row in rows:
+        if (row.get('taxonomy') == 'us-gaap' and row.get('concept') in (feasibility.OCF, feasibility.CAPEX)
+            and present(row.get('period_start')) and present(row.get('period_end'))
+            and present(row.get('unit')) and present(row.get('accession_number'))):
+            groups[semantic(row)].append(row)
+    keys = sorted(groups, key=lambda k: tuple(x or '' for x in k))
+    comparisons = 0
+    for index, left in enumerate(keys):
+        for right_index in range(index+1, len(keys)):
+            right = keys[right_index]
+            comparisons += 1
+            require(comparisons <= MAX_MANIFEST, "FLOW_SELECTION_WORK_LIMIT")
+            if left[:4] != right[:4] or left[4] == right[4]: continue
+            selected = sorted(groups[left] + groups[right], key=lambda r: r['fact_key'])
+            if len(selected) > MAX_OBSERVATIONS or len({r['accession_number'] for r in selected}) > MAX_ACCESSIONS:
+                continue  # A whole witness must fit; never truncate duplicates.
+            return selected
+    return None
+
+
+def select_pilot(manifest, rows, decision, selection_mode="metadata-patterns"):
+    require(selection_mode in ("metadata-patterns", "flow-focused"), "SELECTION_MODE_INVALID")
     buckets = defaultdict(lambda: defaultdict(list))
     skipped = Counter()
     for item in manifest:
@@ -295,10 +325,15 @@ def select_pilot(manifest, rows, decision):
         index_key = key[:3] + (key[4],key[5],key[6],key[7])
         matching = rows_by_operation[index_key]
         patterns = pattern_rows(matching)
-        if matching and any(patterns.values()): eligible.append((key, pair, matching, patterns))
+        if selection_mode == 'flow-focused':
+            witness = flow_witness(matching)
+            if witness: eligible.append((key, pair, matching, patterns, witness))
+            else: skipped['no_bounded_same_reported_start_distinct_end_flow_witness'] += 1
+            continue
+        if matching and any(patterns.values()): eligible.append((key, pair, matching, patterns, None))
         else: skipped['no_qualifying_metadata_pattern'] += 1
-    if not eligible: return None, {'state': 'no_qualifying_pair', 'skipped': dict(skipped), 'qualifying_pair_count': 0}
-    key, pair, matching, patterns = min(eligible, key=lambda p: p[0] + tuple(r['evidence_key'] for r in p[1]))
+    if not eligible: return None, {'state': 'no_qualifying_pair', 'skipped': dict(skipped), 'qualifying_pair_count': 0, 'selection_mode': selection_mode}
+    key, pair, matching, patterns, witness = min(eligible, key=lambda p: p[0] + tuple(r['evidence_key'] for r in p[1]))
     # First three accessions, then first 24 rows, ordered only by source metadata.
     accessions = sorted({r['accession_number'] for r in matching})[:MAX_ACCESSIONS]
     groups = defaultdict(list)
@@ -311,11 +346,15 @@ def select_pilot(manifest, rows, decision):
             require(bool(selected), 'STORED_MATCH_MULTIPLICITY_LIMIT')
             break
         selected.extend(group)
-    return (pair, selected), {'state': 'selected', 'security_id': pair[0]['security_id'], 'cik': pair[0]['cik'],
+    if witness is not None: selected = witness
+    return (pair, selected), {'selection_mode': selection_mode,
+        'flow_witness_concepts': sorted({r['concept'] for r in selected}) if witness else [],
+        'fiscal_start_certified': False, 'adjacent_fiscal_quarters_certified': False,
+        'context_compatibility_certified': False, 'state': 'selected', 'security_id': pair[0]['security_id'], 'cik': pair[0]['cik'],
         'payload_evidence_keys': [r['evidence_key'] for r in pair], 'qualifying_pair_count': len(eligible),
         'patterns': patterns, 'accessions': sorted({r['accession_number'] for r in selected}),
         'selected_stored_rows': len(selected), 'excluded_stored_rows': len(matching) - len(selected),
-        'selection_order': 'lexicographic_full_operation_security_cik_identity_with_full_plan_sha256_then_accession_semantic_metadata_fact_key',
+        'selection_order': 'lexicographic_full_identity_then_semantic_flow_witness_and_fact_key' if witness else 'lexicographic_full_operation_security_cik_identity_with_full_plan_sha256_then_accession_semantic_metadata_fact_key',
         'skipped': dict(skipped)}
 
 
@@ -490,6 +529,34 @@ def replay(company, submissions, selected):
         'filings_files_references_followed': False}
 
 
+def filing_pilot_manifest(submissions, selected, pair):
+    """Proposed source-reference report, not filing acquisition or evidence."""
+    recent = submissions.get('filings', {}).get('recent', {})
+    entries = []
+    for accession in sorted({r['accession_number'] for r in selected}):
+        references = []
+        for index, stored in enumerate(recent.get('accessionNumber', [])):
+            if stored != accession: continue
+            document = recent.get('primaryDocument', [None] * len(recent.get('accessionNumber', [])))[index]
+            safe = (isinstance(document, str) and 0 < len(document) <= MAX_CELL
+                and re.fullmatch(r'[A-Za-z0-9_./-]+', document) is not None
+                and all(part not in ('', '.', '..') for part in document.split('/')))
+            references.append({'submissions_recent_index': index,
+                'primary_document': document if safe else None,
+                'locator_state': 'retained_relative_name_only' if safe else 'missing_or_unsafe_unproven'})
+        entries.append({'accession': accession, 'accession_format_proven': bool(re.fullmatch(r'\d{10}-\d{2}-\d{6}', accession)),
+            'retained_document_locators': references, 'original_document_bytes_retained': 'unproven',
+            'requested_checks': ['original_XBRL_duration_contexts_and_entity_scope',
+                'fiscal_calendar_and_adjacent_periods', 'units_and_decimals',
+                'accounting_basis_and_amendment_supersession_evidence', 'relevant_cash_flow_notes']})
+    return {'status': 'proposed_not_authorized', 'retrieval_authorized': False,
+        'security_id': pair[0]['security_id'], 'cik': pair[0]['cik'],
+        'verified_payload_sources': [{'evidence_key': p['evidence_key'], 'endpoint_class': p['endpoint_class'],
+            'response_sha256': p['response_sha256'], 'byte_count': p['byte_count']} for p in pair],
+        'entries': entries, 'urls_constructed_or_followed': False,
+        'limitations': 'Retained submissions locators do not prove original document retention, XBRL contexts, notes, precision or supersession.'}
+
+
 def base_report(decision_at):
     return {'command': 'track-b-provenance-replay', 'version': VERSION,
         'status': 'proposed_not_authorized', 'execution_state': 'failed',
@@ -503,7 +570,7 @@ def base_report(decision_at):
         'unresolved_requirement_count': 8}
 
 
-def audit_and_replay(db, production, decision, report):
+def audit_and_replay(db, production, decision, report, selection_mode="metadata-patterns"):
     data = {}; total = 0
     for table in feasibility.IDENTITY_TABLES:
         source, rows = metadata_rows(db, table, feasibility.SOURCES[table], set(), MAX_ROWS-total, stage='research.identity.'+table)
@@ -538,7 +605,7 @@ def audit_and_replay(db, production, decision, report):
     report['retained_manifest'] = source
     if source['state'] == 'unsupported_schema' or report['source_schemas']['research']['state'] == 'unsupported_schema':
         report['pilot'] = {'state': 'unproven_source_schema', 'reason': 'unknown_not_no_pair'}; return
-    selection, report['pilot'] = select_pilot(manifest, facts['research'], decision)
+    selection, report['pilot'] = select_pilot(manifest, facts['research'], decision, selection_mode)
     if selection is None: return
     pair, selected = selection
     report['pilot']['lineage_checks'] = verify_lineage(db, pair, remaining=MAX_ROWS-total, decision_at=decision)
@@ -549,10 +616,14 @@ def audit_and_replay(db, production, decision, report):
     require(sum(c['verified_byte_count'] for c in checks) <= MAX_TOTAL_PAYLOAD, 'TOTAL_PAYLOAD_LIMIT')
     report['pilot']['payload_checks'] = checks
     report['pilot']['replay'] = replay(*payloads, selected)
+    if selection_mode == 'flow-focused':
+        require(report['pilot']['replay']['metadata_recovered_from_verified_payloads']['counts']['stored_rows_without_payload_metadata_match'] == 0, 'FLOW_WITNESS_PAYLOAD_MATCH_UNPROVEN')
+    report['pilot']['proposed_filing_manifest'] = filing_pilot_manifest(payloads[1], selected, pair)
 
 
-def run(*, research_db, production_db, decision_at):
+def run(*, research_db, production_db, decision_at, selection_mode="metadata-patterns"):
     report = base_report(decision_at); paths = {'research': Path(research_db), 'production': Path(production_db)}
+    report['selection_mode'] = selection_mode
     before = {}; after = {}; errors = []
     try:
         # Independently attempt both hashes even when validation/work fails.
@@ -565,7 +636,7 @@ def run(*, research_db, production_db, decision_at):
         require(decision is not None and decision <= datetime.now(timezone.utc), 'DECISION_INVALID')
         report['decision_at'] = decision.isoformat()
         with duckdb.connect(str(paths['research']), read_only=True, config=history._sql_config()) as db, duckdb.connect(str(paths['production']), read_only=True, config=history._sql_config()) as production:
-            audit_and_replay(db, production, decision, report)
+            audit_and_replay(db, production, decision, report, selection_mode)
         report['execution_state'] = 'completed'
     except ReplayError as exc:
         errors.append(str(exc))
@@ -593,8 +664,9 @@ def main():
     parser.add_argument('--research-db', required=True)
     parser.add_argument('--production-db', required=True)
     parser.add_argument('--decision-at', default='2026-10-05T00:30:00+00:00')
+    parser.add_argument('--selection-mode', choices=('metadata-patterns', 'flow-focused'), default='metadata-patterns')
     args = parser.parse_args()
-    report = run(research_db=args.research_db, production_db=args.production_db, decision_at=args.decision_at)
+    report = run(research_db=args.research_db, production_db=args.production_db, decision_at=args.decision_at, selection_mode=args.selection_mode)
     print(encode(report).decode('utf-8'))
     return 0 if report['execution_state'] == 'completed' else 1
 
