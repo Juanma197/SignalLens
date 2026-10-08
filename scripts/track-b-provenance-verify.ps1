@@ -106,7 +106,7 @@ def verify(repo,paths,reports,decision,skip):
         if not skip:
             stage='OFFLINE_TESTS'
             code,_=execute([sys.executable,'-m','pytest','tests/test_track_b_provenance_replay.py',
-                'tests/test_track_b_provenance_verification.py','tests/test_track_b_provenance_cell_diagnostic.py','-q'],repo/'backend')
+                'tests/test_track_b_provenance_verification.py','tests/test_track_b_provenance_cell_diagnostic.py','tests/test_track_b_provenance_plan_identity.py','-q'],repo/'backend')
             verification['offline_tests']='passed' if code==0 else 'failed'
             if code:raise RuntimeError('TESTS_FAILED')
         stage='REPLAY_COMMAND'

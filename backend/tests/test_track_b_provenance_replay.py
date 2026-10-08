@@ -36,8 +36,8 @@ def fixture():
         source_endpoint='companyfacts',parser_contract_version=r.PARSER_VERSION,operation_type=r.OPERATION_TYPE,
         operation_contract_version=r.OPERATION_CONTRACT_VERSION,concept_contract_hash=r.CONCEPT_CONTRACT_HASH,
         ingestion_run_id='run',ingestion_plan_id='plan') for i,end in enumerate(['2025-03-31','2025-06-30'])]
-    for item in pair:item['plan_id_sha256']=hashlib.sha256(item['plan_id'].encode()).hexdigest()
-    for row in rows:row['ingestion_plan_id_sha256']=hashlib.sha256(row['ingestion_plan_id'].encode()).hexdigest()
+    for item in pair:item['plan_id_sha256']='sha256:'+hashlib.sha256(item['plan_id'].encode()).hexdigest()
+    for row in rows:row['ingestion_plan_id_sha256']='sha256:'+hashlib.sha256(row['ingestion_plan_id'].encode()).hexdigest()
     return pair,texts,rows
 
 
@@ -61,6 +61,8 @@ def databases(tmp_path):
             fields=list(item)+['payload_json'];db.execute('INSERT INTO '+r.RAW_TABLE+'('+','.join(fields)+') VALUES ('+','.join(['?']*len(fields))+')',list(item.values())+[text])
         db.execute('INSERT INTO sec_liquidity_runs(run_id,operation_type,operation_contract_version,concept_contract_hash,lineage_id,plan_id,decision_at,started_at,status,request_budget,production_sha256_before) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
             ['run',r.OPERATION_TYPE,r.OPERATION_CONTRACT_VERSION,r.CONCEPT_CONTRACT_HASH,pair[0]['lineage_id'],'plan',D,OLD,'completed',2,'synthetic'])
+        db.execute('INSERT INTO sec_liquidity_checkpoints(lineage_id,security_id,cik,operation_type,operation_contract_version,concept_contract_hash,run_id,plan_id,decision_at,qualified_symbol,ticker,status,updated_at,transaction_succeeded) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            [pair[0]['lineage_id'],'s','0000000100',r.OPERATION_TYPE,r.OPERATION_CONTRACT_VERSION,r.CONCEPT_CONTRACT_HASH,'run','plan',D,'S.US','S','completed',OLD,True])
     with duckdb.connect(str(production)) as db:db.execute('CREATE TABLE unrelated(x INTEGER)')
     return research,production
 

@@ -19,7 +19,7 @@ from .sec_ingestion import validate_paths
 from .sec_liquidity_contract import (OPERATION_TYPE, OPERATION_CONTRACT_VERSION,
                                      CONCEPT_CONTRACT_HASH, PARSER_VERSION)
 
-VERSION = 'track-b-provenance-replay-proposed-0.1.1'
+VERSION = 'track-b-provenance-replay-proposed-0.1.2'
 MAX_ROWS = 500_000
 MAX_MANIFEST = 10_000
 MAX_PAYLOAD = 5_000_000  # decimal MB, never MiB
@@ -105,10 +105,24 @@ def schema(db, table):
 
 def projection(column):
     if column in OPAQUE_REFERENCES:
-        # Hash the full stored UTF-8 value in SQL, never a prefix or loaded token.
+        # Exact PR #95 expression: full stored UTF-8 SHA-256, tagged reference,
+        # NULL and empty preserved. No prefix, decoding, or raw token projection.
+        expression = gaps._projection_expression('sec_liquidity_runs','plan_id')
+        expression = expression.replace('plan_id', f'"{column}"')
         alias = OPAQUE_REFERENCES[column]
-        return f'CASE WHEN "{column}" IS NULL OR CAST("{column}" AS VARCHAR)=\'\' THEN NULL ELSE sha256(CAST("{column}" AS VARCHAR)) END AS "{alias}"', alias
+        return expression + f' AS "{alias}"', alias
     return f'"{column}"', column
+
+
+def metadata_filter(table, row_key):
+    if row_key is None: return '', []
+    if table == 'sec_liquidity_runs':
+        require(isinstance(row_key,str), 'UNSUPPORTED_ROW_FILTER')
+        return ' WHERE run_id=?', [row_key]
+    if table == 'sec_liquidity_checkpoints':
+        require(isinstance(row_key,tuple) and len(row_key)==2, 'UNSUPPORTED_ROW_FILTER')
+        return ' WHERE security_id=? AND cik=?', list(row_key)
+    raise ReplayError('UNSUPPORTED_ROW_FILTER')
 
 
 def cell_diagnostics(db, table, selected, stage, *, original_projection=False, row_key=None):
@@ -117,11 +131,8 @@ def cell_diagnostics(db, table, selected, stage, *, original_projection=False, r
     for column in selected:
         if column in OPAQUE_REFERENCES and not original_projection: continue
         predicate = f'length(CAST("{column}" AS VARCHAR))>{MAX_CELL}'
-        parameters = []
-        if row_key is not None:
-            require(table=='sec_liquidity_runs', 'UNSUPPORTED_ROW_FILTER')
-            predicate = '('+predicate+') AND run_id=?'
-            parameters = [row_key]
+        where, parameters = metadata_filter(table,row_key)
+        if where: predicate = '('+predicate+') AND '+where[7:]
         count, low, high = db.execute(f'SELECT count(*),min(length(CAST("{column}" AS VARCHAR))),max(length(CAST("{column}" AS VARCHAR))) FROM "{table}" WHERE {predicate}',parameters).fetchone()
         if not count: continue
         samples = db.execute(f'SELECT length(CAST("{column}" AS VARCHAR)),octet_length(encode(CAST("{column}" AS VARCHAR))) FROM "{table}" WHERE {predicate} ORDER BY 1 DESC,2 DESC LIMIT {MAX_CELL_SAMPLES}',parameters).fetchall()
@@ -143,10 +154,7 @@ def metadata_rows(db, table, fields, required, remaining, *, stage='metadata_rea
     columns = schema(db, table)
     if columns is None:
         return {'state': 'absent_evidence', 'rows': 0, 'columns': []}, []
-    where = ''; parameters = []
-    if row_key is not None:
-        require(table=='sec_liquidity_runs', 'UNSUPPORTED_ROW_FILTER')
-        where = ' WHERE run_id=?'; parameters = [row_key]
+    where, parameters = metadata_filter(table,row_key)
     count = db.execute(f'SELECT count(*) FROM "{table}"{where}',parameters).fetchone()[0]
     require(count <= remaining, 'METADATA_ROW_LIMIT')
     selected = [c for c in fields if c in columns]
@@ -155,7 +163,7 @@ def metadata_rows(db, table, fields, required, remaining, *, stage='metadata_rea
                 'missing_required': sorted(required - columns)}, []
     descriptive = [c for c in selected if c not in OPAQUE_REFERENCES]
     checks = ' OR '.join(f'length(CAST("{c}" AS VARCHAR))>{MAX_CELL}' for c in descriptive)
-    check_where = ('('+checks+') AND run_id=?') if row_key is not None else checks
+    check_where = ('('+checks+') AND '+where[7:]) if where else checks
     if checks and db.execute(f'SELECT count(*) FROM "{table}" WHERE {check_where}',parameters).fetchone()[0]:
         diagnostic = cell_diagnostics(db,table,selected,stage,row_key=row_key)
         raise ReplayError('METADATA_CELL_LIMIT', diagnostic)
@@ -338,7 +346,7 @@ def verify_payload(item, text):
                      'verified_byte_count': len(raw), 'hash_and_size_verified': True}
 
 
-def verify_lineage(db, pair, remaining=MAX_ROWS):
+def verify_lineage(db, pair, remaining=MAX_ROWS, decision_at=None):
     first = pair[0]
     require(pair_identity(first) == pair_identity(pair[1]) and operation_ok(first), 'PAIR_LINEAGE_MISMATCH')
     require(first['retrieved_at'] == pair[1]['retrieved_at'], 'PAIR_RETRIEVAL_MISMATCH')
@@ -359,9 +367,27 @@ def verify_lineage(db, pair, remaining=MAX_ROWS):
     require(decision is not None, 'RUN_DECISION_UNPROVEN')
     lineage = hashlib.sha256(f'{OPERATION_TYPE}|{OPERATION_CONTRACT_VERSION}|{CONCEPT_CONTRACT_HASH}|{decision.isoformat()}'.encode()).hexdigest()
     require(lineage == first['lineage_id'], 'RUN_LINEAGE_HASH_MISMATCH')
+    # Same full tagged plan reference in facts, runs, checkpoints and provenance.
+    checkpoint_fields = IDENTITY + ('status','transaction_succeeded','updated_at')
+    checkpoint_source, checkpoints = metadata_rows(db, 'sec_liquidity_checkpoints',
+        checkpoint_fields, set(checkpoint_fields), remaining-run_source['rows'],
+        stage='research.checkpoint_lineage', row_key=(first['security_id'],first['cik']))
+    require(checkpoint_source['state']=='supported' and checkpoints, 'CHECKPOINT_LINEAGE_UNPROVEN')
+    matches = [row for row in checkpoints if pair_identity(row)==pair_identity(first)]
+    require(len(matches)==1, 'CHECKPOINT_LINEAGE_MISMATCH')
+    checkpoint = matches[0]
+    require(checkpoint.get('status')=='completed' and checkpoint.get('transaction_succeeded') is True,
+            'CHECKPOINT_COMPLETION_UNPROVEN')
+    boundary = feasibility.stamp(decision_at) if decision_at is not None else decision
+    checkpoint_time = feasibility.stamp(checkpoint.get('updated_at'))
+    require(boundary is not None and checkpoint_time is not None and checkpoint_time<=boundary,
+            'CHECKPOINT_METADATA_NOT_VISIBLE')
     return {'pair_identity_verified': True, 'issuer_mapping_verified': True,
             'run_identity_and_decision_lineage_verified': True,
-            'source_fact_operation_links_verified': True}
+            'source_fact_operation_links_verified': True,
+            'checkpoint_full_identity_verified': True, 'checkpoint_completion_visible': True,
+            'plan_reference_representation': 'sha256_full_stored_utf8_preserving_null_and_empty_PR95',
+            'selected_lineage_metadata_rows': run_source['rows']+checkpoint_source['rows']}
 
 
 def retained_payload(db, item):
@@ -515,7 +541,7 @@ def audit_and_replay(db, production, decision, report):
     selection, report['pilot'] = select_pilot(manifest, facts['research'], decision)
     if selection is None: return
     pair, selected = selection
-    report['pilot']['lineage_checks'] = verify_lineage(db, pair, remaining=MAX_ROWS-total)
+    report['pilot']['lineage_checks'] = verify_lineage(db, pair, remaining=MAX_ROWS-total, decision_at=decision)
     payloads = []; checks = []
     report['pilot']['payload_checks'] = checks
     for item in pair:

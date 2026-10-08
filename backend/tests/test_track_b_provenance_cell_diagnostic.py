@@ -1,4 +1,4 @@
-"""Offline regression for safe length diagnostics; operator cause remains unmeasured."""
+"""Offline regression for safe length diagnostics; confirmed operator cause uses full-length opaque tokens."""
 import hashlib
 import json
 from pathlib import Path
@@ -37,13 +37,14 @@ def test_full_long_opaque_identity_is_hashed_in_sql_and_replay_is_not_rejected(t
         db.execute('UPDATE sec_facts SET ingestion_plan_id=?',[token])
         db.execute('UPDATE sec_liquidity_raw_provenance SET plan_id=?',[token])
         db.execute('UPDATE sec_liquidity_runs SET plan_id=?',[token])
+        db.execute('UPDATE sec_liquidity_checkpoints SET plan_id=?',[token])
     with duckdb.connect(str(paths[0]),read_only=True) as db:
         original=r.cell_diagnostics(db,'sec_facts',r.FACT_FIELDS,'research.sec_facts',original_projection=True)
         assert original['offending_columns'][0]['projected_column']=='ingestion_plan_id'
         assert original['offending_columns'][0]['max_characters']==len(token)
         _,rows=r.metadata_rows(db,'sec_facts',r.FACT_FIELDS,r.FACT_REQUIRED,r.MAX_ROWS)
         assert all('ingestion_plan_id' not in row for row in rows)
-        assert all(row['ingestion_plan_id_sha256']==hashlib.sha256(token.encode()).hexdigest() for row in rows)
+        assert all(row['ingestion_plan_id_sha256']=='sha256:'+hashlib.sha256(token.encode()).hexdigest() for row in rows)
     report=run(paths)
     assert report['execution_state']=='completed',report
     assert report['pilot']['state']=='selected'
@@ -122,7 +123,7 @@ def test_null_and_empty_capabilities_are_not_hashed_into_valid_identity(tmp_path
     with duckdb.connect(str(paths[0])) as db:db.execute("UPDATE sec_facts SET ingestion_plan_id='' WHERE fact_key='0'")
     with duckdb.connect(str(paths[0]),read_only=True) as db:
         _,rows=r.metadata_rows(db,'sec_facts',r.FACT_FIELDS,r.FACT_REQUIRED,r.MAX_ROWS)
-    assert next(row for row in rows if row['fact_key']=='0')['ingestion_plan_id_sha256'] is None
+    assert next(row for row in rows if row['fact_key']=='0')['ingestion_plan_id_sha256']==''
 
 
 def test_selected_run_metadata_remains_inside_total_budget(tmp_path):
