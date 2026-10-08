@@ -52,6 +52,7 @@ COLUMNS = {
     'corporate_action_coverage_evidence': 'evidence_key security_id qualified_symbol coverage_state assessed_from assessed_to source_identifier public_at retrieved_at available_at',
     'global_price_observations': 'qualified_symbol trading_date exchange currency open high low close adjusted_close volume status source retrieved_at',
     'global_corporate_actions': 'qualified_symbol ex_date action_type value currency source retrieved_at',
+    'eodhd_ingestion_checkpoints': 'stage qualified_symbol status updated_at',
 }
 
 
@@ -211,6 +212,7 @@ def _price(sec, data, decision, sessions):
         feature = momentum_features(pd.Series([float(r['adjusted_close']) for r in selected]))
         calculation = {'formula': CONFIG['screen'].split(' >')[0], 'start_session': wanted[0], 'end_session': wanted[-1],
             'start_adjusted_close': float(selected[0]['adjusted_close']), 'end_adjusted_close': float(selected[-1]['adjusted_close']),
+            'end_close': float(selected[-1]['close']),
             'session_intervals': 126, 'momentum_return': float(feature['local_momentum_126d']),
             'source': sorted({r['source'] for r in selected}), 'latest_input_retrieved_at': max(stamp(r['retrieved_at']) for r in selected)}
     if calculation and not finite(calculation['momentum_return']):
@@ -219,23 +221,43 @@ def _price(sec, data, decision, sessions):
 
 
 def _actions(sec, data, decision, wanted, actions):
+    """Coverage over the whole price window: a stored coverage record, optionally
+    extended past its end by a completed EODHD dividend refresh recorded after the
+    window's last session closed (config coverage_extension)."""
     if len(wanted) != 127: return ['corporate_action_window_unproven'], None
     rows = [r for r in data['corporate_action_coverage_evidence'] if str(r.get('security_id')) == sec['security_id'] and r.get('qualified_symbol') == sec['qualified_symbol'] and visible(r, decision)]
-    rows = [r for r in rows if day(r.get('assessed_from')) and day(r.get('assessed_to')) and day(r['assessed_from']) <= wanted[0] and day(r['assessed_to']) >= wanted[-1] and r.get('source_identifier') and r.get('evidence_key')]
+    rows = [r for r in rows if day(r.get('assessed_from')) and day(r.get('assessed_to')) and day(r['assessed_from']) <= wanted[0]
+            and day(r['assessed_to']) >= wanted[0] and r.get('source_identifier') and r.get('evidence_key')]
     if not rows: return ['corporate_action_coverage_missing_or_incomplete'], None
+    extension = None
+    if any(day(r['assessed_to']) >= wanted[-1] for r in rows):
+        rows = [r for r in rows if day(r['assessed_to']) >= wanted[-1]]
+        through = wanted[-1]
+    else:
+        through = max(day(r['assessed_to']) for r in rows)
+        closed = datetime.combine(wanted[-1], time(22), timezone.utc)
+        refreshes = [c for c in data['eodhd_ingestion_checkpoints'] if c.get('stage') == 'refresh' and c.get('status') == 'completed'
+                     and c.get('qualified_symbol') == sec['qualified_symbol'] and stamp(c.get('updated_at'))
+                     and closed <= stamp(c['updated_at']) <= decision]
+        if not refreshes: return ['corporate_action_coverage_missing_or_incomplete'], None
+        rows = [r for r in rows if day(r['assessed_to']) == through]
+        extension = {'stored_record_through': through, 'dividend_refresh_completed_at': max(stamp(c['updated_at']) for c in refreshes),
+                     'source': 'eodhd_ingestion_checkpoints (stage refresh, completed)'}
     states = {r.get('coverage_state') for r in rows}
     if not states <= {'verified_no_action', 'action_present'} or len(states) != 1:
         return ['unresolved_or_conflicting_corporate_action_coverage'], None
     events = [r for r in actions if wanted[0] <= day(r.get('ex_date')) <= wanted[-1]]
-    # action_present describes the whole assessed interval, which may be wider
-    # than the price window; it conflicts only if that interval has no stored event.
+    # verified_no_action is a claim only up to the stored record's end; action_present
+    # describes its whole assessed interval and conflicts only if that has no event.
+    claimed = [r for r in events if day(r['ex_date']) <= through]
     assessed = [r for r in actions if any(day(c['assessed_from']) <= day(r.get('ex_date')) <= day(c['assessed_to']) for c in rows)]
-    if ('verified_no_action' in states and events) or ('action_present' in states and not assessed):
+    if ('verified_no_action' in states and claimed) or ('action_present' in states and not assessed):
         return ['corporate_action_coverage_event_conflict'], None
     if any(r.get('action_type') not in CONFIG['corporate_action_types_accepted'] or not finite(r.get('value')) or float(r['value']) <= 0 or not r.get('source') for r in events):
         return ['unresolved_corporate_action'], None
     row = max(rows, key=lambda r: (stamp(r['available_at']), r['evidence_key']))
-    return [], dict({k: row[k] for k in ('evidence_key', 'coverage_state', 'assessed_from', 'assessed_to', 'source_identifier')}, available_at=stamp(row['available_at']))
+    return [], dict({k: row[k] for k in ('evidence_key', 'coverage_state', 'assessed_from', 'assessed_to', 'source_identifier')},
+                    available_at=stamp(row['available_at']), extension=extension)
 
 
 def _evidence(sec, data, decision):
@@ -292,6 +314,105 @@ def _evidence(sec, data, decision):
     return output, missing
 
 
+def _industry(db, decision):
+    """SIC/entity fields extracted in SQL from retained SEC submissions payloads,
+    so payload text is never projected. Visible from their retrieval time."""
+    tables = {r[0] for r in db.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main'").fetchall()}
+    if 'sec_liquidity_raw_provenance' not in tables: return {}, 'table_absent'
+    rows = db.execute("""SELECT security_id, cik, retrieved_at, response_sha256,
+            json_extract_string(payload_json, '$.sic') AS sic,
+            left(json_extract_string(payload_json, '$.sicDescription'), 200) AS sic_description,
+            left(json_extract_string(payload_json, '$.entityType'), 64) AS entity_type,
+            left(json_extract_string(payload_json, '$.name'), 200) AS sec_name
+        FROM sec_liquidity_raw_provenance WHERE endpoint_class = 'submissions'""").fetchall()
+    found = defaultdict(list)
+    for sid, row_cik, retrieved, digest, sic, description, entity_type, name in rows:
+        if stamp(retrieved) and stamp(retrieved) <= decision:
+            found[str(sid)].append({'cik': cik(row_cik), 'sic': sic, 'sic_description': description, 'entity_type': entity_type,
+                                    'sec_name': name, 'retrieved_at': stamp(retrieved), 'response_sha256': digest})
+    return found, 'supported'
+
+
+def _industry_gate(sec, records):
+    """Specialist sectors are withheld until their accounting is supported."""
+    records = [r for r in records if r['cik'] == sec.get('cik')]
+    sics = {r['sic'] for r in records}
+    if not records or sics == {None} or sics == {''}: return ['industry_classification_unavailable'], None
+    if len(sics) != 1 or not str(next(iter(sics))).isdigit(): return ['industry_classification_conflicting'], None
+    record = max(records, key=lambda r: r['retrieved_at'])
+    code = int(record['sic'])
+    reasons = []
+    if any(low <= code <= high for low, high in CONFIG['excluded_sic_ranges']): reasons.append('specialist_sector_excluded')
+    names = ' / '.join(n for n in (sec.get('company_name'), record.get('sec_name')) if n)
+    if re.search(CONFIG['partnership_name_pattern'], sec.get('company_name') or '') or re.search(CONFIG['partnership_name_pattern'], record.get('sec_name') or ''):
+        reasons.append('partnership_units_excluded')
+    return reasons, dict(record, sic=code, names_checked=names)
+
+
+def _share_counts(db, decision):
+    """Cover-page share counts from retained SEC companyfacts payloads, one row per
+    reported entry (extracted in SQL; payload text is never projected). An entry is
+    known from the later of its filing day (end of day, UTC) and payload retrieval."""
+    tables = {r[0] for r in db.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main'").fetchall()}
+    if 'sec_liquidity_raw_provenance' not in tables: return {}
+    # One payload at a time, parsed in Python: companyfacts documents reach several
+    # MB each and exceed the bounded SQL memory limit when parsed in SQL. A payload
+    # whose bytes do not match its stored SHA-256 and byte count is not used.
+    keys = [r[0] for r in db.execute("SELECT evidence_key FROM sec_liquidity_raw_provenance WHERE endpoint_class = 'companyfacts' ORDER BY evidence_key").fetchall()]
+    if len(keys) > MAX_ROSTER * 4: raise PrototypeError('PROTOTYPE_ROW_LIMIT')
+    rows = []
+    for key in keys:
+        sid, row_cik, retrieved, digest, byte_count, payload = db.execute("""SELECT security_id, cik, retrieved_at,
+            response_sha256, byte_count, payload_json FROM sec_liquidity_raw_provenance WHERE evidence_key = ?""", [key]).fetchone()
+        raw = payload.encode('utf-8')
+        if len(raw) != byte_count or hashlib.sha256(raw).hexdigest() != digest: continue
+        try:
+            entries = json.loads(payload)['facts']['dei']['EntityCommonStockSharesOutstanding']['units']['shares']
+        except (ValueError, KeyError, TypeError):
+            continue
+        for e in entries if isinstance(entries, list) else []:
+            if isinstance(e, dict):
+                rows.append((sid, row_cik, retrieved, digest, e.get('end'), e.get('val'), e.get('accn'), e.get('form'), e.get('filed')))
+        if len(rows) > MAX_ROWS: raise PrototypeError('PROTOTYPE_ROW_LIMIT')
+    found = defaultdict(list)
+    for sid, row_cik, retrieved, digest, end, value, accession, form, filed in rows:
+        try:
+            end, filed = date.fromisoformat(end), date.fromisoformat(filed)
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        known = max(stamp(retrieved), datetime.combine(filed + timedelta(days=1), time.min, timezone.utc)) if stamp(retrieved) else None
+        if known and known <= decision and finite(value) and value > 0 and form in ('10-K', '10-K/A', '10-Q', '10-Q/A') and end <= filed:
+            found[str(sid)].append({'cik': cik(row_cik), 'end': end, 'value': value, 'accession': accession,
+                                    'form': form, 'filed': filed, 'known_at': known, 'response_sha256': digest})
+    return found
+
+
+def _size(sec, entries, decision, calculation):
+    """Market cap = latest visible cover-page share count x unadjusted close on
+    the decision session. Counts reported in one filing are summed and flagged."""
+    if not calculation: return ['market_cap_unavailable'], None
+    entries = [e for e in entries if e['cik'] == sec.get('cik')]
+    if not entries: return ['market_cap_unavailable'], None
+    end = max(e['end'] for e in entries)
+    if (decision.date() - end).days > CONFIG['maximum_share_count_age_days']: return ['market_cap_unavailable'], None
+    latest = [e for e in entries if e['end'] == end]
+    filed = max(e['filed'] for e in latest)
+    latest = [e for e in latest if e['filed'] == filed]
+    accessions = {e['accession'] for e in latest}
+    if len(accessions) != 1: return ['market_cap_unavailable'], None
+    classes = sorted({e['value'] for e in latest})
+    shares = sum(classes)
+    value = shares * calculation['end_close']
+    low, high = CONFIG['market_cap_band_usd']
+    size = {'market_cap_usd': value, 'shares_outstanding': shares, 'share_classes_summed': len(classes),
+            'shares_as_of': end, 'shares_accession': next(iter(accessions)), 'shares_filed': filed,
+            'shares_form': latest[0]['form'], 'source_response_sha256': latest[0]['response_sha256'],
+            'close': calculation['end_close'], 'close_session': calculation['end_session'],
+            'band_usd': [low, high], 'formula': CONFIG['market_cap_formula']}
+    return ([] if low <= value <= high else ['market_cap_outside_band']), size
+
+
 def _build(db, decision, target):
     data, schema, remaining = {}, {}, MAX_ROWS
     for table in COLUMNS:
@@ -314,12 +435,14 @@ def _build(db, decision, target):
     roster_ids = {str(r['security_id']) for r in data['security_classification_evidence'] if r.get('security_id') and r.get('security_type') == 'us_operating_company' and visible(r, decision)}
     if len(roster_ids) > MAX_ROSTER: raise PrototypeError('PROTOTYPE_ROSTER_LIMIT')
     sessions, calendar = _sessions(data, decision)
+    industries, schema['sec_liquidity_raw_provenance'] = _industry(db, decision)
+    share_counts = _share_counts(db, decision)
     companies = []
     for sid in sorted(roster_ids):
         listings = [r for r in selected if str(r.get('security_id')) == sid]
         if len(listings) != 1:
             companies.append({'security_id': sid, 'qualified_symbol': None, 'company_name': None, 'eligible': False,
-                'reasons': ['active_listing_missing_or_ambiguous'], 'calculation': None, 'direct_evidence': [], 'missing_data': [], 'risks': ['Identity cannot be resolved.'], 'identity_evidence': None, 'action_coverage': None}); continue
+                'reasons': ['active_listing_missing_or_ambiguous'], 'calculation': None, 'direct_evidence': [], 'missing_data': [], 'risks': ['Identity cannot be resolved.'], 'identity_evidence': None, 'action_coverage': None, 'industry': None, 'size': None}); continue
         sec = dict(listings[0], security_id=sid)
         prices, calculation, wanted, actions = _price(sec, data, decision, sessions)
         identity, resolved_cik, mapping = _identity(sec, data, decision, matched, wanted[0] if wanted else decision.date())
@@ -328,11 +451,14 @@ def _build(db, decision, target):
         if sum(r.get('qualified_symbol') == sec['qualified_symbol'] for r in selected) != 1: identity.append('qualified_symbol_identity_ambiguous')
         coverage_reasons, coverage = _actions(sec, data, decision, wanted, actions)
         evidence, missing = _evidence(sec, data, decision)
-        reasons = identity + prices + coverage_reasons
+        industry_reasons, industry = _industry_gate(sec, industries.get(sid, []))
+        size_reasons, size = _size(sec, share_counts.get(sid, []), decision, calculation)
+        reasons = identity + prices + coverage_reasons + industry_reasons + size_reasons
         if not evidence: reasons.append('no_usable_direct_financial_evidence')
         risks = ['Current roster is not survivorship-free.', 'Momentum can reverse; this screen has no profitability evidence.', 'Financial facts are direct reported context, not complete accounting validation.', 'Trading costs and executable liquidity are not assessed.']
         if not mapping: risks.append('Listing identity is evidenced at the cutoff only; ticker reuse earlier in the price window is not excluded.')
         if missing: risks.append('Financial context is incomplete; missing inputs are unknown, not zero.')
+        if size and size['share_classes_summed'] > 1: risks.append('Market cap sums several share counts from one filing; class detail is not stored.')
         if coverage and coverage['coverage_state'] == 'action_present':
             in_window = any(wanted[0] <= day(r['ex_date']) <= wanted[-1] for r in actions)
             risks.append('Stored corporate actions fall inside the price window.' if in_window else 'Stored corporate actions exist in the assessed history, none inside the price window.')
@@ -341,7 +467,7 @@ def _build(db, decision, target):
             'eligible': not reasons, 'reasons': sorted(set(reasons)), 'calculation': calculation,
             'direct_evidence': evidence, 'missing_data': missing, 'risks': risks,
             'identity_evidence': {k: mapping.get(k) for k in ('candidate_key', 'evidence_source', 'source_identifier', 'effective_from', 'effective_to', 'observed_at')} if mapping else None,
-            'action_coverage': coverage})
+            'action_coverage': coverage, 'industry': industry, 'size': size})
     eligible = sorted([c for c in companies if c['eligible']], key=lambda c: (hashlib.sha256((CONFIG['version'] + ':' + c['security_id']).encode()).hexdigest(), c['security_id']))
     members = eligible[:target]
     blockers = ['eligible_population_below_minimum'] if len(members) < CONFIG['minimum_members'] else []
