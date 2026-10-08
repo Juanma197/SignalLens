@@ -1,0 +1,86 @@
+"""Annual financial-health brief: period selection, visibility, revisions, rules."""
+from datetime import date, datetime, timezone
+
+import pytest
+
+from app.prototype.financials import annual_brief, summary_only
+from app.prototype.service import finite, stamp
+
+CIK = '0000000100'
+SEC = {'security_id': 's1', 'cik': CIK}
+DECISION = datetime(2026, 10, 1, tzinfo=timezone.utc)
+KNOWN = datetime(2026, 3, 1, tzinfo=timezone.utc)
+
+
+def fact(concept, value, end, start=None, form='10-K', unit='USD', public=KNOWN, accession='0000000100-26-000001', key=None):
+    return {'fact_key': key or f'{concept}-{start}-{end}-{value}-{accession}', 'security_id': 's1', 'cik': CIK, 'taxonomy': 'us-gaap',
+            'concept': concept, 'value': value, 'unit': unit, 'period_start': start, 'period_end': end, 'form': form,
+            'accession_number': accession, 'public_at': public, 'retrieved_at': public}
+
+
+def year(y, revenue, op, ni, ocf, capex, shares, concept='Revenues'):
+    s, e = date(y, 1, 1), date(y, 12, 31)
+    return [fact(concept, revenue, e, s), fact('OperatingIncomeLoss', op, e, s), fact('NetIncomeLoss', ni, e, s),
+            fact('NetCashProvidedByUsedInOperatingActivities', ocf, e, s), fact('PaymentsToAcquirePropertyPlantAndEquipment', capex, e, s),
+            fact('WeightedAverageNumberOfDilutedSharesOutstanding', shares, e, s, unit='shares'),
+            fact('AssetsCurrent', 300, e), fact('LiabilitiesCurrent', 100, e), fact('Assets', 1000, e), fact('Liabilities', 400, e)]
+
+
+def brief(rows, decision=DECISION):
+    return annual_brief(SEC, rows, decision, stamp=stamp, finite=finite)
+
+
+def test_annual_series_calculations_and_strengths():
+    rows = [r for y, rev in zip(range(2021, 2026), (100, 115, 130, 150, 170)) for r in year(y, rev, rev * 0.2, rev * 0.15, rev * 0.25, rev * 0.05, 1000 - (y - 2021) * 30)]
+    b = brief(rows)
+    assert [y['fiscal_year_end'] for y in b['years']] == [date(y, 12, 31) for y in range(2021, 2026)]
+    last = b['years'][-1]['calculated']
+    assert last['operating_margin'] == pytest.approx(0.2) and last['free_cash_flow'] == pytest.approx(170 * 0.2)
+    assert last['current_ratio'] == pytest.approx(3.0) and last['liabilities_to_assets'] == pytest.approx(0.4)
+    assert last['revenue_growth'] == pytest.approx(170 / 150 - 1)
+    kinds = {(o['area'], o['kind']) for o in b['observations']}
+    assert {('growth', 'strength'), ('profitability', 'strength'), ('cash generation', 'strength'),
+            ('liquidity', 'strength'), ('dilution', 'strength')} <= kinds
+
+
+def test_only_full_year_10k_periods_and_visible_revisions_are_used():
+    rows = year(2024, 100, 10, 8, 12, 2, 50) + year(2025, 120, 12, 9, 14, 3, 50)
+    rows += [fact('Revenues', 999, date(2025, 12, 31), date(2025, 10, 1)),          # quarter inside a 10-K
+             fact('Revenues', 888, date(2025, 6, 30), date(2025, 1, 1), form='10-Q'),  # 10-Q year-to-date
+             fact('Revenues', 777, date(2025, 12, 31), date(2025, 1, 1), unit='EUR'),   # wrong unit
+             fact('Revenues', 130, date(2025, 12, 31), date(2025, 1, 1), public=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                  accession='0000000100-26-000009')]                                    # later amendment-style revision
+    b = brief(rows)
+    assert b['years'][-1]['values']['revenue']['value'] == 130
+    # Facts known after the cutoff are invisible: the original value is used.
+    early = brief(rows, decision=datetime(2026, 4, 1, tzinfo=timezone.utc))
+    assert early['years'][-1]['values']['revenue']['value'] == 120
+
+
+def test_conflicting_values_in_one_revision_are_withheld():
+    rows = year(2024, 100, 10, 8, 12, 2, 50) + year(2025, 120, 12, 9, 14, 3, 50)
+    rows.append(fact('NetIncomeLoss', 99, date(2025, 12, 31), date(2025, 1, 1), key='conflict'))
+    assert 'net_income' not in brief(rows)['years'][-1]['values']
+
+
+def test_weaknesses_concept_changes_and_gaps():
+    rows = year(2023, 100, 5, 4, 3, 10, 100) + year(2024, 90, -5, -6, -2, 10, 110) + year(2025, 80, -8, -9, -4, 10, 125, concept='RevenueFromContractWithCustomerExcludingAssessedTax')
+    b = brief(rows)
+    text = ' '.join(o['text'] for o in b['observations'])
+    assert 'different concepts' in text                       # revenue concept changed: no growth rate
+    assert 'revenue_growth' not in b['years'][-1]['calculated']
+    assert any(o['kind'] == 'weakness' and o['area'] == 'profitability' for o in b['observations'])
+    assert any(o['kind'] == 'weakness' and o['area'] == 'dilution' for o in b['observations'])
+    assert brief([])['observations'][0]['kind'] == 'gap'
+
+
+def test_rates_use_only_consecutive_years():
+    rows = year(2019, 10, 1, 1, 1, 0, 1) + year(2023, 100, 10, 8, 12, 2, 100) + year(2024, 110, 11, 9, 13, 2, 100) + year(2025, 121, 12, 10, 14, 2, 100)
+    growth = next(o for o in brief(rows)['observations'] if o['area'] == 'growth')
+    assert '10.0% a year over 2.0 years' in growth['text'] and '2019-12-31' not in growth['fiscal_years']
+
+
+def test_summary_only_keeps_observations_without_tables():
+    b = brief(year(2024, 100, 10, 8, 12, 2, 50) + year(2025, 120, 12, 9, 14, 3, 50))
+    s = summary_only(b)
+    assert s['years'] == [] and s['fiscal_years_available'] == 2 and s['observations'] == b['observations']

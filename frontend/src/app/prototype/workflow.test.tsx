@@ -5,7 +5,7 @@ import {tmpdir} from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {renderToStaticMarkup} from "react-dom/server";
-import {CompanyView,PrototypeNotice,RosterView,detailHref, type Detail, type Report} from "./view";
+import {CompanyView,FinancialHealthView,PrototypeNotice,RosterView,detailHref, type Detail, type Report} from "./view";
 import {SnapshotView, ThesisHistory} from "./store-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
@@ -101,4 +101,18 @@ test("shortlist and company pages show market cap and industry with their inputs
   assert.match(html,/10,000,000 shares × \$/);
   assert.match(html,/SIC 3560/);
   assert.match(html,/not a quoted market value/);
+});
+
+test("financial health renders annual figures, calculations and grouped observations",()=>{
+  const script=`import json, sys\nsys.path.insert(0, 'tests')\nfrom test_prototype_financials import brief, year\nrows=[r for y,rev in zip(range(2022,2026),(100e6,90e6,80e6,70e6)) for r in year(y,rev,-rev*0.1,-rev*0.12,-rev*0.05,rev*0.02,1e6*(1+(y-2022)*0.2))]\nprint(json.dumps(brief(rows), default=str))`;
+  const financials=JSON.parse(execFileSync(python,["-c",script],{cwd:path.join(project,"backend"),encoding:"utf8"}));
+  const html=renderToStaticMarkup(<FinancialHealthView financials={financials}/>);
+  assert.match(html,/Financial health \(annual 10-K figures\)/);
+  assert.match(html,/Weaknesses/);
+  assert.match(html,/Revenue shrank/);
+  assert.match(html,/Operating margin \*/);
+  assert.match(html,/-10\.0%/);
+  assert.match(html,/FY2025<small>to 2025-12-31/);
+  assert.match(html,/interpretation, not a rating/);
+  assert.doesNotMatch(html,/NaN|undefined/);
 });
