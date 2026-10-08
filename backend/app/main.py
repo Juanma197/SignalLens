@@ -202,8 +202,12 @@ async def authenticate_private_api(request: Request, call_next):
     staging_read_only_assessment = (
         request.method == "POST" and request.url.path in STAGING_READ_ONLY_POST_PATHS
     )
+    # The prototype store is a separate file; its writes are allowed only when
+    # explicitly enabled, and never touch the research or production databases.
+    prototype_store_write = (settings.prototype_writes_enabled and request.method == "POST"
+        and request.url.path.startswith("/api/v1/research/prototype/store/"))
     if (settings.staging_mode and request.method not in {"GET", "HEAD", "OPTIONS"}
-            and not staging_read_only_assessment):
+            and not staging_read_only_assessment and not prototype_store_write):
         return JSONResponse(status_code=409, content={"detail": {
             "code": "staging_read_only", "message": "Staging mode prohibits all writes."}})
     return await call_next(request)

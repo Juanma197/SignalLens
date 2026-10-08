@@ -1,8 +1,9 @@
 # PowerShell 5.1. Starts the read-only prototype UI on 127.0.0.1:3015 (API on 8015).
 #   .\scripts\start-prototype.ps1            -> new synthetic temporary databases
 #   .\scripts\start-prototype.ps1 -Operator  -> existing operator databases, read-only
-# Staging mode blocks every non-GET request; the scheduler is disabled. Both
-# database files are SHA-256 fingerprinted before start and after stop.
+# Staging mode blocks every non-GET request except writes to the separate
+# prototype store (watchlist, notes, snapshots); the scheduler is disabled. The
+# research and production files are SHA-256 fingerprinted before start and after stop.
 [CmdletBinding()]
 param(
     [switch]$Operator,
@@ -27,6 +28,7 @@ if ($Operator) {
         if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Database not found: $Path" }
     }
     [void](New-Item -ItemType Directory -Path $Work)
+    $PrototypeDb = Join-Path $Project "backend\data\prototype\signallens-prototype.duckdb"
     $Cutoff = "2026-10-02T12:00:00Z"
 } else {
     Push-Location (Join-Path $Project "backend")
@@ -36,6 +38,7 @@ if ($Operator) {
     } finally { Pop-Location }
     $ResearchDb = Join-Path $Work "synthetic-research.duckdb"
     $ProductionDb = Join-Path $Work "synthetic-production.duckdb"
+    $PrototypeDb = Join-Path $Work "synthetic-prototype.duckdb"
     $Cutoff = "2026-10-01T00:00:00Z"
 }
 Write-Host "Fingerprinting databases (large files take a few seconds)..."
@@ -76,7 +79,8 @@ if (-not $Username -or -not $Password) {
 $SessionNames = @("SIGNALLENS_ENVIRONMENT", "SIGNALLENS_STAGING_MODE", "SIGNALLENS_SCHEDULER_ENABLED",
     "SIGNALLENS_DATABASE_PATH", "SIGNALLENS_RESEARCH_DATABASE_PATH", "SIGNALLENS_PERSISTENT_VOLUME_PATH",
     "SIGNALLENS_API_TOKEN", "SIGNALLENS_API_URL", "NEXT_PUBLIC_API_URL", "SIGNALLENS_ALLOWED_ORIGINS",
-    "SIGNALLENS_DASHBOARD_USERNAME", "SIGNALLENS_DASHBOARD_PASSWORD")
+    "SIGNALLENS_DASHBOARD_USERNAME", "SIGNALLENS_DASHBOARD_PASSWORD",
+    "SIGNALLENS_PROTOTYPE_DATABASE_PATH", "SIGNALLENS_PROTOTYPE_WRITES_ENABLED")
 $SavedSession = @{}
 foreach ($Name in $SessionNames) { $SavedSession[$Name] = [Environment]::GetEnvironmentVariable($Name, "Process") }
 $env:SIGNALLENS_ENVIRONMENT = "development"
@@ -84,6 +88,8 @@ $env:SIGNALLENS_STAGING_MODE = "true"
 $env:SIGNALLENS_SCHEDULER_ENABLED = "false"
 $env:SIGNALLENS_DATABASE_PATH = $ProductionDb
 $env:SIGNALLENS_RESEARCH_DATABASE_PATH = $ResearchDb
+$env:SIGNALLENS_PROTOTYPE_DATABASE_PATH = $PrototypeDb
+$env:SIGNALLENS_PROTOTYPE_WRITES_ENABLED = "true"
 $env:SIGNALLENS_PERSISTENT_VOLUME_PATH = $Work
 $env:SIGNALLENS_API_TOKEN = $Token
 $env:SIGNALLENS_API_URL = "http://127.0.0.1:8015"
@@ -112,6 +118,7 @@ try {
     Write-Host "Open:     http://127.0.0.1:3015/prototype?decision_at=$Cutoff"
     if ($LoginSource) { Write-Host "Login:    your configured dashboard username and password (from $LoginSource)" }
     else { Write-Host "Login:    $Username / $Password  (one-time; set SIGNALLENS_DASHBOARD_USERNAME/PASSWORD to use your own)" }
+    Write-Host "Store:    $PrototypeDb (watchlist, notes, snapshots)"
     Write-Host "Cutoff:   $Cutoff  (paste it into the form; each new cutoff takes ~10 s on operator data)"
     [void](Read-Host "Press Enter to stop the two services started by this script")
 } finally {

@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {renderToStaticMarkup} from "react-dom/server";
 import {CompanyView,PrototypeNotice,RosterView,detailHref, type Detail, type Report} from "./view";
+import {SnapshotView} from "./store-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
 // No provider, browser download, credentials or operator database is used.
@@ -63,4 +64,17 @@ test("stored strings render as inert text and unresolved details retain missing 
   assert.match(html,/126-session calculation withheld/);
   assert.match(html,/identity is checked at the cutoff only/);
   assert.match(html,/effective_listing_interval_unproven_or_ambiguous/);
+});
+
+test("a frozen snapshot renders verified membership and pending checkpoints without filled values",()=>{
+  const script=`from pathlib import Path\nimport json\nfrom datetime import datetime, timedelta, timezone\nfrom app.prototype.fixture import create_fixture, DECISION\nfrom app.prototype.service import assess\nfrom app.prototype.store import PrototypeStore\nfrom app.prototype.tracking import track\nr,p=create_fixture(Path(${JSON.stringify(folder)}) / 'snapshot')\nstore=PrototypeStore(Path(${JSON.stringify(folder)}) / 'snapshot-store' / 'prototype.duckdb', protected_paths=(r,p))\ns=store.snapshot(store.create_snapshot(assess(research_db=r,production_db=p,decision_at=DECISION), now=DECISION+timedelta(days=1))['snapshot_id'])\nprint(json.dumps({'snapshot':s,'tracking':track(s,research_db=r,now=datetime(2026,12,1,tzinfo=timezone.utc))}, default=str))`;
+  const data=JSON.parse(execFileSync(python,["-c",script],{cwd:path.join(project,"backend"),encoding:"utf8"}));
+  const html=renderToStaticMarkup(<SnapshotView snapshot={data.snapshot} tracking={data.tracking}/>);
+  assert.match(html,/Snapshot 2026-10 · frozen/);
+  assert.match(html,/Integrity verified/);
+  assert.match(html,/SYNTHETIC FIXTURE/);
+  assert.match(html,/pending \(0 of 21\)/);
+  assert.match(html,/none available \(0 of 15\)/);
+  assert.doesNotMatch(html,/NaN|undefined/);
+  assert.equal((html.match(/· result/g)??[]).length,3);
 });
