@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {renderToStaticMarkup} from "react-dom/server";
 import {CompanyView,PrototypeNotice,RosterView,detailHref, type Detail, type Report} from "./view";
-import {SnapshotView} from "./store-view";
+import {SnapshotView, ThesisHistory} from "./store-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
 // No provider, browser download, credentials or operator database is used.
@@ -77,4 +77,16 @@ test("a frozen snapshot renders verified membership and pending checkpoints with
   assert.match(html,/none available \(0 of 15\)/);
   assert.doesNotMatch(html,/NaN|undefined/);
   assert.equal((html.match(/· result/g)??[]).length,3);
+});
+
+test("thesis versions render as labelled interpretation and assumptions, newest first",()=>{
+  const script=`from pathlib import Path\nimport json\nfrom app.prototype.store import PrototypeStore\ns=PrototypeStore(Path(${JSON.stringify(folder)}) / 'thesis-store' / 'p.duckdb')\ns.add_thesis('x','researching',{'business':'Makes <b>widgets</b>.'})\nprint(json.dumps(s.add_thesis('x','active',{'business':'Makes widgets.','assumptions':'Costs normalise.'})))`;
+  const versions=JSON.parse(execFileSync(python,["-c",script],{cwd:path.join(project,"backend"),encoding:"utf8"}));
+  const html=renderToStaticMarkup(<ThesisHistory versions={versions}/>);
+  assert.match(html,/Current: active/);
+  assert.match(html,/Business \(interpretation\)/);
+  assert.match(html,/Assumptions \(assumption\)/);
+  assert.match(html,/1 earlier version/);
+  assert.match(html,/Makes &lt;b&gt;widgets&lt;\/b&gt;\./);
+  assert.doesNotMatch(html,/Why it might be cheap/);
 });

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from .service import PrototypeError, assess
-from .store import PrototypeStore, StoreError
+from .store import THESIS_SECTIONS, PrototypeStore, StoreError
 from .tracking import track
 
 router = APIRouter(prefix='/api/v1/research/prototype', tags=['unvalidated-prototype'])
@@ -78,6 +78,12 @@ class NoteRequest(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
 
 
+class ThesisRequest(BaseModel):
+    security_id: str = Field(min_length=1, max_length=128)
+    status: str = Field(pattern='^(researching|active|rejected)$')
+    sections: dict[str, str | None]
+
+
 class SnapshotRequest(BaseModel):
     decision_at: datetime
     target_members: int = Field(15, ge=10, le=20)
@@ -106,7 +112,13 @@ def _call(function, *args, **kwargs):
 @router.get('/store/watchlist')
 def watchlist():
     store = _store()
-    return {'items': _call(store.watchlist), 'notes': _call(store.notes)}
+    latest = {}
+    for thesis in _call(store.theses):  # newest first
+        latest.setdefault(thesis['security_id'], thesis)
+    items = [dict(i, thesis_status=latest.get(i['security_id'], {}).get('status'),
+                  thesis_recorded_at=latest.get(i['security_id'], {}).get('recorded_at'))
+             for i in _call(store.watchlist)]
+    return {'items': items, 'notes': _call(store.notes)}
 
 
 @router.post('/store/watchlist')
@@ -126,6 +138,17 @@ def notes(security_id: str):
 @router.post('/store/notes')
 def add_note(request: NoteRequest):
     return {'notes': _call(_store(write=True).add_note, request.security_id, request.body)}
+
+
+@router.get('/store/theses/{security_id}')
+def theses(security_id: str):
+    return {'sections': list(THESIS_SECTIONS), 'versions': _call(_store().theses, security_id)}
+
+
+@router.post('/store/theses')
+def add_thesis(request: ThesisRequest):
+    return {'sections': list(THESIS_SECTIONS),
+            'versions': _call(_store(write=True).add_thesis, request.security_id, request.status, request.sections)}
 
 
 @router.get('/store/snapshots')

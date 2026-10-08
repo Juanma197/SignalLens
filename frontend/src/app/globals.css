@@ -195,4 +195,8 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; }
 .prototype-notes p { margin:6px 0 0; white-space:pre-wrap; }
 .prototype-note-form { display:grid; gap:12px; margin:18px 0; }
 .prototype-note-form textarea { width:100%; font:inherit; }
+.prototype-note-form label small { display:block; color:var(--muted); margin:4px 0; }
+.prototype-thesis div { border-top:1px solid var(--line); padding:8px 0; }
+.prototype-thesis dd { white-space:pre-wrap; }
+.prototype-thesis-version { border-top:1px dashed var(--line); margin-top:12px; }
 @media (max-width:760px) { .prototype-cards { grid-template-columns:1fr; } .prototype-cards article { border-right:0; border-bottom:1px solid var(--line); } }
