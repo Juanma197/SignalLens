@@ -179,3 +179,70 @@ Passing offline tests or the extracted Python verification portion is not
 Windows PowerShell 5.1 execution or operator verification. Retrospective public
 availability and actual operator possession remain separate; evidence retrieved
 now never gains historical system availability through this diagnostic.
+
+## Confirmed operator failure and verifier diagnostics
+
+Operator execution of PR #95 at `c058f72` passed offline tests but emitted
+`DIAGNOSTIC_VERIFICATION_FAILED` at both boundaries. Both external database
+fingerprints remained unchanged. This confirms failed verification with unchanged
+files; it does **not** identify a command, parsing, schema, assertion, limit or
+repeat failure. No successful operator verification is claimed.
+
+The original script caught all exceptions around command execution, UTF-8/JSON
+parsing, validation, repeat execution and report saving, returning the same code.
+It saved the diagnostic JSON only after all checks passed, discarding failed
+stdout/stderr. The new script retains captures before validation and reports fixed
+stage/reason codes. All 27 original assertion expressions are unchanged, confirmed
+by AST comparison; no diagnostic rule or limit has changed.
+
+Use `scripts/track-b-gaps-verify.ps1 -Repo "C:\Users\Juan Estrada\Projects\SignalLens" -InspectOnly`
+to inspect saved `track-b-gaps-0.json` and `track-b-gaps-1.json`. This runs neither
+tests nor diagnostic commands. It checks old report assertions using their own
+recorded baseline context, reports the count of baseline hashes matching current
+files, and independently checks current external hashes in finally. A saved report
+may belong to an earlier run; passing its checks is not verification of the failed
+run or proof of deterministic repeats. Missing files get `SAVED_REPORT_MISSING`.
+
+If reports are missing, use the same script with `-SkipOfflineTests` instead.
+This runs only the two read-only diagnostic boundaries and deterministic repeats.
+The test suite is not rerun. First and repeat stdout/stderr are saved as UTF-8
+without BOM under `backend/data/research/reports`, using
+`track-b-gaps-0.stdout.txt`, `track-b-gaps-0.stderr.txt`,
+`track-b-gaps-0.repeat.stdout.txt`, `track-b-gaps-0.repeat.stderr.txt` and the
+corresponding `1` files. Raw captures remain local, may contain interpreter paths,
+and are never printed. Invalid UTF-8 is retained as replacement characters in
+the text captures; strict decoding of the original bytes still fails validation.
+The safe public CLI error envelope is unchanged. Only allowlisted public error
+codes are printed; exception text, public-error messages and report values are not.
+
+| Stage/reason | Meaning |
+| --- | --- |
+| `.command / COMMAND_LAUNCH_FAILED` | The process could not be started. |
+| `.command / COMMAND_NONZERO` | The diagnostic returned a nonzero exit; captured stderr is retained locally. |
+| `.command.capture / CAPTURE_SAVE_FAILED` | Captures could not be saved. |
+| `.parse / UTF8_DECODE_FAILED` | Original stdout bytes are not strict UTF-8. |
+| `.parse / JSON_PARSE_FAILED` | Stdout is not parseable JSON. |
+| `.schema.<fixed check> / REPORT_SCHEMA_INVALID` | Required keys/types/shapes are invalid. |
+| `.validate.<fixed assertion> / REPORT_INVARIANT_FAILED` | The named unchanged assertion failed. |
+| `.validate.output_limits / OUTPUT_LIMIT_OR_SIZE_FAILED` | The unchanged byte-count/128-KiB contract failed. |
+| `.repeat.command / COMMAND_NONZERO` | Repeat execution failed, distinct from initial command failure. |
+| `.repeat / DETERMINISTIC_REPEAT_MISMATCH` | Successful first/repeat stdout differ. |
+| `.save / REPORT_SAVE_FAILED` | A verified report could not be saved. |
+
+Named invariant stages identify command, decision boundary, read-only metadata,
+zero outcomes/model, persistence/acquisition, eligibility/readiness, accounting,
+contracts, requests/credit, blocker count/state, empty outputs, size limits,
+roster/stored partitions, roster details, historical/effective identity,
+internal/external fingerprints, layer denominator, certified formulas, sample
+population/return/truncation, coverage partition and repeat recommendation.
+Schema stages are separate from these invariant stages. Safe events are bounded
+by fixed control flow; offline fixtures assert at most 64 events and under 16 KiB
+of summary output. Full raw captures are not echoed into chat or terminal output.
+
+Verifier-only offline tests reproduce the original opaque exception envelope and
+independently inject command, launch, UTF-8/JSON, schema, invariant, output-contract,
+repeat and save failures. They verify focused modes never invoke pytest, inspection
+never invokes the diagnostic, failures retain captures, and both after hashes are
+checked. These tests reproduce the confirmed loss of failure evidence, **not** an
+unconfirmed operator exception. The actual operator failure requires the safe
+inspection result before a specific cause can be reproduced or repaired offline.
