@@ -1,0 +1,87 @@
+# Proposed Track B provenance recovery: Steps 1 and 2 only
+
+**Unapproved and isolated.** This command audits metadata and replays one already retained Company Facts/submissions pair. It does not produce accounting amounts, recovered evidence records, aliases, eligibility or consumer changes. Contracts A–D remain unselected; validation credit is zero; all eight preregistration groups remain unresolved. The original [accounting proposal](track-b-accounting-construction-proposal.md) and its validators are unchanged. Filing-document acquisition (Step 3) is not implemented or authorized here.
+
+The user-confirmed PR #96 operator results are **20,074 visible relevant raw rows**, all lacking accepted context/revision metadata and precision; **9,736** lacking accepted fiscal metadata; **zero compatible construction candidates**; and **6,827 exact direct-cash rows**. These are observed counts reported by the operator, not measurements from this implementation or synthetic fixtures. All 71 controlled SEC retrievals are complete. Their completion does not establish accounting prerequisites or justify re-retrieval. No operator database was available during implementation; this pilot's actual counts remain unmeasured.
+
+## Step 1: read-only mapping audit
+
+`python -m app.track_b_provenance_replay` is a separate command, with no registration in the existing CLI, consumers or provider ingestion. It uses the unchanged exact-security-ID research reconciliation and decision boundary; ticker/name joins are prohibited. It reports research and production raw SEC metadata separately within the matched research perimeter. Canonical evidence is inspected only for security identity in reconciliation; its source/proof/availability records are not audited or replayed by this deliberately small raw-source pilot. No financial `value` column is projected or inspected.
+
+| Report category | Exact stored mapping | Acceptance and limitation |
+| --- | --- | --- |
+| Metadata already recognized | `sec_facts.fact_key`, `security_id`, `cik`, `taxonomy`, `concept`, `unit`, `period_start`, `period_end`, `accession_number`, `public_at`, `retrieved_at` | Inventory source-field presence; not context/calendar certification. Recognized source fields and accepted proof counts are separate. |
+| Already accepted proof declarations | Existing optional fiscal/context/revision/precision fields and their respective `*_metadata_available_at` | Call unchanged feasibility validators and require aware proof availability at or before D. Report recognized declarations only, never approval or semantic certification. |
+| Stored metadata needing interpretation | `fiscal_year`, `fiscal_period`, `frame`, `form`, `filed_date`, `is_amendment`, `is_revision` | FY/FP are reporting labels; frame is a standardized frame label. `/A` indicates an amended filing, not changed or superseded financial facts. The ingestion parser hardcodes `is_revision=False`; that is not evidence of no revisions. |
+| Stored proof fields not accepted | Presence of each existing optional proof column, alongside accepted/unaccepted counts | Distinguish missing columns, missing cells and present-but-unaccepted declarations. Do not infer context or fiscal periods from schema shapes. |
+| Prerequisites requiring original filings | Fiscal calendar; entity/context dimensions and consolidation; accounting basis; source decimals/precision; revision relationships; debt-note component inclusion; cash restrictions | Enumerated requirements, not a conclusion that every row requires acquisition. Retained Company Facts is not full XBRL/context/notes evidence. |
+| Prerequisites requiring specification decisions | Minimum quarter versus TTM calendar evidence; semantic context equivalence; revision graph; precision policy; borrowing perimeter and evidenced zeros; availability | Definitions require justification and review, not looser validators or definitions optimized for coverage/returns. |
+
+Categories are nonexclusive **field-level** diagnostics. Do not sum them into a partition of 20,074 rows or equate 20,074 unaccepted context rows with 20,074 missing filings. `stored_proof_field_inventory` shows retention separately from interpretation. Nonempty `is_revision=False` counts as a retained flag, not a positive revision proof. Unknown schemas report `counts=null`/unproven; absent tables report stored absence. Missing evidence is not an unsupported construction rule.
+
+## Step 2: deterministic retained-payload pilot
+
+Limits are one security, one retained Company Facts/submissions pair, at most three accessions and 24 replayed relevant Company Facts observations, **5,000,000 original UTF-8 bytes per payload and 10,000,000 total**. These are decimal MB. Additional safety limits: 500,000 metadata rows total, 10,000 manifest rows, 1,024 characters per projected metadata cell, 10,000 submissions recent-array entries, 24 matching submissions entries per selected accession, a 128 KiB compact JSON report, and DuckDB 128 MB/one thread/no spill. Oversize or ambiguous sources are refused rather than truncated. Neither payload nor financial values appear in reports.
+
+Selection uses only visible retained manifests and stored source metadata:
+
+1. Require recognized immutable operation/parser identity, a visible retrieval time and declared size within limits. Group by `(operation_type, operation_contract_version, concept_contract_hash, lineage_id, run_id, plan_id, security_id, cik)`. Require exactly one row per endpoint class. Duplicate endpoint records remain ambiguous; no dictionary overwrite or pair cross product.
+2. Match visible raw facts by exact operation/security/CIK/run/plan/parser links. Qualifying metadata patterns are a flow concept with the same start and distinct ends, the same reported period repeated across accessions, or missing FY/FP/frame labels. They indicate a useful diagnostic pattern, never fiscal compatibility. No numeric value, return, forecast, candidate count or expected-coverage rank is used.
+3. Choose the lexicographically first qualifying full identity/evidence-key pair. Choose the first three accession identifiers, then semantic metadata groups in lexicographic order `(taxonomy, concept, unit, start, end, accession)` and stable fact-key order. Include entire stored duplicate-match groups up to 24 rows; stop before a group that cannot fit, or refuse if the first group alone exceeds the bound. Report excluded stored rows and qualifying pair count. This is bounded selection, not evidence completeness.
+4. Read and verify only that pair. Never try another pair after the selected pair fails integrity/lineage checks. If no pair qualifies, explicitly emit `pilot.state=no_qualifying_pair` and exclusion counts. Unsupported schemas are `unproven_source_schema`, not a proven absence of a pair.
+5. Parse the two verified payloads locally. JSON numeric tokens are inert strings; no financial float conversion, amount comparison, derived formula or normalization occurs. Scan selected concept/unit arrays for the selected semantic metadata keys; preserve every matching duplicate observation. Refuse if their multiplicity exceeds 24. Other parsed JSON observations are not replayed or reported. Never truncate a matching duplicate to fit.
+
+## Integrity, lineage and exact field mappings
+
+Verify `payload_json.encode('utf-8', errors='strict')` against **both** original `response_sha256` and `byte_count`. Do not parse/reformat/reserialize before hashing. Check actual byte length in SQL before projecting the text. Verify content type, parser/operation contract, normalized exact payload CIK, raw evidence-key formula `sha256(lineage_id|stored_cik|endpoint_class|original_hash)`, full pair identity and identical retrieval instant. Verify unique stored `sec_issuers` security/CIK mapping; unique matching ingestion run; matching operation/lineage/plan identity; and the unchanged decision-based lineage hash. Only source facts with exact operation/run/plan/parser/security/CIK links enter selection. Source-fact keys are not reconstructed because that would require financial values. Metadata matching is explicitly not full numeric fact identity.
+
+| Verified retained source path | Stored comparison | Meaning and acceptance check |
+| --- | --- | --- |
+| `facts.us-gaap.<concept>.units.<unit>[i].start/end/accn` | `period_start/period_end/accession_number`; exact taxonomy/concept/unit path | Exact semantic metadata match, including absent start for instants. Does not imply shared full context or same numeric fact. |
+| Same observation `.fy/.fp/.frame` | `fiscal_year/fiscal_period/frame` | Reported labels only. Compare every matching stored row; count equal, missing stored but recoverable, different metadata, or missing payload. No invented calendar. |
+| Same observation `.form/.filed` | `form/filed_date`, reported separately from submissions | Company Facts disclosure labels; differences are metadata diagnostics, not conflicting amendments. |
+| `filings.recent.accessionNumber[i]` | `accession_number` | Preserve all matching indices; do not choose the last duplicate accession. |
+| `filings.recent.form[i]/filingDate[i]` | `form/filed_date` | Required parallel arrays must be lists with identical lengths before joining. No zip truncation. |
+| `filings.recent.acceptanceDateTime[i]` | `public_at` | Use the established parser interpretation: compact 14-digit UTC, explicit ISO offset, or naive ISO interpreted UTC. Count the naive interpretation explicitly as an established assumption; do not strengthen its evidence meaning. Invalid/missing acceptance is not promoted from filing date. |
+| `filings.recent.primaryDocument[i]` | No evidence-field mapping | Validate its parallel length if present. Do not use or traverse its URL/name. |
+| `filings.files[*]` | No recovered filing metadata | Historical-file references are not historical-file contents. Do not follow them. Missing recent accession metadata remains unproven. |
+
+Reports contain comparison counts, original fact keys, original payload JSON paths/array indices, original hashes and diagnostic flags. **They do not save recovered FY/FP, dates, context fields, numeric values, derived amounts or canonical records.** For duplicate groups, Company Facts comparison counts count observation-to-stored-row edges; submissions comparison counts count observation-to-stored-row-to-submissions-entry edges. These are not unique-row recovery totals. Preserve multiplicity rather than silently deduplicating or selecting a winning revision.
+
+Company Facts provides neither full contextRef definitions/dimensions nor a dependable original decimals contract, accounting notes, debt inclusion graph or unrestricted-cash proof. Extra keys named `decimals`, `contextRef` or `revision_status` are not promoted by this pilot. JSON digit counts and stored DOUBLE representation do not establish XBRL precision. Namespaces/default dimensions and inline transformations require original-document/taxonomy evidence under separately approved scope.
+
+## Revision evidence and refusal rules
+
+Repeated disclosure with identical semantic metadata is a disclosure occurrence, not a new amendment. Different stored values can arise from different contexts, rounding, units, reporting basis, extraction or recasts; this pilot never examines values or labels them conflicting. A later accession, amended form, `is_revision` flag or existing canonical `latest_visible_revision` heuristic cannot establish replacement.
+
+Supersession requires a specific amended/restated disclosure that identifies the prior filing/fact and the changed scope, compatible context/unit/basis and original precision. Compatible recasts need explicit common presentation evidence for all operands. Conflicting revisions require proven competing current claims on the same meaning after those checks; unresolved relationships remain unknown. This pilot infers none of these relationships and assigns no `revision_set_id` or `revision_status`.
+
+Refuse integrity mismatch, invalid payload/CIK, ambiguous pair/run/issuer linkage, incompatible operation/parser links, malformed parallel arrays, duplicate JSON object members, nonfinite JSON constants, row/cell/payload/replay/submission-match/report bounds, unsupported views, unknown required schemas, or unavailable/changed database hashes. Invalid inputs never trigger network recovery or wider pilot scope. Unrecognized fields remain unproven rather than an exception to existing validators. A failed assessment may retain partial diagnostic counts, marked failed, but earns no accounting validation credit.
+
+## Availability and operational verification
+
+Raw inputs retain `max(public_at, retrieved_at)`; an optional raw `available_at` cannot override that rule. Raw recovered comparison metadata inherits only its **original verified source provenance**, not canonical acceptance. The decision boundary controls selection; `executed_at` records this assessment now. This implementation creates no canonical revision. Any future authorized canonical materialization must use actual `materialized_at`, with availability no earlier than its creation; replay cannot backdate newly produced evidence. Existing legacy/controlled canonical availability and consumers are unchanged.
+
+Run the checked-in verifier from the intended PR checkout on Windows PowerShell 5.1:
+
+```powershell
+& 'C:\Users\Juan Estrada\Projects\SignalLens\scripts\track-b-provenance-verify.ps1'
+```
+
+Its defaults use that repository's `.venv\Scripts\python.exe`, `backend\data\research\signallens-research.duckdb`, `backend\data\signallens.duckdb`, and `backend\data\research\reports`. Parameters can explicitly target an isolated exact-commit worktree and the original database paths. The verifier does not fetch or switch branches. It runs focused synthetic tests then the separate CLI through **Python stdin**, with bounded subprocess capture and timeout. The Python verifier and outer PowerShell cleanup each independently attempt both database hashes before/after, including test, launch, parsing and replay failures. `frontend/next-env.d.ts` content is checked by the Python verifier and never modified. The script saves UTF-8 without BOM, including failures, and restores `$OutputEncoding` without changing the caller's directory.
+
+Upload these reports together:
+
+- `backend\data\research\reports\track-b-provenance-replay.json`
+- `backend\data\research\reports\track-b-provenance-verification.json`
+- `backend\data\research\reports\track-b-provenance-cleanup.json`
+
+A failed report is diagnostic only. Inspect both verification and outer cleanup; a cleanup failure invalidates the run even if an earlier replay report says completed. Failed startup overwrites prior report names with failure summaries. If the reports directory itself is unwritable, no script can guarantee a saved report; the verifier fails visibly. There are no database writes or provider requests in any cleanup path.
+
+## Synthetic checks and remaining decisions
+
+Synthetic replay: two OCF observations share a reported start, have distinct ends and FY/FP labels, and exactly match two stored source rows. Both payload hashes, byte counts and lineage pass. This recovers comparison metadata but proves **zero calendars, contexts, precision or supersession relationships**. Add a duplicate Company Facts observation and a second stored metadata match: all match edges are counted. Add duplicate submissions accession entries: all submission edges are counted. Neither deduplication nor a latest-entry winner is permitted. A 25th matching observation causes refusal; malformed parallel arrays or a wrong original checksum causes failure with independent post hashes and UTF-8 diagnostics.
+
+The offline tests also cover changing financial values without changing selection; post-boundary metadata invisibility; absent/unsupported source schemas; actual size checks before text projection; no fallback after a corrupt selected pair; metadata mismatches without replacing stored fields; original UTF-8 versus reserialization; numeric-token/extra-field nonpromotion; bounded report and command capture; failed tests/launch/parse/invariant/hash/save paths; and preservation of frontend content. Windows PowerShell execution and operator replay remain to be performed by the operator; the exact embedded Python payload is exercised offline here.
+
+All eight unresolved groups remain: `accounting_contract_unapproved`, `historical_universe_and_identity_unproven`, `sample_policy_and_minima_unapproved`, `aligned_history_and_staleness_unproven`, `outcomes_and_benchmark_unapproved`, `execution_costs_unapproved`, `temporal_splits_and_inference_unapproved`, `registration_and_holdout_controls_unlocked`. No provider requests, URL traversal, acquisition pilot, model outputs, Track A changes or consumer changes are authorized by this document.
