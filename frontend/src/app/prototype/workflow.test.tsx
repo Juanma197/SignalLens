@@ -5,7 +5,7 @@ import {tmpdir} from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {renderToStaticMarkup} from "react-dom/server";
-import {AnalystBriefView,CompanyView,EventsView,FinancialHealthView,PrototypeNotice,RosterView,ValuationView,detailHref, type Detail, type Report} from "./view";
+import {AnalystBriefView,CompanyView,EventsView,FinancialHealthView,PrototypeNotice,RosterView,ScenarioView,ValuationView,detailHref, type Detail, type Report} from "./view";
 import {SnapshotView, ThesisHistory} from "./store-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
@@ -166,4 +166,16 @@ test("comparison table lists every eligible company in membership order with das
   const order=[...table.matchAll(/>(SYN\d\d\.US)</g)].map(m=>m[1]);
   assert.deepEqual(order, ready.eligible_roster.map(id=>ready.companies.find(c=>c.security_id===id)!.qualified_symbol));
   assert.match(table,/—/);
+});
+
+test("scenario range renders each case, its assumption and the caveats",()=>{
+  const html=renderToStaticMarkup(<ScenarioView scenarios={{available:true,measure:"free cash flow",multiple_name:"P/FCF",years_used:5,multiples_used:5,price:100,price_session:"2026-10-07",book_value_per_share:50,label:"Arithmetic from the company's own past results and multiples, assuming that past range is representative. Not a price target or a forecast.",
+    cases:[{case:"cautious",assumption:"worst free cash flow of the last 5 years x lowest own P/FCF",profit:8e7,multiple:8,value_per_share:64,vs_price:-0.36},
+           {case:"optimistic",assumption:"best free cash flow x median own P/FCF (not the highest)",profit:-1,multiple:10,value_per_share:null,vs_price:null,note:"Free cash flow was zero or negative; no earnings-based value."}]}}/>);
+  assert.match(html,/Scenario range/);
+  assert.match(html,/Not a price target or a forecast/);
+  assert.match(html,/\$64\.00<\/td><td>-36\.00%/);
+  assert.match(html,/no earnings-based value/);
+  assert.match(html,/book value \$50\.00 per share/);
+  assert.match(html,/Ignores debt, cyclicality and structural change/);
 });

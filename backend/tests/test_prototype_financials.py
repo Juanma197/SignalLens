@@ -124,3 +124,35 @@ def test_sector_notes_follow_sic_ranges():
     assert 'floor-plan' in sector_notes({'sic': 5500})[0]
     assert 'lease-to-own' in sector_notes({'sic': 7359})[0]
     assert sector_notes({'sic': 3560}) == [] and sector_notes(None) == []
+
+
+def test_scenario_ranges_use_worst_median_and_best_years_with_own_multiples():
+    from app.prototype.financials import scenario_ranges, valuation_history
+    rows = [r for y, ocf in zip(range(2021, 2026), (100, 140, 120, 160, 180)) for r in year(y, 1000, 150, 90, ocf, 20, 10)]
+    rows.append(fact('StockholdersEquity', 500, date(2025, 12, 31)))
+    latest = brief(rows)
+    first = annual_brief(SEC, rows, DECISION, stamp=stamp, finite=finite, revision='first')
+    prices = {date(y, 12, 31): {'session': date(y, 12, 31), 'close': c} for y, c in zip(range(2021, 2026), (80, 120, 100, 140, 160))}
+    history = valuation_history(first, prices, current_close=150.0)
+    s = scenario_ranges(latest, history, {'shares_outstanding': 10, 'close': 150.0, 'close_session': date(2026, 9, 30)})
+    assert s['available'] and s['measure'] == 'free cash flow' and s['multiple_name'] == 'P/FCF'
+    fcf = [80, 120, 100, 140, 160]                       # operating cash flow minus capex of 20
+    multiples = sorted(p * 10 / f for p, f in zip((80, 120, 100, 140, 160), fcf))
+    cautious, middle, optimistic = s['cases']
+    assert cautious['value_per_share'] == pytest.approx(min(fcf) * multiples[0] / 10)
+    assert middle['value_per_share'] == pytest.approx(sorted(fcf)[2] * multiples[2] / 10)
+    assert optimistic['value_per_share'] == pytest.approx(max(fcf) * multiples[2] / 10)
+    assert middle['vs_price'] == pytest.approx(middle['value_per_share'] / 150 - 1)
+    assert s['book_value_per_share'] == pytest.approx(50)
+
+
+def test_scenarios_fall_back_to_earnings_and_refuse_without_history():
+    from app.prototype.financials import scenario_ranges, valuation_history
+    rows = [r for y in range(2021, 2026) for r in year(y, 1000, 150, 90 if y != 2023 else -10, 50, 60, 10)]  # FCF always negative
+    first = annual_brief(SEC, rows, DECISION, stamp=stamp, finite=finite, revision='first')
+    prices = {date(y, 12, 31): {'session': date(y, 12, 31), 'close': 100.0} for y in range(2021, 2026)}
+    s = scenario_ranges(brief(rows), valuation_history(first, prices, 100.0), {'shares_outstanding': 10, 'close': 100.0, 'close_session': date(2026, 9, 30)})
+    assert s['measure'] == 'net income' and s['cases'][0]['value_per_share'] is None and 'zero or negative' in s['cases'][0]['note']
+    assert s['cases'][1]['value_per_share'] > 0
+    none = scenario_ranges(brief(rows), valuation_history(first, {}, 100.0), {'shares_outstanding': 10, 'close': 100.0, 'close_session': date(2026, 9, 30)})
+    assert none['available'] is False and 'three' in none['reason']

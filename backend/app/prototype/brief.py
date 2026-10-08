@@ -49,6 +49,10 @@ def analyst_brief(c, decision, *, result):
         value.append('Current: ' + ', '.join(f'{LABELS[k]} {v:.1f}' for k, v in multiples.items()) + '.')
     if val.get('free_cash_flow_yield') is not None: value.append(f'Free-cash-flow yield {val["free_cash_flow_yield"]:.1%}.')
     value += [cmp['text'] for cmp in history.get('comparisons', [])]
+    scenarios = val.get('scenarios') or {}
+    if scenarios.get('available'):
+        shown = [f"{x['case']} ${x['value_per_share']:,.2f} ({x['vs_price']:+.0%})" if x['value_per_share'] is not None else f"{x['case']} n/a" for x in scenarios['cases']]
+        value.append(f"Scenario values per share from its own past {scenarios['measure']} and {scenarios['multiple_name']}: " + ', '.join(shown) + f" vs price ${scenarios['price']:,.2f}.")
     sections.append({'title': 'Valuation', 'points': value or ['No meaningful valuation multiples.']})
 
     catalysts = []
@@ -75,6 +79,9 @@ def analyst_brief(c, decision, *, result):
                        'earnings to fall' + (f'; latest revenue growth was {growth:+.1%}.' if growth is not None else '.'))
     if above:
         counter.append('Valuation is above its own history (' + ', '.join(LABELS[a['multiple']] for a in above) + '): an improvement may already be in the price.')
+    middle = next((x for x in (val.get('scenarios') or {}).get('cases', []) if x['case'] == 'middle'), None)
+    if middle and middle['vs_price'] is not None and middle['vs_price'] < 0:
+        counter.append(f"The middle scenario values the shares {-middle['vs_price']:.0%} below today's price: on its own history the price already assumes better-than-typical results.")
     if momentum is not None and momentum < -0.15 and below:
         counter.append(f'The price has fallen {-momentum:.0%} over 126 sessions; cheap shares can keep getting cheaper.')
     if any(o['area'] == 'dilution' and o['kind'] == 'weakness' for o in observations):
@@ -93,7 +100,7 @@ def analyst_brief(c, decision, *, result):
         missing.append(f'Filing events were last retrieved {latest_event.date().isoformat()}; newer filings are not included.')
     missing += ['What the company sells and its competitive position are not stored; describe them in your thesis.',
                 'No comparison with peer companies yet.',
-                'No scenario range (bear/base/bull value) yet.']
+                'Scenario ranges assume the past is representative; they ignore debt, cyclicality and structural change.']
     return {'label': 'Rule-based summary of stored evidence. Interpretation, not a forecast or a recommendation; your thesis is separate.',
             'sections': sections, 'counterarguments': counter or ['No rule-based counterargument was triggered; look for one yourself.'],
             'missing_evidence': missing}

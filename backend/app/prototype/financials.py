@@ -315,3 +315,50 @@ SECTOR_NOTES = (
 def sector_notes(industry):
     if not industry or industry.get('sic') is None: return []
     return [note for (low, high), note in SECTOR_NOTES if low <= int(industry['sic']) <= high]
+
+
+def scenario_ranges(brief, history, size):
+    """Cautious / middle / optimistic value per share from the company's own past.
+
+    Profit measure: annual free cash flow when at least three years and three
+    historical P/FCF values exist, otherwise net income with P/E. Cautious = worst
+    year x lowest own multiple; middle = median year x median multiple; optimistic
+    = best year x median multiple (deliberately not the highest). Values are per
+    current cover-page share and compared with the decision-session close. This
+    assumes the past range is representative; it is arithmetic, not a target."""
+    if not size or not brief or not history: return None
+    years = brief.get('years', [])[-5:]
+    hist = history.get('years', [])
+    def series(source, key):
+        return [y[source][key] if source == 'calculated' else y[source][key]['value']
+                for y in years if key in y[source]]
+    options = (('free cash flow', series('calculated', 'free_cash_flow'), 'price_to_free_cash_flow', 'P/FCF'),
+               ('net income', series('values', 'net_income'), 'price_to_earnings', 'P/E'))
+    chosen = None
+    for label, values, multiple, short in options:
+        multiples = sorted(h['multiples'][multiple] for h in hist if multiple in h['multiples'])
+        if len(values) >= 3 and len(multiples) >= 3:
+            chosen = (label, values, multiples, short); break
+    shares, price = size['shares_outstanding'], size['close']
+    equity = brief['years'][-1]['values'].get('equity', {}).get('value') if brief.get('years') else None
+    book = equity / shares if equity is not None and shares else None
+    if not chosen:
+        return {'available': False, 'reason': 'Needs at least three years of free cash flow or net income and three historical multiples.',
+                'book_value_per_share': book, 'price': price}
+    label, values, multiples, short = chosen
+    median = lambda xs: sorted(xs)[len(xs) // 2] if len(xs) % 2 else (sorted(xs)[len(xs) // 2 - 1] + sorted(xs)[len(xs) // 2]) / 2
+    cases = []
+    for name, profit, multiple, explain in (
+            ('cautious', min(values), multiples[0], f'worst {label} of the last {len(values)} years x lowest own {short}'),
+            ('middle', median(values), median(multiples), f'median {label} x median own {short}'),
+            ('optimistic', max(values), median(multiples), f'best {label} x median own {short} (not the highest)')):
+        if profit <= 0:
+            cases.append({'case': name, 'assumption': explain, 'profit': profit, 'multiple': multiple, 'value_per_share': None,
+                          'vs_price': None, 'note': f'{label.capitalize()} was zero or negative; no earnings-based value.'})
+            continue
+        value = profit * multiple / shares
+        cases.append({'case': name, 'assumption': explain, 'profit': profit, 'multiple': multiple,
+                      'value_per_share': value, 'vs_price': value / price - 1})
+    return {'available': True, 'measure': label, 'multiple_name': short, 'years_used': len(values), 'multiples_used': len(multiples),
+            'cases': cases, 'price': price, 'price_session': size['close_session'], 'book_value_per_share': book,
+            'label': 'Arithmetic from the company\'s own past results and multiples, assuming that past range is representative. Not a price target or a forecast.'}

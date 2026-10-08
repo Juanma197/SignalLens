@@ -25,7 +25,7 @@ from ..sec_ingestion import validate_paths
 from ..track_b_gaps import _reconcile
 from .brief import analyst_brief
 from .events import event_brief, read_events
-from .financials import annual_brief, sector_notes, summary_only, valuation, valuation_history
+from .financials import annual_brief, scenario_ranges, sector_notes, summary_only, valuation, valuation_history
 
 CONFIG = json.loads(Path(__file__).with_name('config_v1.json').read_text(encoding='utf-8'))
 NOTICE = 'UNVALIDATED RESEARCH PROTOTYPE — ZERO VALIDATION CREDIT'
@@ -500,6 +500,7 @@ def _build(db, decision, target):
                                  stamp=stamp, finite=finite, revision='first')
             prices = _fiscal_year_prices(db, c['qualified_symbol'], [y['fiscal_year_end'] for y in first['years']], decision)
             c['valuation']['history'] = valuation_history(first, prices, c['size']['close'])
+            c['valuation']['scenarios'] = scenario_ranges(c['financials'], c['valuation']['history'], c['size'])
         if not c['eligible'] and c.get('financials'): c['financials'] = summary_only(c['financials'])
     members = eligible[:target]
     blockers = ['eligible_population_below_minimum'] if len(members) < CONFIG['minimum_members'] else []

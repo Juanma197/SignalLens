@@ -351,10 +351,27 @@ financial-health strengths/weaknesses, filing risk flags and the next-results
 estimate for every eligible company, from the same report. Rows stay in the
 membership (hash) order and are never sorted by these columns.
 
+## Stage 3 (completed): scenario ranges
+
+Eligible companies with a valuation history get a "Scenario range": cautious,
+middle and optimistic value per share, built only from the company's own past.
+
+- **Measure**: annual free cash flow when at least three years and three
+  historical P/FCF values exist; otherwise net income with P/E.
+- **Cases**: cautious = worst year x lowest own multiple; middle = median year x
+  median multiple; optimistic = best year x median multiple (deliberately not the
+  highest). Divided by the current cover-page share count and compared with the
+  decision-session close. A zero or negative year gives no value for that case.
+- **Reference**: book value per share at the latest fiscal year end.
+- **Caveats on the page**: arithmetic, not a price target or forecast; assumes
+  the past range is representative; ignores debt, cyclicality and structural
+  change. The analyst brief lists the three values, and adds a counterargument
+  when the middle case is below today's price.
+
 ## Remaining work
 
-1. Conservative scenario ranges with explicit assumptions, peer comparison
-   within the universe, and Stage 6 (month-to-month changes and holdings review).
+1. Peer comparison within the universe, and Stage 6 (month-to-month changes
+   and holdings review, once two snapshots exist).
 2. Fresh prices for a current-month shortlist and for tracking to advance
    (operator-run acquisition with the existing ingestion). Corporate-action
    coverage for the 39 `coverage_missing` companies would widen the eligible pool.

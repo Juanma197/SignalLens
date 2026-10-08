@@ -7,7 +7,9 @@ export type FinValue = {value: number; concept: string; accession: string; form:
 export type FinYear = {fiscal_year_end: string; values: Record<string, FinValue>; calculated: Record<string, number>};
 export type Observation = {kind: "strength"|"weakness"|"neutral"|"gap"; area: string; text: string; fiscal_years: string[]};
 export type Financials = {years: FinYear[]; observations: Observation[]; method: string; not_available: string[]; tables_omitted?: string; fiscal_years_available?: number};
-export type Valuation = {market_cap_usd: number; fiscal_year_end: string; multiples: Partial<Record<"price_to_earnings"|"price_to_sales"|"price_to_free_cash_flow"|"price_to_book", number>>; not_meaningful: string[]; basis: string; earnings_yield?: number; free_cash_flow_yield?: number; history?: ValuationHistory|null};
+export type Valuation = {market_cap_usd: number; fiscal_year_end: string; multiples: Partial<Record<"price_to_earnings"|"price_to_sales"|"price_to_free_cash_flow"|"price_to_book", number>>; not_meaningful: string[]; basis: string; earnings_yield?: number; free_cash_flow_yield?: number; history?: ValuationHistory|null; scenarios?: Scenarios|null};
+export type Scenarios = {available: boolean; reason?: string; measure?: string; multiple_name?: string; years_used?: number; multiples_used?: number; price: number; price_session?: string; book_value_per_share: number|null; label?: string;
+  cases?: {case: string; assumption: string; profit: number; multiple: number; value_per_share: number|null; vs_price: number|null; note?: string}[]};
 export type AnalystBrief = {label: string; sections: {title: string; points: string[]}[]; counterarguments: string[]; missing_evidence: string[]};
 export type FilingEvent = {accession: string; form: string; filing_date: string; known_at: string; items: string[]; category: string; label: string; confidence: number; amendment: boolean; url: string|null};
 export type Events = {window_days: number; event_count: number; counts: Record<string, number>; note: string; latest_known_at: string|null;
@@ -146,6 +148,7 @@ export function ValuationView({valuation}: {valuation: Valuation}) {
       {valuation.free_cash_flow_yield !== undefined && <div><dt>Free cash flow yield</dt><dd>{(valuation.free_cash_flow_yield * 100).toFixed(1)}%</dd></div>}</dl>
     {valuation.not_meaningful.length > 0 && <p>Not meaningful: {valuation.not_meaningful.join("; ")}.</p>}
     {valuation.history && <HistoryView history={valuation.history}/>}
+    {valuation.scenarios && <ScenarioView scenarios={valuation.scenarios}/>}
   </section>;
 }
 
@@ -205,4 +208,17 @@ export function CompareView({report, companies}: {report: Report; companies: Map
         <td>{c.events?.results_timing?.next_results_estimate ?? "—"}</td>
       </tr>)}
     </tbody></table></div></section>;
+}
+
+export function ScenarioView({scenarios}: {scenarios: Scenarios}) {
+  return <div className="prototype-fin"><h3>Scenario range</h3>
+    {!scenarios.available ? <p>Not available: {scenarios.reason}</p> : <>
+      <p>{scenarios.label} Based on {scenarios.years_used} years of {scenarios.measure} and {scenarios.multiples_used} own {scenarios.multiple_name} values; price ${scenarios.price.toFixed(2)} on {scenarios.price_session}.</p>
+      <div className="prototype-table-wrap"><table><thead><tr><th>Case</th><th>Assumption</th><th>Value per share</th><th>Vs price</th></tr></thead><tbody>
+        {scenarios.cases!.map(x => <tr key={x.case}><td>{x.case}</td><td>{x.assumption}<small>{(x.profit / 1e6).toLocaleString("en-GB", {maximumFractionDigits: 0})}M USD x {x.multiple.toFixed(1)}</small></td>
+          <td>{x.value_per_share === null ? "—" : `$${x.value_per_share.toFixed(2)}`}</td><td>{x.vs_price === null ? (x.note ?? "—") : percent(x.vs_price)}</td></tr>)}
+      </tbody></table></div></>}
+    {scenarios.book_value_per_share !== null && <p>Reference: book value ${scenarios.book_value_per_share.toFixed(2)} per share (latest fiscal year end).</p>}
+    <p>Ignores debt, cyclicality and structural change. If the business is changing, its own past is a poor guide.</p>
+  </div>;
 }
