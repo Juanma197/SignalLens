@@ -1,0 +1,19 @@
+{
+  "namespace": "research-prototype",
+  "version": "momentum-prototype-1.0.0",
+  "target_members": 15,
+  "minimum_members": 10,
+  "maximum_members": 20,
+  "maximum_results": 3,
+  "momentum_sessions": 126,
+  "membership_order": "sha256(version + ':' + security_id), then security_id",
+  "screen": "adjusted_close[end] / adjusted_close[start] - 1 > 0",
+  "result_order": "126-session return descending, then security_id ascending",
+  "weights": null,
+  "financial_evidence_score_effect": "none",
+  "maximum_price_age_days": 7,
+  "maximum_direct_fact_age_days": 550,
+  "validation_credit": 0,
+  "membership_state": "proposed_unfrozen",
+  "same_day_session_completion_boundary": "22:00:00 UTC (conservative; earlier closes are not inferred)"
+}
