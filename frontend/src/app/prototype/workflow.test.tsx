@@ -124,3 +124,13 @@ test("valuation snapshot shows multiples without a verdict",()=>{
   assert.match(html,/not a verdict/);
   assert.match(html,/Free cash flow is zero or negative/);
 });
+
+test("valuation history renders comparisons, the same-basis current row and its caveat",()=>{
+  const script=`import json, sys\nsys.path.insert(0, 'tests')\nfrom datetime import date\nfrom test_prototype_financials import SEC, DECISION, year\nfrom app.prototype.financials import annual_brief, valuation_history\nfrom app.prototype.service import stamp, finite\nrows=[r for y in range(2021,2026) for r in year(y,1000,150,100,160,20,10)]\nfirst=annual_brief(SEC,rows,DECISION,stamp=stamp,finite=finite,revision='first')\nprices={date(y,12,31):{'session':date(y,12,31),'close':100.0+(y-2021)*50} for y in range(2021,2026)}\nprint(json.dumps(valuation_history(first,prices,50.0), default=str))`;
+  const history=JSON.parse(execFileSync(python,["-c",script],{cwd:path.join(project,"backend"),encoding:"utf8"}));
+  const html=renderToStaticMarkup(<ValuationView valuation={{market_cap_usd:5e8,fiscal_year_end:"2025-12-31",multiples:{price_to_earnings:5},not_meaningful:[],basis:"b",history}}/>);
+  assert.match(html,/Against its own history/);
+  assert.match(html,/below range:<\/b> P\/E 5\.0 vs its own 5-year range 10\.0-30\.0/);
+  assert.match(html,/Now \(same basis\)/);
+  assert.match(html,/a question to research, not a conclusion/);
+});

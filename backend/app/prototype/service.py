@@ -23,7 +23,7 @@ from ..price_segments import detect_price_segments
 from ..research_observations import ObservationPolicy
 from ..sec_ingestion import validate_paths
 from ..track_b_gaps import _reconcile
-from .financials import annual_brief, summary_only, valuation
+from .financials import annual_brief, sector_notes, summary_only, valuation, valuation_history
 
 CONFIG = json.loads(Path(__file__).with_name('config_v1.json').read_text(encoding='utf-8'))
 NOTICE = 'UNVALIDATED RESEARCH PROTOTYPE — ZERO VALIDATION CREDIT'
@@ -414,6 +414,22 @@ def _size(sec, entries, decision, calculation):
     return ([] if low <= value <= high else ['market_cap_outside_band']), size
 
 
+def _fiscal_year_prices(db, symbol, ends, decision):
+    """Unadjusted close on the last stored US session on or before each fiscal
+    year end (within 7 days), visible by the cutoff. Prices beyond the main
+    450-day read are needed, so this is a small separate query per company."""
+    found = {}
+    for end in ends[:6]:
+        row = db.execute("""SELECT trading_date, close FROM global_price_observations
+            WHERE qualified_symbol = ? AND exchange = 'US' AND status = 'available'
+              AND trading_date BETWEEN ? AND ? AND retrieved_at <= ?
+            ORDER BY trading_date DESC, source LIMIT 1""",
+            [symbol, end - timedelta(days=7), end, decision.replace(tzinfo=None)]).fetchone()
+        if row and finite(row[1]) and float(row[1]) > 0:
+            found[end] = {'session': day(row[0]), 'close': float(row[1])}
+    return found
+
+
 def _build(db, decision, target):
     data, schema, remaining = {}, {}, MAX_ROWS
     for table in COLUMNS:
@@ -474,6 +490,12 @@ def _build(db, decision, target):
     eligible = sorted([c for c in companies if c['eligible']], key=lambda c: (hashlib.sha256((CONFIG['version'] + ':' + c['security_id']).encode()).hexdigest(), c['security_id']))
     for c in companies:
         if c.get('financials') is not None: c['valuation'] = valuation(c.get('size'), c['financials'])
+        if c.get('industry'): c['sector_notes'] = sector_notes(c['industry'])
+        if c['eligible'] and c.get('valuation'):
+            first = annual_brief({'security_id': c['security_id'], 'cik': c['cik']}, data['sec_facts'], decision,
+                                 stamp=stamp, finite=finite, revision='first')
+            prices = _fiscal_year_prices(db, c['qualified_symbol'], [y['fiscal_year_end'] for y in first['years']], decision)
+            c['valuation']['history'] = valuation_history(first, prices, c['size']['close'])
         if not c['eligible'] and c.get('financials'): c['financials'] = summary_only(c['financials'])
     members = eligible[:target]
     blockers = ['eligible_population_below_minimum'] if len(members) < CONFIG['minimum_members'] else []

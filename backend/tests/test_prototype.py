@@ -6,6 +6,8 @@ import socket
 import subprocess
 import sys
 
+from pathlib import Path
+
 import duckdb
 from fastapi.testclient import TestClient
 import pytest
@@ -16,8 +18,8 @@ from app.model_readiness import fingerprint
 
 
 @pytest.fixture
-def paths(tmp_path):
-    return create_fixture(tmp_path / 'new-synthetic-fixture')
+def paths(prototype_fixture):
+    return tuple(Path(p) for p in prototype_fixture)
 
 
 def run(paths, **kwargs):
