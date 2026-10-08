@@ -23,6 +23,9 @@ class Fact:
     currency: str = 'USD'
     scale: D = D(1)
     provenance: bool = True
+    input_layer: str = 'raw_sec'
+    controlled: bool = False
+    materialized: datetime | None = None
 
 DECISION = datetime(2026, 10, 8, tzinfo=timezone.utc)
 OLD = datetime(2026, 10, 1, tzinfo=timezone.utc)
@@ -34,7 +37,11 @@ def validate(f, decision=DECISION):
     if not f.provenance: raise Refusal('MISSING_STORED_EVIDENCE')
     if any(t.tzinfo is None or t.utcoffset() is None for t in (f.public, f.retrieved, f.available)):
         raise Refusal('visibility_unknown')
-    if f.available != max(f.public, f.retrieved): raise Refusal('availability_mismatch')
+    expected=max(f.public,f.retrieved)
+    if f.input_layer == 'canonical' and f.controlled:
+        if f.materialized is None or f.materialized.tzinfo is None: raise Refusal('materialization_unknown')
+        expected=max(expected,f.materialized)
+    if f.available != expected: raise Refusal('availability_mismatch')
     if f.available > decision: raise Refusal('NOT_VISIBLE_AT_DECISION')
     if f.end > decision.date(): raise Refusal('period_after_decision')
     if f.currency != 'USD' or not f.scale.is_finite() or f.scale <= 0:
@@ -167,6 +174,12 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(cash_direct(direct),D(50))
         with self.assertRaisesRegex(Refusal,'UNSUPPORTED'): cash_direct(direct,'unrestricted_cash')
         with self.assertRaises(Refusal): cash_direct(fact(65,concept='combined_cash'))
+    def test_controlled_canonical_invisible_before_materialization(self):
+        late=DECISION.replace(day=9)
+        controlled=replace(self.q1,input_layer='canonical',controlled=True,materialized=late,available=late)
+        with self.assertRaisesRegex(Refusal,'NOT_VISIBLE'): validate(controlled)
+        with self.assertRaisesRegex(Refusal,'availability_mismatch'): validate(replace(controlled,available=OLD))
+        self.assertEqual(validate(replace(controlled,controlled=False,available=OLD)),D(30))
     def test_q4_and_equivalent_bridge(self):
         decision=datetime(2027,2,1,tzinfo=timezone.utc)
         q3=fact(90,self.calendar[0],self.calendar[3])

@@ -1,6 +1,6 @@
 # Proposed Track B accounting construction contract
 
-**UNAPPROVED — review draft v0.1, 8 October 2026. TRACK B RESEARCH FOUNDATION — NOT A MODEL.**
+**UNAPPROVED — review draft v0.2, 8 October 2026. TRACK B RESEARCH FOUNDATION — NOT A MODEL.**
 
 ## Observed operator report — counts, not construction certification
 
@@ -32,13 +32,19 @@ Source path: `databases.research.layers.{raw_sec,canonical}.fields`. These are s
 
 ## Proposed rules and synthetic illustrations — explicitly unapproved
 
-Everything below is a review proposal, not a report observation or activated definition. Each worked-example amount is invented; passing offline examples supplies no operator evidence or validation credit. No operator database/provider access, aliases, operator derivation/persistence, consumer changes, Track A changes, Contracts A–D selection, eligibility decisions, model outputs, return analysis or coverage optimization occur. Local code context: `docs/track-b-identity-accounting-gaps.md`, the unchanged draft panel and the separate liquidity measurement/mapping contract. These proposals are not optimized to increase the observed counts.
+Everything below is a review proposal, not a report observation or activated definition. Each worked-example amount is invented; passing offline examples supplies no operator evidence or validation credit. Development uses synthetic evidence only. The isolated operator feasibility command permits bounded read-only inspection of stored evidence and reports counts; it makes no provider requests, derives no accounting amounts and persists no derived evidence. No aliases, consumer or Track A changes, Contracts A–D selection, eligibility decisions, model outputs, return analysis or coverage optimization occur. Local code context: `docs/track-b-identity-accounting-gaps.md`, the unchanged draft panel and the separate liquidity measurement/mapping contract. These proposals are not optimized to increase the observed counts.
 
 ## Common prerequisites and refusal vocabulary
 
 Each input must have an exact durable security ID and certified issuer association for its period (CIK alone is not a join); source fact ID; accession and source locator; exact taxonomy namespace/version/concept; duration or instant context; actual dates; dimensions/consolidation scope; source amount, currency, unit, scale and sign convention; filing/public timestamp, retrieval timestamp and availability timestamp; and amendment/revision relationships. Use finite Decimal amounts. Preserve the source representation and losslessly normalize known positive scales to USD base units; reject currency contradictions, unknown scales and FX substitution. This proposal does not amend existing validator scale rules.
 
-At decision timestamp D, require aware `public_at` and `retrieved_at`, and `available_at = max(public_at, retrieved_at) <= D` for every input. A stored availability timestamp must agree. A calculation becomes available at the maximum input availability. A period end, filing date without time, or historical public release alone cannot establish system possession. Unknown visibility fails closed.
+Availability is adapter-specific; this proposal does not rewrite established raw/legacy rules. For stored SEC `sec_facts`, input availability is `max(public_at, retrieved_at)` using aware timestamps. Legacy canonical rows retain their existing `available_at = max(public_at, retrieved_at)` rule; their recorded materialization time is not retrospectively inserted into that legacy rule. Other legacy adapters retain their own rules and are not silently treated as SEC facts.
+
+Controlled canonical liquidity inputs, identified by their stored operation provenance, require `available_at = max(public_at, retrieved_at, materialized_at)` with all three timestamps aware. A missing/invalid control marker or required timestamp is unproven; it is not permission to downgrade a controlled input to legacy. Each input must satisfy its applicable rule and have input availability at/before decision D.
+
+Three times remain separate: (1) the maximum visibility time of the selected inputs, (2) the actual time the feasibility assessment/calculation runs, and (3) the availability of any future persisted canonical revision. An offline assessment executed now may describe inputs visible at an earlier D, but its output did not exist then. No derived amounts are produced or persisted by this assessment. If a future separately authorized producer creates a canonical revision, its availability must include the actual production/materialization time and all input availability times; it must never use an old decision boundary to backdate newly produced canonical evidence. Future persisted-revision availability is therefore at least `max(all input available_at, actual materialized_at)` and must also obey that producer's public/retrieval contract. Historical public disclosure, a period end or filing date without time alone does not establish system possession. Unknown visibility fails closed.
+
+Synthetic visibility example: raw public/retrieval times are 1/2 August, so the raw input can be visible on 11 August. A controlled canonical copy materialized on 12 August is invisible on 11 August even if its source was visible. Reporting its availability as 2 August is invalid. A legacy canonical row whose established availability is 2 August retains that rule. A calculation executed on 8 October using August-visible inputs is an October assessment; any future canonical revision created on 8 October cannot become available in August.
 
 Select revisions using explicit fact-level supersession and compatible accounting basis visible at D. An amendment does not supersede every fact merely by being newer. Equivalent repeated disclosures may be deduplicated with all references retained; incompatible unresolved values or bases cause refusal. Never backdate later corrections. Cross-accession subtraction requires documented compatibility, not just matching tag strings.
 
@@ -98,7 +104,7 @@ A possible `combined cash − restricted cash` construction is a separate, unapp
 
 ## Review disposition and offline validation
 
-Validation command from repository root: `python -B backend/tests/test_track_b_accounting_construction_proposal.py`. All 14 tests passed. These are standalone standard-library tests; no app integration or production resolver is introduced. The accompanying standard-library tests exercise synthetic boundaries and refusals only. They make no database, provider or application imports and do not persist calculated amounts. They are a small executable design oracle, not a production resolver: full filing semantics, revision selection, rounding and component completeness require documentary evidence and are not inferred by these tests.
+Validation command from repository root: `python -B backend/tests/test_track_b_accounting_construction_proposal.py`. The proposal tests are a synthetic design oracle, not an application resolver. Separate feasibility and verification-runner tests use temporary synthetic databases/files only. Full filing semantics, revision selection, precision and component completeness require retained documentary metadata; missing metadata remains unproven.
 
 All eight existing preregistration groups remain **unresolved**:
 
@@ -112,3 +118,46 @@ All eight existing preregistration groups remain **unresolved**:
 8. `registration_and_holdout_controls_unlocked`
 
 Contracts A–D remain unselected, sample minima unset, validation credit zero, and model/output arrays empty. Next review must assess the proposed semantic choices and source prerequisites. The supplied report has been reconciled above; it certifies no new construction and requires no repeat of completed SEC retrievals.
+
+## Isolated proposed feasibility assessment and operator verification
+
+`app.track_b_construction_feasibility` is a separate module entry point. It is not registered with existing consumer commands and never calls a resolver, producer or provider. It reads six fixed base tables: the four existing identity/classification tables plus `sec_facts` and `canonical_factor_evidence`. It uses the existing exact-ID reconciliation to select the matched research roster; production is assessed separately against that same perimeter. Views/unsupported schemas yield unknown counters (`counts: null`), not absence zeros. Missing base tables yield observed absence in that layer only.
+
+The module computes counts, not financial amounts. Numeric stored columns are inspected inside SQL for finite-value signatures, sign and relative order; no amounts are returned to Python or subtracted/summed. Stored value disagreements are not automatically called conflicting accounting revisions. No payload, outcome, price or model tables are read. Optional retained proof fields are a proposed adapter only: no tables/columns are created or populated, and no new evidence is inferred from existing FY/FP/frame labels, amendment flags, duration lengths, matching tag names or equal numbers.
+
+The required proof fields are:
+
+| Prerequisite | Explicit retained metadata required |
+|---|---|
+| Fiscal calendar | `fiscal_year_start`, `fiscal_quarter`, all four `fiscal_quarter_end_*` dates, `duration_kind` (`ytd` or `standalone`), `fiscal_calendar_source`, `fiscal_metadata_available_at` |
+| Context | `context_scope` (`consolidated` for candidates), `context_dimensions` as explicit JSON object (including explicit `{}`), `accounting_basis`, `context_source`, `context_metadata_available_at` |
+| Revisions | `revision_set_id`, `revision_status` (`current_compatible`, `superseded`, `conflicting`), `revision_source`, `revision_metadata_available_at` |
+| Precision | `source_decimals` (integer −30 to 30 or `INF`), `precision_source`, `precision_metadata_available_at` |
+| Borrowing scope | `component_members` as unique mutually exclusive balance-portion IDs (instrument names alone are insufficient), `borrowing_universe_members` as the exhaustive obligation-ID set, `borrowing_scope_source`, `borrowing_metadata_available_at` |
+
+Proof timestamps must be aware and at/before D. A later retained proof cannot support a historical candidate. A source reference is a recorded declaration, not independent documentary certification by this command. The checked-in ingestion schema does not retain these complete proof sets; those omissions therefore produce exact missing/unproven counts, not assumed fiscal/context/component compatibility. Null source scale in the established USD raw representation is identity scale; only identity representations are compared here. Nonidentity scales remain incompatible in this implementation, even though a broader lossless-scale proposal remains available for review.
+
+Controlled canonical operation markers are projected from stored provenance inside SQL. Invalid/missing provenance is unproven. Legacy acceptance is limited to the established `milestone-37-audited-alias-contracts-1` contract; unknown contracts are not reclassified as legacy. Controlled input visibility includes actual `materialized_at`. This assessment does not recertify controlled revision/run integrity or replace the existing resolver.
+
+Report counters use these units and limits:
+
+- `row_counts` partitions relevant stored rows into visibility-unproven, post-decision, future-period and visible rows. Metadata missing/unproven counts are nonexclusive flags over visible rows, with additional visibility-failure counts. Exact concept counters are row counts, not company counts.
+- Flow candidates are distinct routes indexed by security, exact metric, compatible context/revision set, calendar and quarter. First-quarter YTD identity and reported standalone quarters are separate counters. Cumulative subtraction candidates require an adjacent compatible predecessor; decreasing capex cumulative pairs are withheld using SQL relative order. TTM candidates count distinct four-period chains; paired chains require identical context/revision basis and periods. These are prerequisite-compatible candidates, not computed or certified formulas. Annual/YTD bridge arithmetic is not separately evaluated, and no duplicate route is added to TTM counts.
+- `shape_*_pairs` count neighboring distinct 60–120-day duration shapes without certifying them. `fiscal_*_pairs` count neighboring candidate periods with retained calendar/context/revision/precision prerequisites. Neither measures gaps before/after the observed history without an approved expected history window.
+- Stored value disagreement groups, explicitly declared conflicting revision groups and unresolved multiple-revision groups are separate nonexclusive counters by security/concept/start/end. No newest-filing heuristic or invented precision tolerance is used. Multiple differing values are withheld even when their economic conflict remains unknown.
+- Borrowing counters use security/instant groups for the proposed three components. Proven overlap/disjointness of retained component sets is reported independently of proven/unknown completeness of the defined borrowing universe. Missing components are not zero-filled. Repeated equivalent disclosures are not additional obligations. Commercial paper and inclusive long-term aggregates are review concepts, never extra addends.
+- Direct cash candidate rows retain only exact `CashAndCashEquivalentsAtCarryingValue` meaning. Exact rows under `unrestricted_cash` are counted separately without promotion to draft cash. Broader/restricted cash is not accepted as direct cash. Unknown context/revisions/precision withhold compatible-candidate status, while exact source presence remains visible in its separate count.
+
+The caps are 500,000 rows per table and across both databases, 1,024 characters per projected metadata cell, 50,000 rows per period group, 50,000 work units per layer, and 128 KiB compact UTF-8 report bytes. SQL uses a dedicated read-only connection with 128 MB memory, one thread and no disk spill. Any exceeded cap or hash failure fails closed; counts are never sampled to fit a bound. Both database before/after hashes are attempted independently, including failures. No successful report is returned if either fingerprint is missing or changed. These are explicit work/data caps, not a fixed wall-clock guarantee.
+
+For Windows PowerShell 5.1, check out PR #96's branch and stop concurrent database writers, then run:
+
+```powershell
+& .\scripts\track-b-constructions-verify.ps1 -Repo "C:\Users\Juan Estrada\Projects\SignalLens"
+```
+
+The complete script runs only the three relevant offline test modules, then assesses the two established boundaries (`2026-10-04T21:30:00+00:00` and `2026-10-05T00:30:00+00:00`) and repeats each to check counts/invariants. Execution timestamps remain in every saved report; only those timestamps and the resulting serialized byte-count differences are excluded from repeat equality. It saves UTF-8 without BOM `track-b-constructions-0.json`, `track-b-constructions-1.json` and `track-b-constructions-verification.json` under `backend/data/research/reports`. Report files are diagnostics, not persisted canonical/derived accounting evidence.
+
+`-SkipOfflineTests` skips tests only; `-ResearchDb`, `-ProductionDb`, `-Python` and `-Reports` override paths. Both external before/after fingerprints are checked independently in cleanup, including test, command, parse, invariant, repeat and save failures. Command output and reports have byte caps. A failure summary returns nonzero and fixed safe reason codes; raw exception text/payloads are not printed. Diagnostic reports are saved only after the external hashes pass. Existing files from an earlier run may remain after failure: interpret them only with the latest successful verification summary and matching fingerprints/boundaries.
+
+Development validation: 52 focused proposal/feasibility/verifier tests passed; related gap, history and source-integrity regressions also passed. All development fixtures are synthetic temporary files. Exercising the exact embedded Python payload is not Windows PowerShell 5.1 execution or operator verification. The existing attached gap report does not contain the proof/value-signature information needed for new feasibility counts. Actual operator feasibility counts remain unmeasured until this isolated verifier is run against the stored databases; the historical observed counts above are not relabelled as feasibility results. All constructions and eight preregistration groups remain unapproved/unresolved.
