@@ -66,6 +66,12 @@ jobs:
       - name: Run backup tests against Windows _commit
         run: python -m pytest -vv tests/test_database_backup.py
 
+      - name: Run offline prototype tests in PowerShell 5.1
+        shell: powershell
+        run: |
+          python -m pytest -q tests/test_prototype.py
+          if ($LASTEXITCODE -ne 0) { throw "Offline prototype tests failed" }
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-24.04
@@ -90,6 +96,19 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+
+      - name: Set up Python for offline UI workflow
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install backend dependencies for offline UI workflow
+        run: |
+          python -m venv ../.venv
+          ../.venv/bin/python -m pip install -r ../backend/requirements.txt
+
+      - name: Run frontend and offline UI workflow tests
+        run: npm test
 
       - name: Run lint
         run: npm run lint

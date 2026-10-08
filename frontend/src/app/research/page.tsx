@@ -20,7 +20,7 @@ export default function ResearchPage() {
     setBrief(await response.json());
   }
   const pct = (v: unknown) => typeof v === "number" ? `${(v*100).toFixed(1)}%` : "Unavailable";
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Company research</strong><Link href="/">Research view</Link></nav>
+  return <main className="research-page"><nav><span className="mark">SL</span><strong>Company research</strong><Link href="/">Research view</Link><Link href="/prototype">Unvalidated prototype</Link></nav>
     <section className="hero compact"><p className="eyebrow">EXPLAINABLE · POINT IN TIME · READ ONLY</p><h1>What was known,<br/><span>and why it mattered.</span></h1><p className="lede">Deterministic finance-language context from registered evidence. No generated claims or predictions.</p></section>
     <form className="panel research-form" onSubmit={load}><label>Exchange-qualified symbol<input required maxLength={40} placeholder="AAPL.US" value={symbol} onChange={e=>setSymbol(e.target.value)}/></label><label>Known-at timestamp (UTC)<input required type="datetime-local" value={decision} onChange={e=>setDecision(e.target.value)}/></label><button>View read-only brief</button></form>
     {error && <p className="notice warning">{error}</p>}

@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from .prototype.api import router as prototype_router
 from .config import get_settings
 from .evidence import EvidenceRepository, EvidenceType
 from .fred_macro import FRED_SERIES
@@ -82,6 +83,7 @@ from .financial_strength import (aggregate_evidence_audit as financial_strength_
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
+app.include_router(prototype_router)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True,
                    allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["*"])
 
