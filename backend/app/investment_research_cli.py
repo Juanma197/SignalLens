@@ -25,8 +25,10 @@ from .financial_strength import (
 )
 from .track_b_panel import assessment as track_b_preregistration_assessment
 from .track_b_history import inventory as track_b_historical_evidence_inventory
+from .track_b_gaps import diagnose as track_b_identity_accounting_gap_diagnostic
 
-COMMANDS={"track-b-historical-evidence-inventory":track_b_historical_evidence_inventory,
+COMMANDS={"track-b-identity-accounting-gap-diagnostic":track_b_identity_accounting_gap_diagnostic,
+          "track-b-historical-evidence-inventory":track_b_historical_evidence_inventory,
           "track-b-preregistration-assessment":track_b_preregistration_assessment,
           "investment-grade-coverage-audit":coverage_audit,
           "plan-investment-data-repair":repair_plan,
