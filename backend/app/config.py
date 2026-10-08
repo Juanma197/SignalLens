@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:3000"
     database_path: Path = Path("data/signallens.duckdb")
     research_database_path: Path = Path("data/research/signallens-research.duckdb")
+    # Separate store for the unvalidated prototype's watchlist, notes and snapshots.
+    prototype_database_path: Path = Path("data/prototype/signallens-prototype.duckdb")
+    # Off by default; when on, only the prototype store accepts writes in staging mode.
+    prototype_writes_enabled: bool = False
     persistent_volume_path: Path | None = None
     backup_path: Path = Path("/data/backups")
     backup_retention_count: int = 3
@@ -51,6 +55,8 @@ class Settings(BaseSettings):
         production = self.database_path.expanduser().resolve()
         if research == production:
             raise ValueError("research and production database paths must be distinct")
+        if self.prototype_database_path.expanduser().resolve() in {research, production}:
+            raise ValueError("the prototype database path must differ from both protected databases")
         if environment == "staging":
             volume = (self.persistent_volume_path or Path("/data")).expanduser().resolve()
             if not research.is_relative_to(volume) or not production.is_relative_to(volume):

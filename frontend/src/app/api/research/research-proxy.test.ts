@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {setTimeout as delay} from "node:timers/promises";
 import {NextRequest} from "next/server";
-import {GET, MODEL_LABORATORY_TIMEOUT_MS, timeoutForResearchPath} from "./[...path]/route";
+import {GET, MODEL_LABORATORY_TIMEOUT_MS, POST, timeoutForResearchPath} from "./[...path]/route";
 
 test("a response taking more than 15 seconds succeeds within the Model Laboratory timeout",async t=>{
   const originalFetch=globalThis.fetch;
@@ -32,3 +32,16 @@ test("API authentication is forwarded to the Model Laboratory backend",async t=>
 });
 
 const json=(body:unknown)=>new Response(JSON.stringify(body),{headers:{"Content-Type":"application/json"}});
+
+test("POST is forwarded only for the prototype store",async t=>{
+  const originalFetch=globalThis.fetch;
+  t.after(()=>{globalThis.fetch=originalFetch});
+  const targets:string[]=[];
+  globalThis.fetch=async(input)=>{targets.push(String(input));return json({ok:true})};
+  const post=(segments:string[])=>POST(new NextRequest(`https://frontend.example/api/research/${segments.join("/")}`,{method:"POST",body:"{}"}),{params:Promise.resolve({path:segments})});
+  assert.equal((await post(["prototype","roster"])).status,405);
+  assert.equal((await post(["model-laboratory","preview"])).status,405);
+  assert.equal(targets.length,0);
+  assert.equal((await post(["prototype","store","notes"])).status,200);
+  assert.match(targets[0],/\/api\/v1\/research\/prototype\/store\/notes$/);
+});

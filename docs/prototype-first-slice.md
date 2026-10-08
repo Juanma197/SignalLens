@@ -138,18 +138,45 @@ it runs in Linux CI, not in this Windows verifier.
 `frontend/AGENTS.md`/`CLAUDE.md`; `next build` rewrites `next-env.d.ts` back. These are
 generated files, not prototype changes.
 
+## Slice 2: watchlist, notes, monthly snapshots and follow-up
+
+Pages: `/prototype/watchlist`, `/prototype/snapshots`, `/prototype/snapshots/<id>`,
+and a "Watchlist and notes" panel on every company page.
+
+- **Separate store**: `backend\data\prototype\signallens-prototype.duckdb`
+  (`SIGNALLENS_PROTOTYPE_DATABASE_PATH`; Git-ignored). It must differ from the
+  research and production paths; those two are never opened for writing.
+- **Writes are opt-in**: `SIGNALLENS_PROTOTYPE_WRITES_ENABLED=true` allows POST to
+  `/api/v1/research/prototype/store/*` only, even in staging mode; every other write
+  is still refused. The frontend forwards POST only for those paths. The start
+  script enables it; in synthetic mode the store is a temporary file.
+- **Append-only**: watchlist add/remove are events; notes cannot be edited (a
+  correction is a new note). There is no update or delete code.
+- **Snapshots**: one per calendar month of the cutoff, frozen as the full assessed
+  report (membership, results, eligibility decisions, evidence references and
+  configuration hash) with a SHA-256 checked on every read. The cutoff must be in
+  the past and no more than 14 days before recording; missed months are never
+  backfilled. The 15 members are frozen with the results in one record.
+- **Follow-up**: return from the snapshot's decision session to exactly the 21st,
+  63rd, 126th and 252nd derived US session after it, using stored adjusted closes
+  (both endpoints from the current series, since later retrievals can re-adjust
+  history). Unreached checkpoints are `pending`; a missing price is `missing_price`
+  (possibly a halt or delisting), never filled. The averages of the results and of
+  all members are shown for comparison. Description only; zero validation credit.
+
+Verified on 2026-10-08 against the operator databases with a temporary store:
+snapshot 2026-10 recorded (15 members, 3 results, integrity verified); a second
+October snapshot and a 37-day-old cutoff were refused; watchlist and notes round-
+tripped through the web proxy; tracking is `pending` because stored prices end on
+the decision session (2026-09-25). Protected database hashes unchanged.
+
 ## Remaining work
 
-1. Review the 32 eligible companies and 15 proposed members; freeze membership
-   explicitly in a later slice.
-2. Separate prototype database with isolated migrations: durable-ID watchlist and
-   notes, immutable monthly snapshots (configuration, eligibility decisions and
-   evidence references).
-3. Prospective exact-session tracking at 21/63/126/252 sessions with explicit
-   missing/delisting/action states; validation credit stays zero.
-4. Fresh prices are needed for a current-month shortlist (separate, approved
-   acquisition work). Corporate-action coverage for the 39 `coverage_missing`
-   companies would widen the eligible pool.
+1. Fresh prices for a current-month shortlist and for tracking to advance
+   (operator-run acquisition with the existing ingestion). Corporate-action
+   coverage for the 39 `coverage_missing` companies would widen the eligible pool.
+2. Structured company research: business and financial health, why it might be
+   cheap, catalysts, downside case and what would invalidate the thesis.
 
 Historical backfills, accounting constructions, PR #96 expansion, scoring weights
 and further audit tooling remain deferred.

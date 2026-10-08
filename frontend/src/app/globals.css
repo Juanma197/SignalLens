@@ -190,4 +190,9 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; }
 .prototype-fact { border-top:1px solid var(--line); padding:12px 0; }
 .prototype-fact h3 { font-size:22px; margin:12px 0; }
 .prototype-panel code { white-space:normal; overflow-wrap:anywhere; font-size:12px; }
+.prototype-notes { list-style:none; padding:0; }
+.prototype-notes li { border-top:1px solid var(--line); padding:10px 0; }
+.prototype-notes p { margin:6px 0 0; white-space:pre-wrap; }
+.prototype-note-form { display:grid; gap:12px; margin:18px 0; }
+.prototype-note-form textarea { width:100%; font:inherit; }
 @media (max-width:760px) { .prototype-cards { grid-template-columns:1fr; } .prototype-cards article { border-right:0; border-bottom:1px solid var(--line); } }
