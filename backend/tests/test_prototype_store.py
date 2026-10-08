@@ -1,6 +1,8 @@
 """Separate prototype store, immutable snapshots and descriptive tracking (offline)."""
 from datetime import datetime, timedelta, timezone
 
+from pathlib import Path
+
 import duckdb
 from fastapi.testclient import TestClient
 import pandas as pd
@@ -14,8 +16,8 @@ from app.prototype.tracking import track
 
 
 @pytest.fixture
-def paths(tmp_path):
-    research, production = create_fixture(tmp_path / 'new-synthetic-fixture')
+def paths(prototype_fixture, tmp_path):
+    research, production = (Path(p) for p in prototype_fixture)
     return research, production, tmp_path / 'prototype' / 'signallens-prototype.duckdb'
 
 
