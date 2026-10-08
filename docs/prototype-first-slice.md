@@ -1,7 +1,7 @@
 # First slice: unfrozen 15-company research prototype
 
 The `/prototype` shortlist and `/prototype/company/<durable-id>` detail pages
-use a separate `research-prototype` namespace, version `momentum-prototype-1.1.0`.
+use a separate `research-prototype` namespace, version `momentum-prototype-1.2.0`.
 Every result is **UNVALIDATED RESEARCH PROTOTYPE — ZERO VALIDATION CREDIT**.
 This is a 126-session price-behaviour baseline with no scoring weights. It does
 not infer undervaluation, quality, predicted growth or investment conviction.
@@ -182,6 +182,51 @@ from the stored facts. Each save is a new immutable version in `research_theses`
 (prototype store); earlier versions stay visible, so the thesis held at any
 snapshot can be reviewed later. The watchlist shows each company's current
 thesis status. A store created before this slice gains the table on its next write.
+
+## Universe corrections (version momentum-prototype-1.2.0)
+
+Three more eligibility gates, applied before the hash order (never using returns):
+
+- **Size**: market cap must be $300M to $10B. Market cap = latest visible
+  `dei:EntityCommonStockSharesOutstanding` from the SEC companyfacts documents
+  retained by the liquidity run (10-K/10-Q cover pages; share counts from one filing
+  are summed and flagged, because class detail is not stored) x unadjusted close on
+  the decision session. `sec_facts` holds no share counts. Each document is parsed
+  one at a time in Python (several MB each; parsing them in SQL exceeded the 256 MB
+  limit) and used only if its bytes match the stored SHA-256 and byte count. An
+  entry is known from the later of its filing day (end of day UTC) and retrieval. Share counts older than 550 days, ambiguous across filings or
+  missing give `market_cap_unavailable`. Shown with its inputs as a calculation,
+  not a quoted market value.
+- **Industry**: SIC code from the SEC submissions documents already retained by
+  the controlled liquidity run (`sec_liquidity_raw_provenance`, read in SQL so the
+  payload is never projected), visible from its retrieval time and matched on
+  CIK. SIC 6000-6799 (banks, credit, brokers, insurance, real estate, REITs,
+  holding and investment offices) gives `specialist_sector_excluded`. Missing,
+  not-yet-visible or mismatched records give `industry_classification_unavailable`.
+  No new SEC requests are made.
+- **Partnerships**: a listing or SEC name ending in "LP"/"L.P." or containing
+  "Partners" gives `partnership_units_excluded`.
+
+- **Coverage extension**: a stored corporate-action coverage record that ends
+  inside the price window (the operator records end on 2026-10-02) is extended to
+  the window end only by a completed EODHD `refresh` checkpoint for the symbol,
+  recorded after 22:00 UTC on the last window session and by the cutoff. That
+  refresh fetched prices and dividends through its run date, the same provider
+  evidence the stored record was built from; splits remain provider-unsupported in
+  both, and the price-discontinuity check still applies. `verified_no_action` is a
+  claim only up to the stored record's end. Companies whose record is
+  `coverage_missing` are not extended. Re-materializing coverage was rejected
+  because that operation also writes classification and canonical factor evidence.
+
+Operator result (read-only, cutoff 2026-10-08T16:54Z, after a partial refresh
+with 17 US securities still pending): 12 eligible, 12 proposed, 3 results: NSP.US
+(+90.7%), NEU.US (+41.3%), OPLN.US (+16.2%). Withheld: 45 coverage missing or
+incomplete, 26 market cap unavailable, 18 outside the band, 16 specialist sector,
+13 missing session prices, 3 price discontinuity, 1 partnership, 1 industry
+unavailable. Both protected database hashes unchanged.
+
+The version change also changes the membership hash seed, so the proposed 15
+differ from version 1.1.0; nothing had been frozen under the earlier version.
 
 ## Remaining work
 

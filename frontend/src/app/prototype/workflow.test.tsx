@@ -90,3 +90,15 @@ test("thesis versions render as labelled interpretation and assumptions, newest 
   assert.match(html,/Makes &lt;b&gt;widgets&lt;\/b&gt;\./);
   assert.doesNotMatch(html,/Why it might be cheap/);
 });
+
+test("shortlist and company pages show market cap and industry with their inputs",()=>{
+  const roster=renderToStaticMarkup(<RosterView report={ready}/>);
+  assert.match(roster,/\$1\.0\dB market cap · General Industrial Machinery/);
+  const company=ready.companies.find(c=>c.security_id===ready.results[0])!;
+  const detail:Detail={notice:ready.notice,version:ready.version,decision_at:ready.decision_at,blockers:[],membership_state:ready.membership_state,synthetic_fixture:true,company,proposed_member:true,qualifying_result:true};
+  const html=renderToStaticMarkup(<CompanyView detail={detail}/>);
+  assert.match(html,/Size and industry/);
+  assert.match(html,/10,000,000 shares × \$/);
+  assert.match(html,/SIC 3560/);
+  assert.match(html,/not a quoted market value/);
+});

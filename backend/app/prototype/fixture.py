@@ -4,7 +4,9 @@ Reuses existing schemas. Never opens an existing database, downloads evidence,
 or pretends these invented companies are the operator's actual eligible roster.
 """
 import argparse
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+import hashlib
+import json
 from pathlib import Path
 import tempfile
 
@@ -15,6 +17,11 @@ from ..global_universe import SCHEMA_SQL as UNIVERSE_SCHEMA
 from ..global_market_data import PRICE_SCHEMA_SQL as MARKET_SCHEMA
 from ..sec_ingestion import SCHEMA as SEC_SCHEMA
 from ..investment_evidence import SCHEMA as EVIDENCE_SCHEMA
+from ..sec_liquidity_ingestion import SCHEMA as LIQUIDITY_SCHEMA
+
+# Only the retained-payload table is needed; it holds SEC submissions documents.
+RAW_PROVENANCE_SCHEMA = next(line for line in LIQUIDITY_SCHEMA.splitlines()
+                             if line.startswith('CREATE TABLE IF NOT EXISTS sec_liquidity_raw_provenance'))
 
 DECISION = datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc)
 
@@ -43,7 +50,7 @@ def create_fixture(folder, count=18):
         db.execute('CREATE TABLE fixture_marker(label VARCHAR)')
         db.execute("INSERT INTO fixture_marker VALUES ('SYNTHETIC ONLY')")
     with duckdb.connect(str(research)) as db:
-        db.execute(UNIVERSE_SCHEMA + MARKET_SCHEMA + SEC_SCHEMA + EVIDENCE_SCHEMA)
+        db.execute(UNIVERSE_SCHEMA + MARKET_SCHEMA + SEC_SCHEMA + EVIDENCE_SCHEMA + RAW_PROVENANCE_SCHEMA)
         insert(db, 'security_master_retrievals', dict(retrieval_id='fixture', provider='offline', source_label='SYNTHETIC', retrieved_at=naive, status='completed', content_hash='fixture', listing_count=count))
         for i in range(count):
             sid, symbol, issuer = f'synthetic-{i:02}', f'SYN{i:02}.US', f'{i+100:010}'
@@ -56,6 +63,12 @@ def create_fixture(folder, count=18):
             insert(db, 'corporate_action_coverage_evidence', dict(evidence_key=f'action-{i}', security_id=sid, qualified_symbol=symbol, coverage_state='verified_no_action', assessed_from=dates[0], assessed_to=dates[-1], source_identifier='offline-synthetic-checkpoint', public_at=known, retrieved_at=known, available_at=known, materialized_at=known, provenance='{}'))
             accession = f'{issuer}-26-000001'
             insert(db, 'sec_facts', dict(fact_key=f'fact-{i}', security_id=sid, qualified_symbol=symbol, ticker=f'SYN{i:02}', cik=issuer, taxonomy='us-gaap', concept='CashAndCashEquivalentsAtCarryingValue', value=1000000+i, unit='USD', currency='USD', period_end=datetime(2026,6,30).date(), form='10-Q', accession_number=accession, public_at=known, is_amendment=False, is_revision=False, source_endpoint=f'https://data.sec.gov/api/xbrl/companyfacts/CIK{issuer}.json', retrieved_at=known))
+            # Cover-page share count in a retained companyfacts document: ~10M shares x ~$100 = ~$1B.
+            facts = json.dumps({'cik': int(issuer), 'facts': {'dei': {'EntityCommonStockSharesOutstanding': {'units': {'shares': [
+                {'accn': accession, 'end': '2026-07-25', 'filed': '2026-07-28', 'form': '10-Q', 'val': 10000000}]}}}}}, sort_keys=True, separators=(',', ':'))
+            insert(db, 'sec_liquidity_raw_provenance', dict(evidence_key=f'companyfacts-{i}', operation_type='offline-synthetic', operation_contract_version='synthetic', concept_contract_hash='synthetic', lineage_id='synthetic', run_id='synthetic', plan_id='synthetic', security_id=sid, cik=issuer, endpoint_class='companyfacts', retrieved_at=known, response_sha256=hashlib.sha256(facts.encode()).hexdigest(), byte_count=len(facts), content_type='application/json', payload_json=facts, parser_version='synthetic'))
+            payload = json.dumps({'cik': issuer, 'name': f'SYNTHETIC COMPANY {i:02} INC', 'sic': '3560', 'sicDescription': 'General Industrial Machinery & Equipment', 'entityType': 'operating'}, sort_keys=True)
+            insert(db, 'sec_liquidity_raw_provenance', dict(evidence_key=f'submissions-{i}', operation_type='offline-synthetic', operation_contract_version='synthetic', concept_contract_hash='synthetic', lineage_id='synthetic', run_id='synthetic', plan_id='synthetic', security_id=sid, cik=issuer, endpoint_class='submissions', retrieved_at=known, response_sha256=hashlib.sha256(payload.encode()).hexdigest(), byte_count=len(payload), content_type='application/json', payload_json=payload, parser_version='synthetic'))
     return research, production
 
 

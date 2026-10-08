@@ -59,7 +59,7 @@ def test_roster_screen_citations_and_immutable_files(paths, monkeypatch):
 def test_membership_does_not_depend_on_momentum_or_financial_amounts(paths):
     before = run(paths)
     change(paths, 'UPDATE global_price_observations SET adjusted_close=100,close=100,open=100,high=101,low=99')
-    change(paths, 'UPDATE sec_facts SET value=value*100')
+    change(paths, "UPDATE sec_facts SET value=value*100 WHERE taxonomy='us-gaap'")
     after = run(paths)
     assert before['proposed_membership'] == after['proposed_membership']
     assert before['eligible_roster'] == after['eligible_roster']
@@ -89,9 +89,21 @@ def test_future_returns_and_late_evidence_do_not_choose_members(paths):
     ("UPDATE corporate_action_coverage_evidence SET assessed_from=DATE '2026-09-01' WHERE security_id='synthetic-00'", 'corporate_action_coverage_missing_or_incomplete'),
     ("UPDATE corporate_action_coverage_evidence SET coverage_state='unresolved_action' WHERE security_id='synthetic-00'", 'unresolved_or_conflicting_corporate_action_coverage'),
     ("UPDATE sec_facts SET retrieved_at=TIMESTAMPTZ '2026-10-02 00:00:00Z' WHERE security_id='synthetic-00'", 'no_usable_direct_financial_evidence'),
-    ("UPDATE sec_facts SET unit='EUR' WHERE security_id='synthetic-00'", 'no_usable_direct_financial_evidence'),
-    ("UPDATE sec_facts SET value=-1 WHERE security_id='synthetic-00'", 'no_usable_direct_financial_evidence'),
-    ("UPDATE sec_facts SET source_endpoint='https://unsafe.example' WHERE security_id='synthetic-00'", 'no_usable_direct_financial_evidence'),
+    ("UPDATE sec_facts SET unit='EUR' WHERE security_id='synthetic-00' AND taxonomy='us-gaap'", 'no_usable_direct_financial_evidence'),
+    ("UPDATE sec_facts SET value=-1 WHERE security_id='synthetic-00' AND taxonomy='us-gaap'", 'no_usable_direct_financial_evidence'),
+    ("UPDATE sec_facts SET source_endpoint='https://unsafe.example' WHERE security_id='synthetic-00' AND taxonomy='us-gaap'", 'no_usable_direct_financial_evidence'),
+    ("UPDATE sec_liquidity_raw_provenance SET payload_json=replace(payload_json,'\"3560\"','\"6798\"') WHERE security_id='synthetic-00'", 'specialist_sector_excluded'),
+    ("UPDATE sec_liquidity_raw_provenance SET payload_json=replace(payload_json,'\"3560\"','\"6021\"') WHERE security_id='synthetic-00'", 'specialist_sector_excluded'),
+    ("UPDATE security_listings SET company_name='Synthetic Royalty Partners LP' WHERE security_id='synthetic-00'", 'partnership_units_excluded'),
+    ("DELETE FROM sec_liquidity_raw_provenance WHERE security_id='synthetic-00'", 'industry_classification_unavailable'),
+    ("UPDATE sec_liquidity_raw_provenance SET retrieved_at=TIMESTAMPTZ '2026-10-02 00:00:00Z' WHERE security_id='synthetic-00'", 'industry_classification_unavailable'),
+    ("UPDATE sec_liquidity_raw_provenance SET cik='0000009999' WHERE security_id='synthetic-00'", 'industry_classification_unavailable'),
+    ("DELETE FROM sec_liquidity_raw_provenance WHERE security_id='synthetic-00' AND endpoint_class='companyfacts'", 'market_cap_unavailable'),
+    ("UPDATE sec_liquidity_raw_provenance SET payload_json=replace(payload_json,'\"val\":10000000','\"val\":1000000000') WHERE security_id='synthetic-00' AND endpoint_class='companyfacts'; UPDATE sec_liquidity_raw_provenance SET response_sha256=sha256(payload_json), byte_count=strlen(payload_json) WHERE endpoint_class='companyfacts'", 'market_cap_outside_band'),
+    ("UPDATE sec_liquidity_raw_provenance SET payload_json=replace(payload_json,'\"val\":10000000','\"val\":1000000') WHERE security_id='synthetic-00' AND endpoint_class='companyfacts'; UPDATE sec_liquidity_raw_provenance SET response_sha256=sha256(payload_json), byte_count=strlen(payload_json) WHERE endpoint_class='companyfacts'", 'market_cap_outside_band'),
+    ("UPDATE sec_liquidity_raw_provenance SET payload_json=replace(payload_json,'\"end\":\"2026-07-25\",\"filed\":\"2026-07-28\"','\"end\":\"2024-01-01\",\"filed\":\"2024-01-05\"') WHERE security_id='synthetic-00' AND endpoint_class='companyfacts'; UPDATE sec_liquidity_raw_provenance SET response_sha256=sha256(payload_json), byte_count=strlen(payload_json) WHERE endpoint_class='companyfacts'", 'market_cap_unavailable'),
+    ("UPDATE sec_liquidity_raw_provenance SET payload_json=replace(payload_json,'\"filed\":\"2026-07-28\"','\"filed\":\"2026-10-05\"') WHERE security_id='synthetic-00' AND endpoint_class='companyfacts'; UPDATE sec_liquidity_raw_provenance SET response_sha256=sha256(payload_json), byte_count=strlen(payload_json) WHERE endpoint_class='companyfacts'", 'market_cap_unavailable'),
+    ("UPDATE sec_liquidity_raw_provenance SET payload_json=replace(payload_json,'\"form\":\"10-Q\"','\"form\":\"8-K\"') WHERE security_id='synthetic-00' AND endpoint_class='companyfacts'; UPDATE sec_liquidity_raw_provenance SET response_sha256=sha256(payload_json), byte_count=strlen(payload_json) WHERE endpoint_class='companyfacts'", 'market_cap_unavailable'),
 ])
 def test_exact_company_blockers(paths,sql,reason):
     change(paths, sql); r = run(paths); c = company(r)
@@ -257,3 +269,47 @@ def test_quarter_and_year_to_date_at_one_end_are_shown_separately_never_combined
         change(paths, f"INSERT INTO sec_facts SELECT fact_key||'-{key}',security_id,qualified_symbol,ticker,cik,taxonomy,'Revenues',{value},unit,currency,DATE '{start}',period_end,fiscal_year,fiscal_period,frame,form,accession_number,filed_date,public_at,is_amendment,is_revision,source_endpoint,retrieved_at FROM sec_facts WHERE security_id='synthetic-00'")
     revenue = [f for f in company(run(paths))['direct_evidence'] if f['field'] == 'revenue']
     assert [(f['reported_start'], f['reported_days'], f['value']) for f in revenue] == [('2026-04-01', 91, 50.0), ('2026-01-01', 181, 90.0)]
+
+
+def test_size_and_industry_are_shown_with_their_inputs(paths):
+    c = company(run(paths), 5)
+    size, industry = c['size'], c['industry']
+    assert size['shares_outstanding'] == 10_000_000 and size['share_classes_summed'] == 1
+    assert size['market_cap_usd'] == pytest.approx(10_000_000 * size['close'])
+    assert size['close_session'] == c['calculation']['end_session'] and size['band_usd'] == [300_000_000, 10_000_000_000]
+    assert industry['sic'] == 3560 and industry['entity_type'] == 'operating' and len(industry['response_sha256']) == 64
+    # Two classes in one filing are summed and flagged as a risk.
+    second = '{"accn":"0000000105-26-000001","end":"2026-07-25","filed":"2026-07-28","form":"10-Q","val":2000000}'
+    change(paths, "UPDATE sec_liquidity_raw_provenance SET payload_json=replace(payload_json,'\"val\":10000000}','\"val\":10000000},'||?) WHERE security_id='synthetic-05' AND endpoint_class='companyfacts'", [second])
+    change(paths, "UPDATE sec_liquidity_raw_provenance SET response_sha256=sha256(payload_json), byte_count=strlen(payload_json) WHERE endpoint_class='companyfacts'")
+    c = company(run(paths), 5)
+    assert c['size']['shares_outstanding'] == 12_000_000 and c['size']['share_classes_summed'] == 2
+    assert any('share counts' in r for r in c['risks'])
+
+
+def test_coverage_record_ending_early_is_extended_only_by_a_completed_refresh_after_the_close(paths):
+    # Stored record ends 3 sessions before the window end, as after a price refresh.
+    change(paths, "UPDATE corporate_action_coverage_evidence SET assessed_to=DATE '2026-09-25' WHERE security_id='synthetic-00'")
+    assert 'corporate_action_coverage_missing_or_incomplete' in company(run(paths))['reasons']
+    change(paths, "CREATE TABLE eodhd_ingestion_checkpoints(stage VARCHAR, qualified_symbol VARCHAR, status VARCHAR, error_code VARCHAR, updated_at TIMESTAMP)")
+    for status, at, ok in (('pending', '2026-09-30 22:30:00', False),
+                           ('completed', '2026-09-30 21:59:00', False),   # before the last session closed
+                           ('completed', '2026-10-01 00:30:00', False),   # after the cutoff
+                           ('completed', '2026-09-30 22:30:00', True)):
+        change(paths, "DELETE FROM eodhd_ingestion_checkpoints")
+        change(paths, "INSERT INTO eodhd_ingestion_checkpoints VALUES ('refresh','SYN00.US',?,NULL,?)", [status, at])
+        c = company(run(paths))
+        assert c['eligible'] is ok, (status, at, c['reasons'])
+    assert c['action_coverage']['extension']['stored_record_through'] == '2026-09-25'
+    # A dividend after the stored record's end does not contradict verified_no_action ...
+    change(paths, "INSERT INTO global_corporate_actions VALUES ('SYN00.US',DATE '2026-09-29','cash_distribution',0.5,'USD','offline-synthetic',TIMESTAMP '2026-09-30 22:00:00')")
+    assert company(run(paths))['eligible']
+    # ... but one inside the stored record's claimed no-action range does.
+    change(paths, "INSERT INTO global_corporate_actions VALUES ('SYN00.US',DATE '2026-09-24','cash_distribution',0.5,'USD','offline-synthetic',TIMESTAMP '2026-09-30 22:00:00')")
+    assert 'corporate_action_coverage_event_conflict' in company(run(paths))['reasons']
+
+
+def test_edited_payload_without_matching_hash_is_not_used(paths):
+    change(paths, "UPDATE sec_liquidity_raw_provenance SET payload_json=replace(payload_json,'\"val\":10000000','\"val\":20000000') WHERE security_id='synthetic-00' AND endpoint_class='companyfacts'")
+    c = company(run(paths))
+    assert 'market_cap_unavailable' in c['reasons'] and c['size'] is None
