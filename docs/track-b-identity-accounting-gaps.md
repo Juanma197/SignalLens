@@ -302,3 +302,35 @@ and focused runner capture, launch/JSON/schema/output failures and hash cleanup
 using synthetic files only. These are route tests, not a reproduction of the
 unknown operator cause. Once operator stage/reason/count evidence identifies that
 cause, reproduce the exact case offline before proposing its fix in this PR.
+
+### Operator-confirmed oversized SEC operation metadata
+
+The operator's focused summary for d5ffd217 confirms `METADATA_CELL_LIMIT` at
+`research.sec_liquidity_runs.cell_count` at both boundaries: one stored row,
+six projected columns, one oversized row, and the unchanged 1,024-character
+limit. Internal and external after-fingerprints succeeded for both databases.
+The later generic failure event at `production.fingerprint.after` is an exception
+summary after cleanup, not evidence of a second fingerprint failure.
+
+The supplied aggregate does not identify which of the six columns is oversized
+or its actual length. Offline fixtures reproduce exactly that guard and those
+four counts using a 1,025-character cell, separately for each possible column.
+The 1,025 fixture length is not asserted to be the operator's length. No field
+is presumed to be the cause and no limit, validation or adapter is relaxed.
+
+Only when the internal trace is enabled and the existing guard has already
+failed, one SQL aggregate returns per-column oversized-row counts and maximum
+character lengths. `METADATA_CELL_COLUMN_LIMIT` names the column through a fixed
+allowlisted stage, with integer counts; rejected values never leave SQL.
+`METADATA_CELL_DETAILS_UNAVAILABLE` preserves the original guard/public code if
+optional detail aggregation fails. The ordinary public CLI performs no extra
+query. Existing memory, row, cell, trace event and UTF-8 byte budgets are unchanged.
+
+Use `scripts/track-b-gaps-diagnose.ps1 -CellLengthsOnly` for the next operator
+check: Python stdin, no tests, subprocesses, boundary reruns, accounting tables
+or provider calls. The shared bounded reader inspects only the research
+`sec_liquidity_runs` base table through a read-only connection. Both external
+hashes are checked in cleanup; safe UTF-8 output is saved as
+`backend/data/research/reports/track-b-gaps-cell-lengths-summary.json`. An expected
+cell rejection still returns failure and verification remains false. The new
+column evidence is required before choosing a bounded representation change.

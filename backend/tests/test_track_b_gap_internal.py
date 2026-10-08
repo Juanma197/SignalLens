@@ -187,3 +187,96 @@ def test_chain_failure_keeps_other_public_contract(tmp_path,monkeypatch):
     result=traced(paths)
     assert result['public_error_code']=='TRACK_B_HISTORY_INVENTORY_FAILED'
     assert 'CHAIN_WORK_LIMIT' in {e['reason_code'] for e in result['events']}
+
+
+@pytest.mark.parametrize('column',g.IDENTITY_KEYS)
+def test_confirmed_operator_guard_each_possible_column(tmp_path,column):
+    """Reproduce confirmed table/guard/counts without guessing its column."""
+    from test_track_b_gaps import create, add
+    paths=(tmp_path/'research.duckdb',tmp_path/'production.duckdb')
+    with duckdb.connect(str(paths[1])): pass
+    with duckdb.connect(str(paths[0])) as db:
+        create(db,'sec_liquidity_runs')
+        row={key:'bounded' for key in g.IDENTITY_KEYS}
+        row[column]='PRIVATE'+('x'*1018)  # 1025 characters; actual bound unchanged.
+        add(db,'sec_liquidity_runs',**row)
+    result=traced(paths); check(result,'METADATA_CELL_LIMIT')
+    assert result['events'][-1]['stage']=='internal'
+    guard=next(e for e in result['events'] if e['reason_code']=='METADATA_CELL_LIMIT')
+    assert guard['stage']=='research.sec_liquidity_runs.cell_count'
+    assert guard['counts']=={'row_count':1,'projected_column_count':6,
+        'oversized_row_count':1,'cell_character_limit':1024}
+    details=[e for e in result['events'] if e['reason_code']=='METADATA_CELL_COLUMN_LIMIT']
+    assert len(details)==1
+    assert details[0]['stage']=='research.sec_liquidity_runs.cell_count.'+column
+    assert details[0]['counts']['maximum_cell_characters']==1025
+    assert sum(e['reason_code']=='FINGERPRINT_AFTER_OK' for e in result['events'])==2
+    with pytest.raises(g.GapDiagnosticError): run(paths)
+
+
+def test_optional_cell_detail_failure_keeps_original_guard(tmp_path,monkeypatch):
+    paths=fixture(tmp_path); original=g._read
+    class Proxy:
+        def __init__(self,db): self.db=db
+        def execute(self,sql,args=None):
+            if 'FILTER (WHERE' in sql: raise duckdb.OutOfMemoryException('PRIVATE')
+            return self.db.execute(sql,args) if args is not None else self.db.execute(sql)
+    def read(db,table,database='research'):
+        return original(Proxy(db),table,database)
+    monkeypatch.setattr(g,'_read',read); monkeypatch.setattr(g,'MAX_CELL_CHARS',1)
+    result=traced(paths); check(result,'METADATA_CELL_LIMIT')
+    assert 'METADATA_CELL_DETAILS_UNAVAILABLE' in {e['reason_code'] for e in result['events']}
+
+
+def test_cell_details_all_columns_no_values():
+    trace=d.Trace(); token=g._TRACE.set(trace)
+    try:
+        with duckdb.connect(':memory:') as db:
+            columns=g.SOURCES['sec_liquidity_runs']
+            db.execute('CREATE TABLE sec_liquidity_runs('+','.join(c+' VARCHAR' for c in columns)+')')
+            db.execute('INSERT INTO sec_liquidity_runs VALUES ('+','.join('?' for c in columns)+')',
+                       ['PRIVATE'+'x'*1018 for c in columns])
+            with pytest.raises(g.GapDiagnosticError): g._read(db,'sec_liquidity_runs')
+    finally: g._TRACE.reset(token)
+    details=[e for e in trace.events if e['reason_code']=='METADATA_CELL_COLUMN_LIMIT']
+    assert len(details)==6 and 'PRIVATE' not in json.dumps(trace.events)
+    assert all(e['counts']['maximum_cell_characters']==1025 for e in details)
+
+
+@pytest.mark.parametrize('length', [1024,1025])
+def test_cell_only_runner_no_other_tables_or_subprocesses(tmp_path,monkeypatch,capsys,length):
+    from pathlib import Path
+    import subprocess
+    import sys
+    from test_track_b_gaps import create, add
+    paths=(tmp_path/'research.duckdb',tmp_path/'production.duckdb'); reports=tmp_path/'reports'
+    reports.mkdir(); old=reports/'track-b-gaps-focused-summary.json'; old.write_text('existing capture')
+    with duckdb.connect(str(paths[1])): pass
+    with duckdb.connect(str(paths[0])) as db:
+        create(db,'sec_liquidity_runs')
+        row={key:'bounded' for key in g.IDENTITY_KEYS}; row['plan_id']='PRIVATE'+'x'*(length-7)
+        add(db,'sec_liquidity_runs',**row)
+        db.execute("CREATE VIEW sec_facts AS SELECT error('PRIVATE_DO_NOT_READ') AS secret")
+    original=duckdb.connect; connections=[]
+    def connect(path,**kwargs):
+        connections.append((path,kwargs)); return original(path,**kwargs)
+    monkeypatch.setattr(duckdb,'connect',connect)
+    def forbidden(*args,**kwargs): raise AssertionError('no subprocess permitted')
+    monkeypatch.setattr(subprocess,'run',forbidden)
+    monkeypatch.setattr(sys,'argv',['-',*(str(p) for p in paths),str(reports),'1'])
+    script=Path(__file__).resolve().parents[2]/'scripts/track-b-gaps-diagnose.ps1'
+    source=script.read_text().split("$Diagnostic = @'\n",1)[1].split("\n'@",1)[0]
+    with pytest.raises(SystemExit) as exit: exec(compile(source,str(script),'exec'),{})
+    assert exit.value.code==int(length>1024)
+    assert len(connections)==1 and connections[0][0]==str(paths[0])
+    assert connections[0][1]=={'read_only':True,'config':h._sql_config()}
+    output=capsys.readouterr().out; assert 'PRIVATE' not in output
+    summary=json.loads((reports/'track-b-gaps-cell-lengths-summary.json').read_text(encoding='utf-8'))
+    assert summary['cell_lengths_only'] and not summary['pytest_run']
+    assert not summary['deterministic_repeat_run'] and not summary['operator_verification_successful']
+    assert sum(e['reason_code']=='FINGERPRINT_UNCHANGED' for e in summary['events'])==2
+    assert old.read_text()=='existing capture' and g._TRACE.get() is None
+    if length>1024:
+        detail=next(e for e in summary['events'] if e['reason_code']=='METADATA_CELL_COLUMN_LIMIT')
+        assert detail['stage']=='cell_lengths.research.sec_liquidity_runs.cell_count.plan_id'
+        assert detail['counts']['maximum_cell_characters']==length

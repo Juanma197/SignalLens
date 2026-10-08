@@ -16,20 +16,23 @@ STAGES = BASE_STAGES | frozenset(
         ('connect','fingerprint.before','fingerprint.after','coverage','concepts')]
     + [f'{db}.{table}.{phase}' for db in ('research','production') for table in g.SOURCES
         for phase in ('schema','columns','row_count','cell_count','projection')]
+    + [f'{db}.{table}.cell_count.{column}' for db in ('research','production')
+        for table,columns in g.SOURCES.items() for column in columns]
     + [f'{db}.{layer}.accounting' for db in ('research','production') for layer in ('raw_sec','canonical')]
     + [f'{db}.{layer}.{field}.periods' for db in ('research','production')
         for layer in ('raw_sec','canonical') for field in g.FIELDS]
     + [f'{db}.{layer}.{family}.chain' for db in ('research','production')
         for layer in ('raw_sec','canonical') for family in ('value','financial_strength')])
 REASONS = frozenset(('METADATA_TABLE_ABSENT','METADATA_SCHEMA_INCOMPATIBLE','METADATA_READ_OK',
-    'METADATA_ROW_LIMIT','METADATA_CELL_LIMIT','METADATA_COUNT_MISMATCH','ROSTER_LIMIT',
+    'METADATA_ROW_LIMIT','METADATA_CELL_LIMIT','METADATA_CELL_COLUMN_LIMIT',
+    'METADATA_CELL_DETAILS_UNAVAILABLE','METADATA_COUNT_MISMATCH','ROSTER_LIMIT',
     'ROSTER_SCHEMA_UNSUPPORTED','ROSTER_RECONCILED','PERIOD_STATE_LIMIT','CHAIN_WORK_LIMIT',
     'FINGERPRINT_BEFORE_OK','FINGERPRINT_BEFORE_IO_FAILED','FINGERPRINT_BASELINE_UNAVAILABLE',
     'FINGERPRINT_AFTER_OK','FINGERPRINT_AFTER_IO_FAILED','FINGERPRINT_AFTER_UNAVAILABLE',
     'FINGERPRINT_CHANGED','SQL_MEMORY_LIMIT','REPORT_BYTE_LIMIT','DIAGNOSTIC_COMPLETED',
     'DIAGNOSTIC_FAILED','DIAGNOSTIC_INTERNAL_FAILED','EVENT_BOUND_EXCEEDED'))
 COUNT_KEYS = frozenset(('projected_column_count','row_count','row_limit','oversized_row_count',
-    'cell_character_limit','expected_row_count','decoded_row_count','classification_row_count',
+    'cell_character_limit','maximum_cell_characters','expected_row_count','decoded_row_count','classification_row_count',
     'roster_count','roster_limit','period_count','period_limit','metadata_row_count','matched_count',
     'chain_length','chain_work_limit','baseline_count','required_baseline_count',
     'missing_required_column_count','after_count','after_failure_count','changed_database_count',
@@ -76,6 +79,9 @@ def diagnose(**kwargs):
     except Exception as exc:
         candidate = public_error_code(exc)
         code = candidate if candidate in PUBLIC_CODES else 'INVESTMENT_RESEARCH_INTERNAL_ERROR'
+        if trace.stage in ('research.fingerprint.after', 'production.fingerprint.after'):
+            # Successful cleanup is not the location of the earlier exception.
+            trace.mark('internal', {})
         trace.record('DIAGNOSTIC_FAILED', {})
     finally:
         g._TRACE.reset(token)

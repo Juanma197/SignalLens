@@ -1,5 +1,5 @@
 # Focused read-only diagnostics only. No pytest or verification repeat.
-param([string]$Repo = 'C:\Users\Juan Estrada\Projects\SignalLens')
+param([string]$Repo = 'C:\Users\Juan Estrada\Projects\SignalLens', [switch]$CellLengthsOnly)
 & {
   $ErrorActionPreference = 'Stop'
   $Python = Join-Path $Repo '.venv\Scripts\python.exe'
@@ -19,6 +19,7 @@ from app.track_b_gap_diagnostic import STAGES, REASONS, COUNT_KEYS, MAX_EVENTS, 
 
 paths = {'research': pathlib.Path(sys.argv[1]), 'production': pathlib.Path(sys.argv[2])}
 reports = pathlib.Path(sys.argv[3])
+cell_lengths_only = len(sys.argv)>4 and sys.argv[4]=='1'
 decisions = ('2026-10-04T21:30:00+00:00', '2026-10-05T00:30:00+00:00')
 events, before = [], {}
 failed = False
@@ -58,7 +59,27 @@ try:
         except Exception:
             failed=True
             emit(name+'.external.before','FINGERPRINT_READ_FAILED')
-    if len(before)==2:
+    if len(before)==2 and cell_lengths_only:
+        from app import track_b_gaps as g
+        from app.track_b_gap_diagnostic import Trace
+        from app.investment_research import public_error_code
+        import duckdb
+        trace=Trace()
+        token=g._TRACE.set(trace)
+        try:
+            g.h.validate_paths(paths['research'],paths['production'])
+            g._mark('research.connect')
+            with duckdb.connect(str(paths['research']),read_only=True,config=g.h._sql_config()) as db:
+                g._read(db,'sec_liquidity_runs','research')
+        except Exception as exc:
+            failed=True
+            code=public_error_code(exc)
+            emit('cell_lengths.public',code if code in PUBLIC_CODES else 'INVESTMENT_RESEARCH_INTERNAL_ERROR')
+        finally:
+            g._TRACE.reset(token)
+        for event in trace.events:
+            emit('cell_lengths.'+event['stage'],event['reason_code'],**event['counts'])
+    elif len(before)==2:
         for index,decision in enumerate(decisions):
             stage='boundary_'+str(index)
             args=['--research-db',str(paths['research']),'--production-db',str(paths['production']),
@@ -140,9 +161,10 @@ finally:
             failed=True
             emit(name+'.external.after','FINGERPRINT_READ_FAILED')
     summary={'events':events,'diagnostic_failed':failed,'operator_verification_successful':False,
-        'pytest_run':False,'deterministic_repeat_run':False}
+        'pytest_run':False,'deterministic_repeat_run':False,'cell_lengths_only':cell_lengths_only}
     try:
-        save(reports/'track-b-gaps-focused-summary.json',summary)
+        save(reports/('track-b-gaps-cell-lengths-summary.json' if cell_lengths_only
+                     else 'track-b-gaps-focused-summary.json'),summary)
     except Exception:
         failed=True
         summary['diagnostic_failed']=True
@@ -150,7 +172,8 @@ finally:
 print(json.dumps(summary,sort_keys=True,separators=(',',':')))
 sys.exit(int(failed))
 '@
-    $Diagnostic | & $Python -X utf8 - $Research $Production $Reports 2>$null
+    $Cells = if ($CellLengthsOnly) { '1' } else { '0' }
+    $Diagnostic | & $Python -X utf8 - $Research $Production $Reports $Cells 2>$null
     if ($LASTEXITCODE -ne 0) { throw 'TRACK_B_FOCUSED_DIAGNOSTIC_FAILED' }
   } finally {
     if ($Pushed) { Pop-Location }

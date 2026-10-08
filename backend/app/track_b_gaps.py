@@ -112,8 +112,31 @@ def _read(db, table, database='research'):
     _mark(prefix + '.cell_count', row_count=count, projected_column_count=len(columns))
     oversized_count = db.execute(f'SELECT count(*) FROM "{table}" WHERE {oversized}').fetchone()[0]
     if oversized_count:
-        _fail('metadata cell bound exceeded', 'METADATA_CELL_LIMIT',
-              oversized_row_count=oversized_count, cell_character_limit=MAX_CELL_CHARS)
+        _event('METADATA_CELL_LIMIT', oversized_row_count=oversized_count,
+               cell_character_limit=MAX_CELL_CHARS)
+        # Opt-in diagnosis of an already-confirmed guard. SQL returns only fixed
+        # column counts/lengths, never the rejected values. Keep the original
+        # public failure even if these optional aggregates cannot be computed.
+        if _TRACE.get() is not None:
+            try:
+                expressions = []
+                for column in columns:
+                    length = f'length(CAST("{column}" AS VARCHAR))'
+                    expressions.extend((f'count(*) FILTER (WHERE {length} > {MAX_CELL_CHARS})',
+                                        f'max({length})'))
+                details = db.execute(f'SELECT {",".join(expressions)} FROM "{table}"').fetchone()
+                for index, column in enumerate(columns):
+                    if details[2*index]:
+                        _mark(prefix + '.cell_count.' + column, row_count=count,
+                              projected_column_count=len(columns))
+                        _event('METADATA_CELL_COLUMN_LIMIT', oversized_row_count=details[2*index],
+                               maximum_cell_characters=details[2*index+1],
+                               cell_character_limit=MAX_CELL_CHARS)
+            except Exception:
+                _event('METADATA_CELL_DETAILS_UNAVAILABLE')
+            finally:
+                _mark(prefix + '.cell_count', row_count=count, projected_column_count=len(columns))
+        raise GapDiagnosticError('metadata cell bound exceeded')
     projection = ','.join(f'"{c}"' for c in columns)
     _mark(prefix + '.projection', row_count=count, projected_column_count=len(columns))
     cursor = db.execute(f'SELECT {projection} FROM "{table}" LIMIT {MAX_ROWS + 1}')
