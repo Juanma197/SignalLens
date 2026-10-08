@@ -5,7 +5,7 @@ import {tmpdir} from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {renderToStaticMarkup} from "react-dom/server";
-import {CompanyView,EventsView,FinancialHealthView,PrototypeNotice,RosterView,ValuationView,detailHref, type Detail, type Report} from "./view";
+import {AnalystBriefView,CompanyView,EventsView,FinancialHealthView,PrototypeNotice,RosterView,ValuationView,detailHref, type Detail, type Report} from "./view";
 import {SnapshotView, ThesisHistory} from "./store-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
@@ -145,4 +145,15 @@ test("filing events render flags, the cadence estimate and SEC links",()=>{
   assert.match(html,/<b>Risk:<\/b> A capital raise/);
   assert.match(html,/not an announced date/);
   assert.match(html,/href="https:\/\/www\.sec\.gov\/Archives\/edgar\/data\/1065696\/000106569626000041\/lkq-20260730\.htm" target="_blank" rel="noopener noreferrer"/);
+});
+
+test("analyst brief renders sections, counterarguments and missing evidence from the backend",()=>{
+  const script=`import json, sys\nsys.path.insert(0, 'tests')\nfrom test_prototype_brief import company, DECISION\nfrom app.prototype.brief import analyst_brief\nprint(json.dumps(analyst_brief(company(0.9,-0.01,-5e6),DECISION,result=True), default=str))`;
+  const brief=JSON.parse(execFileSync(python,["-c",script],{cwd:path.join(project,"backend"),encoding:"utf8"}));
+  const html=renderToStaticMarkup(<AnalystBriefView brief={brief}/>);
+  assert.match(html,/Analyst brief/);
+  assert.match(html,/Why it is on the list/);
+  assert.match(html,/Counterarguments<\/h3><ul><li>The price is up 90%/);
+  assert.match(html,/Missing evidence \(\d+\)/);
+  assert.match(html,/not a forecast or a recommendation/);
 });
