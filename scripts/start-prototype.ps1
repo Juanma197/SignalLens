@@ -29,7 +29,8 @@ if ($Operator) {
     }
     [void](New-Item -ItemType Directory -Path $Work)
     $PrototypeDb = Join-Path $Project "backend\data\prototype\signallens-prototype.duckdb"
-    $Cutoff = "2026-10-02T12:00:00Z"
+    # The current time: the latest cutoff the stored evidence can support.
+    $Cutoff = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:00Z")
 } else {
     Push-Location (Join-Path $Project "backend")
     try {

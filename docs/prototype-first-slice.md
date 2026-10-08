@@ -170,13 +170,27 @@ October snapshot and a 37-day-old cutoff were refused; watchlist and notes round
 tripped through the web proxy; tracking is `pending` because stored prices end on
 the decision session (2026-09-25). Protected database hashes unchanged.
 
+## Slice 3: structured research thesis
+
+Each company page has a "Your research thesis" panel below the stored facts:
+business, financial health, why it might be cheap, potential catalysts, downside
+case, what would invalidate the thesis, and assumptions, plus a status
+(researching, active or rejected). The operator writes every section; SignalLens
+does not generate, score or check them, and they never affect eligibility or the
+shortlist. Sections are labelled as interpretation, or as assumption, separately
+from the stored facts. Each save is a new immutable version in `research_theses`
+(prototype store); earlier versions stay visible, so the thesis held at any
+snapshot can be reviewed later. The watchlist shows each company's current
+thesis status. A store created before this slice gains the table on its next write.
+
 ## Remaining work
 
 1. Fresh prices for a current-month shortlist and for tracking to advance
    (operator-run acquisition with the existing ingestion). Corporate-action
    coverage for the 39 `coverage_missing` companies would widen the eligible pool.
-2. Structured company research: business and financial health, why it might be
-   cheap, catalysts, downside case and what would invalidate the thesis.
+2. Optional later aids for the thesis, each separately reviewed: comparable
+   valuation context, and prompts at snapshot checkpoints to revisit the
+   invalidation evidence.
 
 Historical backfills, accounting constructions, PR #96 expansion, scoring weights
 and further audit tooling remain deferred.

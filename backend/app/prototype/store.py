@@ -17,6 +17,10 @@ SCHEMA_VERSION = 1
 MAX_NOTE_CHARS = 4000
 MAX_ID_CHARS = 128
 SNAPSHOT_MAX_LAG_DAYS = 14
+# Structured thesis sections, written by the operator. The app never fills them.
+THESIS_SECTIONS = ('business', 'financial_health', 'why_cheap', 'catalysts', 'downside',
+                   'invalidation', 'assumptions')
+THESIS_STATUSES = ('researching', 'active', 'rejected')
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS prototype_schema(version INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE IF NOT EXISTS watchlist_events(
@@ -26,6 +30,10 @@ CREATE TABLE IF NOT EXISTS watchlist_events(
 CREATE TABLE IF NOT EXISTS research_notes(
   note_id VARCHAR PRIMARY KEY, security_id VARCHAR NOT NULL, body VARCHAR NOT NULL,
   recorded_at TIMESTAMPTZ NOT NULL);
+CREATE TABLE IF NOT EXISTS research_theses(
+  thesis_id VARCHAR PRIMARY KEY, security_id VARCHAR NOT NULL, status VARCHAR NOT NULL,
+  business VARCHAR, financial_health VARCHAR, why_cheap VARCHAR, catalysts VARCHAR,
+  downside VARCHAR, invalidation VARCHAR, assumptions VARCHAR, recorded_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE IF NOT EXISTS monthly_snapshots(
   snapshot_id VARCHAR PRIMARY KEY, month VARCHAR NOT NULL UNIQUE, decision_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL, version VARCHAR NOT NULL, configuration_hash VARCHAR NOT NULL,
@@ -107,6 +115,32 @@ class PrototypeStore:
         if security_id is None:
             return self._rows('SELECT * FROM research_notes ORDER BY recorded_at DESC')
         return self._rows('SELECT * FROM research_notes WHERE security_id = ? ORDER BY recorded_at DESC',
+                          [_security_id(security_id)])
+
+    # Theses ----------------------------------------------------------------
+    def add_thesis(self, security_id, status, sections):
+        """Record a new thesis version; earlier versions are kept unchanged."""
+        sid = _security_id(security_id)
+        if status not in THESIS_STATUSES: raise StoreError('PROTOTYPE_INVALID_THESIS_STATUS')
+        if set(sections) - set(THESIS_SECTIONS): raise StoreError('PROTOTYPE_INVALID_THESIS_SECTION')
+        values = [str(sections.get(k) or '').strip() or None for k in THESIS_SECTIONS]
+        if not any(values) or any(v and len(v) > MAX_NOTE_CHARS for v in values):
+            raise StoreError('PROTOTYPE_INVALID_THESIS')
+        with self._connect(True) as db:
+            db.execute(f'INSERT INTO research_theses (thesis_id, security_id, status, {", ".join(THESIS_SECTIONS)}, recorded_at) '
+                       f'VALUES ({", ".join("?" for _ in range(len(THESIS_SECTIONS) + 4))})',
+                       [uuid.uuid4().hex, sid, status, *values, _now()])
+        return self.theses(sid)
+
+    def theses(self, security_id=None):
+        """Thesis versions, newest first (all companies when no ID is given)."""
+        if not self.path.is_file(): return []
+        with duckdb.connect(str(self.path), read_only=True) as db:
+            if not db.execute("SELECT count(*) FROM information_schema.tables WHERE table_name='research_theses'").fetchone()[0]:
+                return []  # a store created before theses existed
+        if security_id is None:
+            return self._rows('SELECT * FROM research_theses ORDER BY recorded_at DESC, thesis_id DESC')
+        return self._rows('SELECT * FROM research_theses WHERE security_id = ? ORDER BY recorded_at DESC, thesis_id DESC',
                           [_security_id(security_id)])
 
     # Snapshots -------------------------------------------------------------

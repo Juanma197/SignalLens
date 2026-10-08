@@ -125,6 +125,10 @@ def test_api_writes_only_to_the_store_and_only_when_enabled(paths, monkeypatch):
             assert client.post('/api/v1/research/prototype/store/notes', headers=headers, json={'security_id': 'synthetic-03', 'body': 'Why it moved.'}).status_code == 200
             notes = client.get('/api/v1/research/prototype/store/notes/synthetic-03', headers=headers).json()
             assert notes['watched'] and notes['notes'][0]['body'] == 'Why it moved.'
+            thesis = client.post('/api/v1/research/prototype/store/theses', headers=headers, json={'security_id': 'synthetic-03', 'status': 'researching', 'sections': {'downside': 'Customer loss.'}})
+            assert thesis.status_code == 200 and thesis.json()['versions'][0]['downside'] == 'Customer loss.'
+            assert client.post('/api/v1/research/prototype/store/theses', headers=headers, json={'security_id': 'synthetic-03', 'status': 'buy', 'sections': {'downside': 'x'}}).status_code == 422
+            assert client.get('/api/v1/research/prototype/store/watchlist', headers=headers).json()['items'][0]['thesis_status'] == 'researching'
             created = client.post('/api/v1/research/prototype/store/snapshots', headers=headers, json={'decision_at': DECISION.isoformat()})
             assert created.status_code == 200, created.text
             sid = created.json()['snapshot_id']
@@ -135,3 +139,32 @@ def test_api_writes_only_to_the_store_and_only_when_enabled(paths, monkeypatch):
             # The staging guard still refuses every other write.
             assert client.post('/api/v1/research/prototype/roster', headers=headers).status_code == 409
     assert [fingerprint(p) for p in paths[:2]] == before
+
+
+def test_thesis_versions_are_append_only_and_validated(paths):
+    store = PrototypeStore(paths[2], protected_paths=paths[:2])
+    assert store.theses('synthetic-01') == []
+    store.add_thesis('synthetic-01', 'researching', {'business': 'Makes widgets.', 'why_cheap': 'Margin scare.'})
+    versions = store.add_thesis('synthetic-01', 'active', {'business': 'Makes widgets.', 'invalidation': 'Margins below 5% for two quarters.',
+                                                            'assumptions': 'Input costs normalise.'})
+    assert [v['status'] for v in versions] == ['active', 'researching']
+    assert versions[0]['why_cheap'] is None and versions[1]['why_cheap'] == 'Margin scare.'
+    assert versions[0]['invalidation'] == 'Margins below 5% for two quarters.'
+    for status, sections, code in (('researching', {}, 'PROTOTYPE_INVALID_THESIS'),
+                                   ('researching', {'business': '  '}, 'PROTOTYPE_INVALID_THESIS'),
+                                   ('researching', {'business': 'x' * 4001}, 'PROTOTYPE_INVALID_THESIS'),
+                                   ('researching', {'price_target': '100'}, 'PROTOTYPE_INVALID_THESIS_SECTION'),
+                                   ('buy', {'business': 'x'}, 'PROTOTYPE_INVALID_THESIS_STATUS')):
+        with pytest.raises(StoreError, match=code): store.add_thesis('synthetic-01', status, sections)
+    assert len(store.theses()) == 2
+
+
+def test_store_created_before_theses_existed_still_reads_and_upgrades(paths):
+    paths[2].parent.mkdir(parents=True)
+    with duckdb.connect(str(paths[2])) as db:  # slice-2 schema only
+        db.execute(store_module.SCHEMA.split('CREATE TABLE IF NOT EXISTS research_theses')[0])
+        db.execute("INSERT INTO watchlist_events VALUES ('e1','synthetic-04',NULL,NULL,'add',TIMESTAMPTZ '2026-10-01 00:00:00Z')")
+    store = PrototypeStore(paths[2], protected_paths=paths[:2])
+    assert store.theses() == [] and [i['security_id'] for i in store.watchlist()] == ['synthetic-04']
+    assert store.add_thesis('synthetic-04', 'researching', {'catalysts': 'New plant opens.'})[0]['catalysts'] == 'New plant opens.'
+    assert [i['security_id'] for i in store.watchlist()] == ['synthetic-04']

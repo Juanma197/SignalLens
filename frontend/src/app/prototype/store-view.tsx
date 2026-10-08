@@ -4,7 +4,7 @@ import {FormEvent, useCallback, useEffect, useState} from "react";
 import {detailHref, percent} from "./view";
 
 export type Note = {note_id: string; security_id: string; body: string; recorded_at: string};
-export type WatchItem = {security_id: string; qualified_symbol: string|null; company_name: string|null; added_at: string};
+export type WatchItem = {security_id: string; qualified_symbol: string|null; company_name: string|null; added_at: string; thesis_status?: string|null; thesis_recorded_at?: string|null};
 export type SnapshotSummary = {snapshot_id: string; month: string; decision_at: string; created_at: string; version: string; configuration_hash: string; synthetic_fixture: boolean; report_sha256: string};
 export type Member = {security_id: string; qualified_symbol: string|null; company_name: string|null; calculation: {momentum_return: number; end_session: string}|null};
 export type Snapshot = SnapshotSummary & {integrity_verified: boolean; notice: string; blockers: string[]; eligible_count: number; proposed_membership: string[]; results: string[]; members: Member[]};
@@ -60,7 +60,7 @@ export function WatchlistView({items, notes, cutoff}: {items: WatchItem[]; notes
   if (items.length === 0) return <p className="panel prototype-panel">The watchlist is empty. Add companies from their detail pages.</p>;
   return <div className="brief-stack">{items.map(i => {
     const own = notes.filter(n => n.security_id === i.security_id);
-    return <section className="panel prototype-panel" key={i.security_id}><p className="eyebrow">Added {when(i.added_at)}</p>
+    return <section className="panel prototype-panel" key={i.security_id}><p className="eyebrow">Added {when(i.added_at)} · {i.thesis_status ? `thesis: ${i.thesis_status} (${when(i.thesis_recorded_at!)})` : "no thesis yet"}</p>
       <h2>{i.qualified_symbol ?? i.security_id} {i.company_name && <span>· {i.company_name}</span>}</h2>
       {cutoff ? <Link href={detailHref(i.security_id, cutoff)}>Open evidence at {cutoff}</Link> : <p>Enter a cutoff above to open its evidence.</p>}
       <NotesList notes={own}/></section>;})}</div>;
@@ -84,4 +84,65 @@ export function SnapshotView({snapshot, tracking}: {snapshot: Snapshot; tracking
         <tr><td><b>Average of results</b></td>{tracking.comparison.map(g => <td key={g.sessions}>{mean(g.results)}</td>)}</tr>
         <tr><td><b>Average of all members</b></td>{tracking.comparison.map(g => <td key={g.sessions}>{mean(g.all_members)}</td>)}</tr>
       </tbody></table></div></section></div>;
+}
+
+export const THESIS_PROMPTS: [string, string, string][] = [
+  ["business", "Business", "What it sells, to whom, and how it makes money."],
+  ["financial_health", "Financial health", "Your reading of the stored facts above: profitability, cash, debt."],
+  ["why_cheap", "Why it might be cheap", "What the market may be missing, fearing or ignoring."],
+  ["catalysts", "Potential catalysts", "What could change the market's view, and roughly when."],
+  ["downside", "Downside case", "What happens if you are wrong, and how bad it could be."],
+  ["invalidation", "What would invalidate the thesis", "Specific, checkable evidence that would make you drop it."],
+  ["assumptions", "Assumptions", "What you are taking as given without evidence."],
+];
+export type ThesisStatus = "researching"|"active"|"rejected";
+export type Thesis = {thesis_id: string; security_id: string; status: ThesisStatus; recorded_at: string} & Record<string, string|null>;
+
+function ThesisText({thesis}: {thesis: Thesis}) {
+  const filled = THESIS_PROMPTS.filter(([key]) => thesis[key]);
+  return <dl className="prototype-thesis">{filled.map(([key, label]) => <div key={key}><dt>{label}{key === "assumptions" ? " (assumption)" : " (interpretation)"}</dt><dd>{thesis[key]}</dd></div>)}</dl>;
+}
+
+export function ThesisHistory({versions}: {versions: Thesis[]}) {
+  if (versions.length === 0) return <p>No thesis recorded yet.</p>;
+  const [latest, ...older] = versions;
+  return <>
+    <p className="eyebrow">Current: {latest.status} · recorded {when(latest.recorded_at)}</p><ThesisText thesis={latest}/>
+    {older.length > 0 && <details><summary>{older.length} earlier version{older.length === 1 ? "" : "s"}</summary>
+      {older.map(v => <div key={v.thesis_id} className="prototype-thesis-version"><p className="eyebrow">{v.status} · {when(v.recorded_at)}</p><ThesisText thesis={v}/></div>)}</details>}
+  </>;
+}
+
+/** Structured, versioned thesis. Saving records a new version; nothing is overwritten. */
+export function ThesisPanel({securityId}: {securityId: string}) {
+  const [versions, setVersions] = useState<Thesis[]>([]);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [status, setStatus] = useState<ThesisStatus>("researching");
+  const [editing, setEditing] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => call<{versions: Thesis[]}>(`theses/${encodeURIComponent(securityId)}`)
+    .then(v => setVersions(v.versions)).catch(e => setError(e.message)), [securityId]);
+  useEffect(() => {load();}, [load]);
+  function edit() {
+    const latest = versions[0];
+    setDraft(Object.fromEntries(THESIS_PROMPTS.map(([key]) => [key, latest?.[key] ?? ""])));
+    setStatus(latest?.status ?? "researching"); setEditing(true);
+  }
+  async function save(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setError("");
+    try {
+      const result = await call<{versions: Thesis[]}>("theses", {security_id: securityId, status, sections: draft});
+      setVersions(result.versions); setEditing(false);
+    } catch (e) {setError(e instanceof Error ? e.message : "PROTOTYPE_SERVICE_UNAVAILABLE");} finally {setBusy(false);}
+  }
+  return <section className="panel prototype-panel"><h2>Your research thesis</h2>
+    <p>Facts are the stored evidence above. Everything in this section is your interpretation or assumption. It is not generated or checked by SignalLens and does not affect the shortlist. Each save keeps the earlier versions.</p>
+    {editing ? <form onSubmit={save} className="prototype-note-form">
+      <label>Status<select value={status} onChange={e => setStatus(e.target.value as ThesisStatus)}><option value="researching">Researching</option><option value="active">Active thesis</option><option value="rejected">Rejected</option></select></label>
+      {THESIS_PROMPTS.map(([key, label, prompt]) => <label key={key}>{label}<small>{prompt}</small><textarea rows={3} maxLength={4000} value={draft[key] ?? ""} onChange={e => setDraft({...draft, [key]: e.target.value})}/></label>)}
+      <div><button disabled={busy || !Object.values(draft).some(v => v.trim())}>{busy ? "Saving…" : "Save new version"}</button> <button type="button" onClick={() => setEditing(false)}>Cancel</button></div>
+    </form> : <><ThesisHistory versions={versions}/><button onClick={edit}>{versions.length ? "Revise thesis" : "Start a thesis"}</button></>}
+    {error && <p role="alert" className="notice warning">{error}</p>}
+  </section>;
 }
