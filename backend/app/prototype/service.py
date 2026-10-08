@@ -30,7 +30,7 @@ MAX_ROWS = 500_000
 MAX_ROSTER = 256
 MAX_CELL = 1024
 MAX_OUTPUT = 2_000_000
-MAX_FILE_BYTES = 1_000_000_000
+MAX_FILE_BYTES = 4_000_000_000
 FACTS = {
     'CashAndCashEquivalentsAtCarryingValue': ('cash_and_cash_equivalents', 'instant'),
     'Assets': ('assets', 'instant'),
@@ -50,7 +50,6 @@ COLUMNS = {
     'issuer_mapping_candidates': 'candidate_key security_id qualified_symbol cik evidence_source source_identifier effective_from effective_to review_status conflict_state ticker_reuse_protected observed_at',
     'sec_facts': 'fact_key security_id qualified_symbol cik taxonomy concept value unit currency period_start period_end form accession_number public_at retrieved_at source_endpoint',
     'corporate_action_coverage_evidence': 'evidence_key security_id qualified_symbol coverage_state assessed_from assessed_to source_identifier public_at retrieved_at available_at',
-    'global_exchange_sessions': 'exchange session_date is_open source retrieved_at',
     'global_price_observations': 'qualified_symbol trading_date exchange currency open high low close adjusted_close volume status source retrieved_at',
     'global_corporate_actions': 'qualified_symbol ex_date action_type value currency source retrieved_at',
 }
@@ -101,8 +100,10 @@ def _read(db, table, remaining, decision):
     # Missing projected fields remain None and are reported by the domain checks.
     if not columns: return [], 'unsupported_schema'
     where, args = '', []
-    if table in ('global_price_observations', 'global_exchange_sessions', 'global_corporate_actions'):
-        field = {'global_price_observations': 'trading_date', 'global_exchange_sessions': 'session_date', 'global_corporate_actions': 'ex_date'}[table]
+    # Only prices are windowed; corporate actions are read in full so that
+    # action_present coverage can be checked against its whole assessed interval.
+    if table == 'global_price_observations':
+        field = 'trading_date'
         if field not in actual: return [], 'unsupported_schema'
         where = f' WHERE "{field}" BETWEEN ? AND ?'
         args = [decision.date() - timedelta(days=450), decision.date()]
@@ -123,6 +124,10 @@ def _read(db, table, remaining, decision):
 
 
 def _identity(sec, data, decision, matched, window_start):
+    """Identity at the cutoff (config identity_rule). The stored catalogue keeps
+    CIK in sec_issuers/classification, not security_listings, so the CIK must be
+    agreed there; a listing CIK, when present, must also agree. An approved
+    full-window mapping is cited when it exists but is not required."""
     sid, symbol = sec['security_id'], sec['qualified_symbol']
     reasons = []
     if sid not in matched: reasons.append('durable_id_not_matched_or_conflicting')
@@ -133,7 +138,17 @@ def _identity(sec, data, decision, matched, window_start):
         reasons.append('classification_review_required')
     if not any(visible(r, decision) and r.get('source_record_identifier') for r in classes):
         reasons.append('classification_provenance_unproven')
+    issuers = [r for r in data['sec_issuers'] if str(r.get('security_id')) == sid and stamp(r.get('mapped_at')) and stamp(r['mapped_at']) <= decision]
+    values = {cik(r.get('cik')) for r in issuers}
+    expected = next(iter(values)) if len(values) == 1 else None
+    if not expected or any(r.get('qualified_symbol') != symbol or not r.get('mapping_source') for r in issuers):
+        reasons.append('stored_cik_mapping_missing_or_conflicting'); expected = None
+    class_ciks = {cik(r.get('cik')) for r in classes if visible(r, decision) and r.get('cik')}
+    if expected and class_ciks != {expected}: reasons.append('classification_cik_mismatch')
+    if sec.get('cik') is not None and cik(sec['cik']) != expected: reasons.append('listing_cik_mismatch')
     mappings = [r for r in data['issuer_mapping_candidates'] if str(r.get('security_id')) == sid and stamp(r.get('observed_at')) and stamp(r['observed_at']) <= decision]
+    if any(r.get('conflict_state') not in ('none', None) for r in mappings):
+        reasons.append('issuer_mapping_conflict')
     approved = []
     for r in mappings:
         start, end = stamp(r.get('effective_from')), stamp(r.get('effective_to'))
@@ -143,18 +158,26 @@ def _identity(sec, data, decision, matched, window_start):
             and r.get('ticker_reuse_protected') is True and r.get('qualified_symbol') == symbol
             and r.get('evidence_source') and r.get('source_identifier') and cik(r.get('cik'))):
             approved.append(r)
-    if len(approved) != 1: reasons.append('effective_listing_interval_unproven_or_ambiguous')
-    if any(r.get('conflict_state') not in ('none', None) for r in mappings):
-        reasons.append('issuer_mapping_conflict')
-    issuers = [r for r in data['sec_issuers'] if str(r.get('security_id')) == sid and stamp(r.get('mapped_at')) and stamp(r['mapped_at']) <= decision]
-    values = {cik(r.get('cik')) for r in issuers}
-    expected = cik(sec.get('cik'))
-    if not expected or values != {expected} or any(r.get('qualified_symbol') != symbol or not r.get('mapping_source') for r in issuers):
-        reasons.append('stored_cik_mapping_missing_or_conflicting')
-    if approved and cik(approved[0]['cik']) != expected: reasons.append('effective_mapping_cik_mismatch')
-    if any(visible(r, decision) and r.get('cik') and cik(r['cik']) != expected for r in classes):
-        reasons.append('classification_cik_mismatch')
-    return sorted(set(reasons)), approved[0] if len(approved) == 1 else None
+    if len(approved) == 1 and cik(approved[0]['cik']) != expected: reasons.append('effective_mapping_cik_mismatch')
+    return sorted(set(reasons)), expected, approved[0] if len(approved) == 1 else None
+
+
+def _sessions(data, decision):
+    """Session calendar derived from stored prices (no session table exists in
+    the operator database). Weekdays are never assumed; a date counts only when
+    most US symbols have a visible, completed price on it."""
+    by_date = defaultdict(set)
+    for r in data['global_price_observations']:
+        d, retrieved = day(r.get('trading_date')), stamp(r.get('retrieved_at'))
+        if (r.get('exchange') == 'US' and d and retrieved and retrieved <= decision and r.get('qualified_symbol')
+                and datetime.combine(d, time(22), timezone.utc) <= decision):
+            by_date[d].add(r['qualified_symbol'])
+    symbols = set().union(*by_date.values()) if by_date else set()
+    threshold = math.ceil(CONFIG['session_minimum_symbol_share'] * len(symbols))
+    sessions = sorted(d for d, s in by_date.items() if threshold and len(s) >= threshold)
+    return sessions, {'method': CONFIG['session_calendar'], 'us_symbols_priced': len(symbols),
+        'minimum_symbols_per_session': threshold, 'candidate_dates': len(by_date), 'derived_sessions': len(sessions),
+        'first_session': sessions[0] if sessions else None, 'last_session': sessions[-1] if sessions else None}
 
 
 def _price(sec, data, decision, sessions):
@@ -179,7 +202,7 @@ def _price(sec, data, decision, sessions):
             or r.get('exchange') != 'US' or not r.get('source')
             or stamp(r['retrieved_at']).date() < day(r['trading_date'])):
             reasons.append('invalid_price_history')
-    actions = [r for r in data['global_corporate_actions'] if r.get('qualified_symbol') == symbol and stamp(r.get('retrieved_at')) and stamp(r['retrieved_at']) <= decision]
+    actions = [r for r in data['global_corporate_actions'] if r.get('qualified_symbol') == symbol and day(r.get('ex_date')) and stamp(r.get('retrieved_at')) and stamp(r['retrieved_at']) <= decision]
     if not reasons and selected:
         if not detect_price_segments(pd.DataFrame(selected), pd.DataFrame(actions)).empty:
             reasons.append('unresolved_price_discontinuity')
@@ -204,12 +227,15 @@ def _actions(sec, data, decision, wanted, actions):
     if not states <= {'verified_no_action', 'action_present'} or len(states) != 1:
         return ['unresolved_or_conflicting_corporate_action_coverage'], None
     events = [r for r in actions if wanted[0] <= day(r.get('ex_date')) <= wanted[-1]]
-    if ('verified_no_action' in states and events) or ('action_present' in states and not events):
+    # action_present describes the whole assessed interval, which may be wider
+    # than the price window; it conflicts only if that interval has no stored event.
+    assessed = [r for r in actions if any(day(c['assessed_from']) <= day(r.get('ex_date')) <= day(c['assessed_to']) for c in rows)]
+    if ('verified_no_action' in states and events) or ('action_present' in states and not assessed):
         return ['corporate_action_coverage_event_conflict'], None
-    if any(r.get('action_type') not in ('dividend', 'split') or not finite(r.get('value')) or float(r['value']) <= 0 or not r.get('source') for r in events):
+    if any(r.get('action_type') not in CONFIG['corporate_action_types_accepted'] or not finite(r.get('value')) or float(r['value']) <= 0 or not r.get('source') for r in events):
         return ['unresolved_corporate_action'], None
     row = max(rows, key=lambda r: (stamp(r['available_at']), r['evidence_key']))
-    return [], {k: row[k] for k in ('evidence_key', 'coverage_state', 'assessed_from', 'assessed_to', 'source_identifier', 'available_at')}
+    return [], dict({k: row[k] for k in ('evidence_key', 'coverage_state', 'assessed_from', 'assessed_to', 'source_identifier')}, available_at=stamp(row['available_at']))
 
 
 def _evidence(sec, data, decision):
@@ -241,23 +267,28 @@ def _evidence(sec, data, decision):
         if not candidates:
             missing.append({'field': field, 'reasons': sorted(rejected[field] or {'direct_evidence_unavailable'})})
             continue
-        # Latest reported end, then latest publicly visible revision for its exact
-        # interval. Different interval shapes at that end are never conflated.
+        # Latest reported end. Each exact (concept, start, end) interval at that end
+        # (e.g. a quarter and a year-to-date) is shown as its own observation with
+        # its length; intervals are never combined, converted or chosen between.
         end = max(r['period_end'] for r in candidates)
-        latest = [r for r in candidates if r['period_end'] == end]
-        intervals = {(r.get('period_start'), r['period_end'], r['concept']) for r in latest}
-        if len(intervals) != 1:
-            missing.append({'field': field, 'reasons': ['ambiguous_reported_interval_or_concept']}); continue
-        public = max(stamp(r['public_at']) for r in latest)
-        latest = [r for r in latest if stamp(r['public_at']) == public]
-        if len({float(r['value']) for r in latest}) != 1:
+        intervals = defaultdict(list)
+        for r in candidates:
+            if r['period_end'] == end: intervals[(r['concept'], r.get('period_start'))].append(r)
+        shown = []
+        for (concept, start), latest in sorted(intervals.items(), key=lambda kv: (kv[0][0], kv[0][1] or date.min), reverse=True):
+            public = max(stamp(r['public_at']) for r in latest)
+            latest = [r for r in latest if stamp(r['public_at']) == public]
+            if len({float(r['value']) for r in latest}) != 1: continue
+            r = max(latest, key=lambda r: (stamp(r['retrieved_at']), r['fact_key']))
+            shown.append({'field': field, 'value': float(r['value']), 'unit': r['unit'], 'concept': concept,
+                'reported_start': start, 'reported_end': end, 'period_kind': FACTS[concept][1],
+                'reported_days': (day(end) - day(start)).days + 1 if start else None,
+                'form': r['form'], 'public_at': stamp(r['public_at']), 'retrieved_at': stamp(r['retrieved_at']),
+                'known_at': max(stamp(r['public_at']), stamp(r['retrieved_at'])),
+                'citation': {'fact_key': r['fact_key'], 'accession': r['accession_number'], 'cik': cik(r['cik']), 'source_endpoint': r['source_endpoint']}})
+        if not shown:
             missing.append({'field': field, 'reasons': ['conflicting_visible_values']}); continue
-        r = max(latest, key=lambda r: (stamp(r['retrieved_at']), r['fact_key']))
-        output.append({'field': field, 'value': float(r['value']), 'unit': r['unit'], 'concept': r['concept'],
-            'reported_start': r.get('period_start'), 'reported_end': r['period_end'], 'period_kind': FACTS[r['concept']][1],
-            'form': r['form'], 'public_at': stamp(r['public_at']), 'retrieved_at': stamp(r['retrieved_at']),
-            'known_at': max(stamp(r['public_at']), stamp(r['retrieved_at'])),
-            'citation': {'fact_key': r['fact_key'], 'accession': r['accession_number'], 'cik': cik(r['cik']), 'source_endpoint': r['source_endpoint']}})
+        output.extend(shown)
     return output, missing
 
 
@@ -282,10 +313,7 @@ def _build(db, decision, target):
     # review output so identity exclusions are not silently lost.
     roster_ids = {str(r['security_id']) for r in data['security_classification_evidence'] if r.get('security_id') and r.get('security_type') == 'us_operating_company' and visible(r, decision)}
     if len(roster_ids) > MAX_ROSTER: raise PrototypeError('PROTOTYPE_ROSTER_LIMIT')
-    session_rows = [r for r in data['global_exchange_sessions'] if r.get('exchange') == 'US' and r.get('is_open') is True and stamp(r.get('retrieved_at')) and stamp(r['retrieved_at']) <= decision and r.get('source') and day(r.get('session_date')) and datetime.combine(day(r['session_date']), time(22), timezone.utc) <= decision]
-    session_dates = [day(r.get('session_date')) for r in session_rows]
-    session_error = len(session_dates) != len(set(session_dates)) or None in session_dates
-    sessions = sorted(set(d for d in session_dates if d))
+    sessions, calendar = _sessions(data, decision)
     companies = []
     for sid in sorted(roster_ids):
         listings = [r for r in selected if str(r.get('security_id')) == sid]
@@ -294,20 +322,22 @@ def _build(db, decision, target):
                 'reasons': ['active_listing_missing_or_ambiguous'], 'calculation': None, 'direct_evidence': [], 'missing_data': [], 'risks': ['Identity cannot be resolved.'], 'identity_evidence': None, 'action_coverage': None}); continue
         sec = dict(listings[0], security_id=sid)
         prices, calculation, wanted, actions = _price(sec, data, decision, sessions)
-        identity, mapping = _identity(sec, data, decision, matched, wanted[0] if wanted else decision.date())
+        identity, resolved_cik, mapping = _identity(sec, data, decision, matched, wanted[0] if wanted else decision.date())
+        sec['cik'] = resolved_cik
         if sec.get('currency') != 'USD' or sec.get('instrument_type') not in ('common_stock', 'ordinary_share'): identity.append('listing_not_ordinary_us_usd_equity')
         if sum(r.get('qualified_symbol') == sec['qualified_symbol'] for r in selected) != 1: identity.append('qualified_symbol_identity_ambiguous')
-        if any(str(r.get('security_id')) != sid and cik(r.get('cik')) == cik(sec.get('cik')) for r in selected): identity.append('shared_cik_share_class_identity_unresolved')
         coverage_reasons, coverage = _actions(sec, data, decision, wanted, actions)
         evidence, missing = _evidence(sec, data, decision)
         reasons = identity + prices + coverage_reasons
-        if session_error: reasons.append('exchange_session_identity_ambiguous')
         if not evidence: reasons.append('no_usable_direct_financial_evidence')
         risks = ['Current roster is not survivorship-free.', 'Momentum can reverse; this screen has no profitability evidence.', 'Financial facts are direct reported context, not complete accounting validation.', 'Trading costs and executable liquidity are not assessed.']
+        if not mapping: risks.append('Listing identity is evidenced at the cutoff only; ticker reuse earlier in the price window is not excluded.')
         if missing: risks.append('Financial context is incomplete; missing inputs are unknown, not zero.')
-        if coverage and coverage['coverage_state'] == 'action_present': risks.append('Stored corporate actions are present in the price window.')
+        if coverage and coverage['coverage_state'] == 'action_present':
+            in_window = any(wanted[0] <= day(r['ex_date']) <= wanted[-1] for r in actions)
+            risks.append('Stored corporate actions fall inside the price window.' if in_window else 'Stored corporate actions exist in the assessed history, none inside the price window.')
         if evidence and min(e['reported_end'] for e in evidence) < decision.date() - timedelta(days=180): risks.append('Some reported financial observations are more than 180 days old.')
-        companies.append({'security_id': sid, 'qualified_symbol': sec['qualified_symbol'], 'company_name': sec.get('company_name'), 'cik': cik(sec.get('cik')),
+        companies.append({'security_id': sid, 'qualified_symbol': sec['qualified_symbol'], 'company_name': sec.get('company_name'), 'cik': resolved_cik,
             'eligible': not reasons, 'reasons': sorted(set(reasons)), 'calculation': calculation,
             'direct_evidence': evidence, 'missing_data': missing, 'risks': risks,
             'identity_evidence': {k: mapping.get(k) for k in ('candidate_key', 'evidence_source', 'source_identifier', 'effective_from', 'effective_to', 'observed_at')} if mapping else None,
@@ -319,10 +349,10 @@ def _build(db, decision, target):
     if not sessions: blockers.append('completed_visible_us_sessions_unavailable')
     # Block all results below ten; proposed membership is still visible for review.
     results = [] if blockers else sorted([c for c in members if c['calculation']['momentum_return'] > 0], key=lambda c: (-c['calculation']['momentum_return'], c['security_id']))[:CONFIG['maximum_results']]
-    return _report(companies, members, results, schema, blockers, target, decision, [c['security_id'] for c in eligible])
+    return _report(companies, members, results, schema, blockers, target, decision, [c['security_id'] for c in eligible], calendar)
 
 
-def _report(companies, members, results, schema, blockers, target, decision, eligible_order=None):
+def _report(companies, members, results, schema, blockers, target, decision, eligible_order=None, calendar=None):
     configuration = dict(CONFIG, target_members=target)
     configuration_hash = hashlib.sha256(json.dumps(configuration, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     return {'namespace': CONFIG['namespace'], 'version': CONFIG['version'], 'configuration_hash': configuration_hash, 'configuration': configuration,
@@ -332,7 +362,7 @@ def _report(companies, members, results, schema, blockers, target, decision, eli
         'proposed_membership': [c['security_id'] for c in members], 'blockers': blockers,
         'withholding_counts': dict(sorted(Counter(r for c in companies for r in c['reasons']).items())),
         'results': [c['security_id'] for c in results], 'companies': companies,
-        'source_schema_states': schema, 'provider_requests': 0, 'writes': 0,
+        'source_schema_states': schema, 'session_calendar': calendar, 'provider_requests': 0, 'writes': 0,
         'synthetic_fixture': any('offline-synthetic' in (c.get('calculation') or {}).get('source', []) for c in companies),
         'remaining_work': ['operator_review_actual_roster', 'explicit_universe_freeze', 'separate_prototype_database', 'watchlist_persistence', 'monthly_snapshot_persistence', 'subsequent_performance_tracking']}
 

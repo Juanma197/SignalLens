@@ -38,18 +38,21 @@ def test_roster_screen_citations_and_immutable_files(paths, monkeypatch):
     r = run(paths)
     assert r['eligible_count'] == 18 and len(r['proposed_membership']) == 15
     assert r['proposed_membership'] == sorted(r['eligible_roster'], key=lambda sid:(hashlib.sha256((service.CONFIG['version']+':'+sid).encode()).hexdigest(),sid))[:15]
-    assert r['results'] == ['synthetic-17','synthetic-16','synthetic-15']
+    # Synthetic returns rise with the company number; only members can qualify.
+    members = r['proposed_membership']
+    assert r['results'] == sorted([m for m in members if int(m[-2:]) > 3], key=lambda m: -int(m[-2:]))[:3]
     assert r['validation_credit'] == r['writes'] == r['provider_requests'] == 0
     assert r['membership_state'] == 'proposed_unfrozen' and r['operator_review_required']
     assert r['configuration']['weights'] is None and r['databases_unchanged']
     assert r['synthetic_fixture'] and not r['blockers']
-    c = company(r,17); calc = c['calculation']
+    n = int(r['results'][0][-2:]); c = company(r,n); calc = c['calculation']
     assert calc['session_intervals']==126
     assert calc['momentum_return']==pytest.approx(calc['end_adjusted_close']/calc['start_adjusted_close']-1)
-    assert c['direct_evidence'][0]['citation']['fact_key']=='fact-17'
+    assert c['direct_evidence'][0]['citation']['fact_key']==f'fact-{n}'
     assert len(c['missing_data'])==5
     assert c['action_coverage']['coverage_state']=='verified_no_action'
-    assert c['identity_evidence']['source_identifier']=='identity-17'
+    assert c['identity_evidence']['source_identifier']==f'identity-{n}' and c['cik']==f'{n+100:010}'
+    assert r['session_calendar']['derived_sessions']==127 and r['session_calendar']['us_symbols_priced']==18
     assert [fingerprint(p) for p in paths] == before
 
 
@@ -73,10 +76,11 @@ def test_future_returns_and_late_evidence_do_not_choose_members(paths):
 
 
 @pytest.mark.parametrize(('sql','reason'), [
-    ("DELETE FROM issuer_mapping_candidates WHERE security_id='synthetic-00'", 'effective_listing_interval_unproven_or_ambiguous'),
-    ("UPDATE issuer_mapping_candidates SET review_status='proposed' WHERE security_id='synthetic-00'", 'effective_listing_interval_unproven_or_ambiguous'),
-    ("UPDATE issuer_mapping_candidates SET effective_from=TIMESTAMPTZ '2026-09-01 00:00:00Z' WHERE security_id='synthetic-00'", 'effective_listing_interval_unproven_or_ambiguous'),
-    ("UPDATE sec_issuers SET cik='0000009999' WHERE security_id='synthetic-00'", 'stored_cik_mapping_missing_or_conflicting'),
+    ("UPDATE issuer_mapping_candidates SET conflict_state='ticker_reused' WHERE security_id='synthetic-00'", 'issuer_mapping_conflict'),
+    ("UPDATE sec_issuers SET cik='0000009999' WHERE security_id='synthetic-00'", 'classification_cik_mismatch'),
+    ("DELETE FROM sec_issuers WHERE security_id='synthetic-00'", 'stored_cik_mapping_missing_or_conflicting'),
+    ("INSERT INTO sec_issuers SELECT security_id,qualified_symbol,ticker,'0000009999',issuer_name,mapping_source,mapped_at FROM sec_issuers WHERE security_id='synthetic-00'", 'stored_cik_mapping_missing_or_conflicting'),
+    ("UPDATE security_listings SET cik='0000009999' WHERE security_id='synthetic-00'", 'listing_cik_mismatch'),
     ("UPDATE security_classification_evidence SET review_required=true WHERE security_id='synthetic-00'", 'classification_review_required'),
     ("UPDATE security_classification_evidence SET conflict_details='{\"conflict\":true}' WHERE security_id='synthetic-00'", 'classification_ambiguous'),
     ("DELETE FROM global_price_observations WHERE qualified_symbol='SYN00.US' AND trading_date=(SELECT min(trading_date) FROM global_price_observations)", 'missing_exact_session_prices'),
@@ -216,3 +220,40 @@ def test_same_day_sessions_require_completion_and_price_inputs_are_not_future(pa
     assert complete['eligible_count']==18
     change(paths,"UPDATE global_price_observations SET retrieved_at=TIMESTAMP '2026-09-29 22:00:00' WHERE qualified_symbol='SYN00.US' AND trading_date=DATE '2026-09-30'")
     assert 'invalid_price_history' in company(run(paths))['reasons']
+
+
+def test_identity_at_cutoff_without_full_window_mapping_is_eligible_with_explicit_risk(paths):
+    change(paths, "DELETE FROM issuer_mapping_candidates WHERE security_id='synthetic-00'")
+    c = company(run(paths))
+    assert c['eligible'] and c['identity_evidence'] is None
+    assert any('ticker reuse' in risk for risk in c['risks'])
+    change(paths, "UPDATE security_listings SET cik='0000000100' WHERE security_id='synthetic-00'")
+    assert company(run(paths))['eligible']  # an agreeing listing CIK is accepted
+
+
+def test_session_calendar_is_derived_from_prices_not_weekdays(paths):
+    # A holiday-like date with one stray symbol is not a session.
+    change(paths, "INSERT INTO global_price_observations SELECT qualified_symbol,DATE '2026-09-27',exchange,currency,open,high,low,close,adjusted_close,volume,status,source,retrieved_at FROM global_price_observations WHERE qualified_symbol='SYN05.US' AND trading_date=DATE '2026-09-25'")
+    r = run(paths)
+    assert r['session_calendar']['candidate_dates'] == 128 and r['session_calendar']['derived_sessions'] == 127
+    assert r['eligible_count'] == 18
+    # A real session missing for most symbols drops out, so fewer than 127 remain.
+    change(paths, "DELETE FROM global_price_observations WHERE trading_date=DATE '2026-09-29' AND qualified_symbol<>'SYN05.US'")
+    r = run(paths)
+    assert r['session_calendar']['derived_sessions'] == 126 and r['eligible_count'] == 0
+    assert all('insufficient_visible_exchange_sessions' in c['reasons'] for c in r['companies'])
+
+
+def test_action_present_is_checked_against_its_whole_assessed_interval(paths):
+    change(paths, "UPDATE corporate_action_coverage_evidence SET coverage_state='action_present', assessed_from=DATE '2016-01-04' WHERE security_id='synthetic-00'")
+    assert 'corporate_action_coverage_event_conflict' in company(run(paths))['reasons']
+    change(paths, "INSERT INTO global_corporate_actions VALUES ('SYN00.US',DATE '2020-03-02','cash_distribution',0.5,'USD','offline-synthetic',TIMESTAMP '2020-03-03 00:00:00')")
+    c = company(run(paths))
+    assert c['eligible'] and c['action_coverage']['coverage_state'] == 'action_present'
+
+
+def test_quarter_and_year_to_date_at_one_end_are_shown_separately_never_combined(paths):
+    for key, start, value in (('q', '2026-04-01', 50), ('ytd', '2026-01-01', 90)):
+        change(paths, f"INSERT INTO sec_facts SELECT fact_key||'-{key}',security_id,qualified_symbol,ticker,cik,taxonomy,'Revenues',{value},unit,currency,DATE '{start}',period_end,fiscal_year,fiscal_period,frame,form,accession_number,filed_date,public_at,is_amendment,is_revision,source_endpoint,retrieved_at FROM sec_facts WHERE security_id='synthetic-00'")
+    revenue = [f for f in company(run(paths))['direct_evidence'] if f['field'] == 'revenue']
+    assert [(f['reported_start'], f['reported_days'], f['value']) for f in revenue] == [('2026-04-01', 91, 50.0), ('2026-01-01', 181, 90.0)]

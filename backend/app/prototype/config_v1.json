@@ -1,6 +1,6 @@
 {
   "namespace": "research-prototype",
-  "version": "momentum-prototype-1.0.0",
+  "version": "momentum-prototype-1.1.0",
   "target_members": 15,
   "minimum_members": 10,
   "maximum_members": 20,
@@ -15,5 +15,9 @@
   "maximum_direct_fact_age_days": 550,
   "validation_credit": 0,
   "membership_state": "proposed_unfrozen",
-  "same_day_session_completion_boundary": "22:00:00 UTC (conservative; earlier closes are not inferred)"
+  "same_day_session_completion_boundary": "22:00:00 UTC (conservative; earlier closes are not inferred)",
+  "session_calendar": "completed dates with a visible US price for at least session_minimum_symbol_share of US symbols priced in the read window",
+  "session_minimum_symbol_share": 0.8,
+  "identity_rule": "active listing in the completed catalogue visible at the cutoff, exact durable-ID match, one CIK agreed by sec_issuers and classification evidence; full-window listing intervals are not proven",
+  "corporate_action_types_accepted": ["cash_distribution", "dividend", "split"]
 }

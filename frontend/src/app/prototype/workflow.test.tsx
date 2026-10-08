@@ -61,6 +61,6 @@ test("stored strings render as inert text and unresolved details retain missing 
   assert.ok(html.includes('&lt;img'));
   assert.doesNotMatch(html,/<img/);
   assert.match(html,/126-session calculation withheld/);
-  assert.match(html,/Effective identity evidence unavailable/);
+  assert.match(html,/identity is checked at the cutoff only/);
   assert.match(html,/effective_listing_interval_unproven_or_ambiguous/);
 });

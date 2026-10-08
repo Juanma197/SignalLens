@@ -1,4 +1,5 @@
 # PowerShell 5.1. Uses only new system-temporary fixtures; no operator paths.
+# tests/test_research_observations.py imports POSIX-only `resource`; Linux CI runs it.
 [CmdletBinding()]
 param()
 $ErrorActionPreference = "Stop"
@@ -10,7 +11,7 @@ $env:SIGNALLENS_TEST_PYTHON = $Python
 try {
     Push-Location (Join-Path $ProjectRoot "backend")
     try {
-        & $Python -m pytest -q tests/test_prototype.py tests/test_research_observations.py tests/test_price_segments.py tests/test_track_b_gaps.py tests/test_track_b_panel.py tests/test_company_research.py tests/test_prospective_us_shadow.py
+        & $Python -m pytest -q tests/test_prototype.py tests/test_price_segments.py tests/test_track_b_gaps.py tests/test_track_b_panel.py tests/test_company_research.py tests/test_prospective_us_shadow.py
         if ($LASTEXITCODE -ne 0) { throw "Offline prototype/backend regression tests failed." }
     } finally { Pop-Location }
     Push-Location (Join-Path $ProjectRoot "frontend")

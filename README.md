@@ -5,8 +5,8 @@
 The separate `/prototype` view proposes a deterministic, unfrozen membership and
 zero-to-three positive 126-session momentum results from stored evidence only.
 Company details show calculations, citations, risks and exact missing-data states.
-Actual roster review is required before any freeze. Track A/B are unchanged and
-validation credit is zero. See [the PowerShell verification/startup and roster-review
+Run it locally with `.\scripts\start-prototype.ps1 -Operator` (read-only). Membership
+review is required before any freeze. Track A/B are unchanged and validation credit is zero. See [the PowerShell verification/startup and roster-review
 runbook](docs/prototype-first-slice.md). Watchlist/snapshot persistence and subsequent
 performance tracking are deferred to a separate prototype database.
 
