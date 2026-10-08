@@ -43,7 +43,27 @@ $ResearchBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $ResearchDb).Hash
 $ProductionBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $ProductionDb).Hash
 
 $Token = [guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")
-$Password = [guid]::NewGuid().ToString("N").Substring(0, 16)
+# Login: an environment variable pair, else a pair in frontend\.env.local, else a
+# one-time login generated for this run. A configured password is never printed.
+$Username = $env:SIGNALLENS_DASHBOARD_USERNAME
+$Password = $env:SIGNALLENS_DASHBOARD_PASSWORD
+$LoginSource = "environment variables"
+if (-not $Username -or -not $Password) {
+    $Username = $null; $Password = $null
+    $EnvLocal = Join-Path $Project "frontend\.env.local"
+    if (Test-Path -LiteralPath $EnvLocal -PathType Leaf) {
+        foreach ($Line in Get-Content -LiteralPath $EnvLocal) {
+            if ($Line -match '^\s*SIGNALLENS_DASHBOARD_USERNAME\s*=\s*(.*?)\s*$') { $Username = $Matches[1].Trim('"', "'") }
+            if ($Line -match '^\s*SIGNALLENS_DASHBOARD_PASSWORD\s*=\s*(.*?)\s*$') { $Password = $Matches[1].Trim('"', "'") }
+        }
+    }
+    $LoginSource = "frontend\.env.local"
+}
+if (-not $Username -or -not $Password) {
+    $Username = "prototype"
+    $Password = [guid]::NewGuid().ToString("N").Substring(0, 16)
+    $LoginSource = $null
+}
 $env:SIGNALLENS_ENVIRONMENT = "development"
 $env:SIGNALLENS_STAGING_MODE = "true"
 $env:SIGNALLENS_SCHEDULER_ENABLED = "false"
@@ -54,9 +74,9 @@ $env:SIGNALLENS_API_TOKEN = $Token
 $env:SIGNALLENS_API_URL = "http://127.0.0.1:8015"
 $env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:8015"
 $env:SIGNALLENS_ALLOWED_ORIGINS = "http://localhost:3015,http://127.0.0.1:3015"
-$env:SIGNALLENS_DASHBOARD_USERNAME = "prototype"
+$env:SIGNALLENS_DASHBOARD_USERNAME = $Username
 $env:SIGNALLENS_DASHBOARD_PASSWORD = $Password
-$WebHeaders = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("prototype:$Password")) }
+$WebHeaders = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${Username}:$Password")) }
 $Api = $null
 $Web = $null
 try {
@@ -75,7 +95,8 @@ try {
     Write-Host ""
     if ($Operator) { Write-Host "OPERATOR DATABASES, READ ONLY." -ForegroundColor Yellow } else { Write-Host "SYNTHETIC FIXTURE ONLY." -ForegroundColor Yellow }
     Write-Host "Open:     http://127.0.0.1:3015/prototype?decision_at=$Cutoff"
-    Write-Host "Login:    prototype / $Password"
+    if ($LoginSource) { Write-Host "Login:    your configured dashboard username and password (from $LoginSource)" }
+    else { Write-Host "Login:    $Username / $Password  (one-time; set SIGNALLENS_DASHBOARD_USERNAME/PASSWORD to use your own)" }
     Write-Host "Cutoff:   $Cutoff  (paste it into the form; each new cutoff takes ~10 s on operator data)"
     [void](Read-Host "Press Enter to stop the two services started by this script")
 } finally {
