@@ -4,6 +4,7 @@ The roster is the existing visible ordinary-company classification population,
 not an approved sample. Exact stored security IDs are the only join key.
 """
 from collections import Counter, defaultdict
+from contextvars import ContextVar
 from datetime import timedelta
 import hashlib
 import json
@@ -23,6 +24,7 @@ MAX_CELL_CHARS = 1024
 MAX_ROSTER = 256
 MAX_PERIOD_WORK = 50000
 SAMPLE_LIMIT = 10
+_TRACE = ContextVar('track_b_gap_internal_trace', default=None)
 FIELDS = tuple(dict.fromkeys(h.FAMILY_FIELDS['value'] + h.FAMILY_FIELDS['financial_strength']))
 # Review buckets only: never accepted or substituted by the draft adapter.
 REVIEW_CONCEPT_FIELDS = {
@@ -49,6 +51,23 @@ class GapDiagnosticError(h.InventoryError):
     reason_code = 'TRACK_B_GAP_DIAGNOSTIC_FAILED'
 
 
+def _mark(stage, **counts):
+    trace = _TRACE.get()
+    if trace is not None:
+        trace.mark(stage, counts)
+
+
+def _event(reason, **counts):
+    trace = _TRACE.get()
+    if trace is not None:
+        trace.record(reason, counts)
+
+
+def _fail(message, reason, **counts):
+    _event(reason, **counts)
+    raise GapDiagnosticError(message)
+
+
 def _hash(value):
     return hashlib.sha256(str(value).encode('utf-8')).hexdigest()
 
@@ -59,39 +78,52 @@ def _bounded(items):
             'truncated': len(items) > SAMPLE_LIMIT}
 
 
-def _read(db, table):
+def _read(db, table, database='research'):
     """Fixed base-table projections only; no payloads, amounts or dynamic adapters."""
+    prefix = database + '.' + table
+    _mark(prefix + '.schema')
     base = db.execute("""SELECT table_type FROM information_schema.tables
         WHERE table_catalog=current_database() AND table_schema='main' AND table_name=?""",
         [table]).fetchone()
     if not base:
+        _event('METADATA_TABLE_ABSENT')
         return {'state': 'absent_evidence', 'row_count': 0, 'columns': [],
                 'missing_adapter_columns': list(SOURCES[table])}, []
     if base[0] != 'BASE TABLE':
+        _event('METADATA_SCHEMA_INCOMPATIBLE')
         return {'state': 'incompatible_schema', 'row_count': None, 'columns': [],
                 'missing_adapter_columns': list(SOURCES[table])}, []
+    _mark(prefix + '.columns')
     schema = {r[0] for r in db.execute("""SELECT column_name FROM information_schema.columns
         WHERE table_catalog=current_database() AND table_schema='main' AND table_name=?""",
         [table]).fetchall()}
     columns = [c for c in SOURCES[table] if c in schema]
+    _mark(prefix + '.row_count', projected_column_count=len(columns))
     count = db.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
     if count > MAX_ROWS:
-        raise GapDiagnosticError('metadata row bound exceeded')
+        _fail('metadata row bound exceeded', 'METADATA_ROW_LIMIT', row_count=count, row_limit=MAX_ROWS)
     summary = {'state': 'metadata_only' if columns else 'incompatible_schema',
                'row_count': count, 'columns': columns,
                'missing_adapter_columns': sorted(set(SOURCES[table]) - set(columns))}
     if not columns:
+        _event('METADATA_SCHEMA_INCOMPATIBLE', row_count=count)
         return summary, []
     oversized = ' OR '.join(f'length(CAST("{c}" AS VARCHAR)) > {MAX_CELL_CHARS}' for c in columns)
-    if db.execute(f'SELECT count(*) FROM "{table}" WHERE {oversized}').fetchone()[0]:
-        raise GapDiagnosticError('metadata cell bound exceeded')
+    _mark(prefix + '.cell_count', row_count=count, projected_column_count=len(columns))
+    oversized_count = db.execute(f'SELECT count(*) FROM "{table}" WHERE {oversized}').fetchone()[0]
+    if oversized_count:
+        _fail('metadata cell bound exceeded', 'METADATA_CELL_LIMIT',
+              oversized_row_count=oversized_count, cell_character_limit=MAX_CELL_CHARS)
     projection = ','.join(f'"{c}"' for c in columns)
+    _mark(prefix + '.projection', row_count=count, projected_column_count=len(columns))
     cursor = db.execute(f'SELECT {projection} FROM "{table}" LIMIT {MAX_ROWS + 1}')
     rows = []
     while batch := cursor.fetchmany(2048):
         rows.extend(dict(zip(columns, row)) for row in batch)
     if len(rows) != count:
-        raise GapDiagnosticError('metadata count mismatch')
+        _fail('metadata count mismatch', 'METADATA_COUNT_MISMATCH', expected_row_count=count,
+              decoded_row_count=len(rows))
+    _event('METADATA_READ_OK', decoded_row_count=len(rows))
     return summary, rows
 
 
@@ -105,13 +137,14 @@ def _visible_classification(row, decision):
 def _reconcile(data, decision):
     # Same timestamp/type roster as the existing financial-strength/liquidity
     # reader, without its canonical fallback or symbol-based tuple duplication.
+    _mark('roster.identity', classification_row_count=len(data['security_classification_evidence']))
     classes = defaultdict(set)
     for row in data['security_classification_evidence']:
         if row.get('security_id') and _visible_classification(row, decision):
             classes[str(row['security_id'])].add(row.get('security_type'))
     roster = {sid for sid, types in classes.items() if 'us_operating_company' in types}
     if len(roster) > MAX_ROSTER:
-        raise GapDiagnosticError('roster bound exceeded')
+        _fail('roster bound exceeded', 'ROSTER_LIMIT', roster_count=len(roster), roster_limit=MAX_ROSTER)
     stored = {str(r['security_id']) for table in ('security_listings', 'universe_snapshot_members',
         'sec_issuers', 'canonical_factor_evidence', 'sec_facts') for r in data[table] if r.get('security_id')}
     ciks = defaultdict(set)
@@ -259,7 +292,8 @@ def _period_shape(row):
 def _period_diagnostics(periods):
     quarters = sorted({(s, e) for s, e in periods if s and 60 <= (e-s).days+1 <= 120})
     if len(periods) > MAX_PERIOD_WORK:
-        raise GapDiagnosticError('period state bound exceeded')
+        _fail('period state bound exceeded', 'PERIOD_STATE_LIMIT', period_count=len(periods),
+              period_limit=MAX_PERIOD_WORK)
     adjacency = Counter()
     for previous, current in zip(quarters, quarters[1:]):
         adjacency['contiguous' if current[0] == previous[1]+timedelta(days=1)
@@ -276,7 +310,9 @@ def _period_diagnostics(periods):
             'shared_end_multiple_start_count': sum(len(v)>1 for v in ends.values())}
 
 
-def _diagnose_layer(rows, layer, matched, decision, source):
+def _diagnose_layer(rows, layer, matched, decision, source, database='research'):
+    prefix = database + '.' + layer
+    _mark(prefix + '.accounting', metadata_row_count=len(rows), matched_count=len(matched))
     required = {'security_id', 'concept' if layer == 'raw_sec' else 'canonical_field'}
     supported = source['state'] != 'incompatible_schema' and (not source['row_count'] or required <= set(source['columns']))
     index = defaultdict(lambda: defaultdict(list))
@@ -347,6 +383,8 @@ def _diagnose_layer(rows, layer, matched, decision, source):
         totals = Counter()
         pairs = Counter()
         for sid in sorted(matched):
+            _mark(prefix + '.' + field + '.periods', period_count=len(valid[sid][field]),
+                  matched_count=len(matched))
             diagnostic = _period_diagnostics(valid[sid][field])
             totals.update({k:v for k,v in diagnostic.items() if k != 'adjacent_quarter_pair_counts'})
             pairs.update(diagnostic['adjacent_quarter_pair_counts'])
@@ -359,7 +397,13 @@ def _diagnose_layer(rows, layer, matched, decision, source):
         periods = valid[sid]
         ocf, capex = periods['operating_cash_flow'], periods['capital_expenditure']
         aligned = ocf & capex
-        value_chains = h._chains(aligned, 4)
+        _mark(prefix + '.value.chain', period_count=len(aligned), chain_length=4,
+              chain_work_limit=h.MAX_CHAIN_WORK)
+        try:
+            value_chains = h._chains(aligned, 4)
+        except h.InventoryError:
+            _event('CHAIN_WORK_LIMIT')
+            raise
         for family in family_counts:
             missing = [f for f in h.FAMILY_FIELDS[family] if not index[sid][f]]
             if missing:
@@ -370,7 +414,13 @@ def _diagnose_layer(rows, layer, matched, decision, source):
             flags[sid].add('value:ocf_capex_period_endpoints_not_identical')
         if capex-ocf:
             family_counts['value']['companies_with_capex_periods_without_identical_ocf_period'] += 1
-        ocf_chains = h._chains(ocf, 4)
+        _mark(prefix + '.financial_strength.chain', period_count=len(ocf), chain_length=4,
+              chain_work_limit=h.MAX_CHAIN_WORK)
+        try:
+            ocf_chains = h._chains(ocf, 4)
+        except h.InventoryError:
+            _event('CHAIN_WORK_LIMIT')
+            raise
         chain_ends = {e for _, e in ocf_chains}
         instant_ends = [{e for _, e in periods[f]} for f in ('current_debt', 'non_current_debt', 'cash_and_cash_equivalents')]
         all_ends = set.intersection(*instant_ends)
@@ -433,6 +483,7 @@ def _concept_explanations(data, matched, decision):
 
 
 def diagnose(*, research_db, production_db, decision_at):
+    _mark('input')
     decision = h._utc(decision_at)
     paths = {'research': Path(research_db), 'production': Path(production_db)}
     h.validate_paths(paths['research'], paths['production'])
@@ -440,29 +491,42 @@ def diagnose(*, research_db, production_db, decision_at):
     try:
         baseline_failed = False
         for name, path in paths.items():
+            _mark(name + '.fingerprint.before')
             try:
                 before[name] = h.fingerprint(path)
+                _event('FINGERPRINT_BEFORE_OK')
             except Exception:
                 baseline_failed = True
+                _event('FINGERPRINT_BEFORE_IO_FAILED')
         if baseline_failed:
-            raise GapDiagnosticError('database fingerprint baseline unavailable')
+            _mark('fingerprints.baseline')
+            _fail('database fingerprint baseline unavailable', 'FINGERPRINT_BASELINE_UNAVAILABLE',
+                  baseline_count=len(before), required_baseline_count=2)
         datasets, summaries = {}, {}
         for name, path in paths.items():
             datasets[name], summaries[name] = {}, {}
+            _mark(name + '.connect')
             with duckdb.connect(str(path), read_only=True, config=h._sql_config()) as db:
                 for table in SOURCES:
-                    summaries[name][table], datasets[name][table] = _read(db, table)
+                    summaries[name][table], datasets[name][table] = _read(db, table, name)
         roster_source = summaries['research']['security_classification_evidence']
+        _mark('roster.schema', projected_column_count=len(roster_source['columns']))
         if roster_source['state'] == 'incompatible_schema' or (roster_source['row_count'] and
             not {'security_id', 'security_type', 'public_at', 'retrieved_at', 'available_at'} <= set(roster_source['columns'])):
-            raise GapDiagnosticError('roster adapter schema unsupported')
+            _fail('roster adapter schema unsupported', 'ROSTER_SCHEMA_UNSUPPORTED',
+                  missing_required_column_count=len({'security_id', 'security_type', 'public_at',
+                      'retrieved_at', 'available_at'} - set(roster_source['columns'])))
         reconciliation, matched, _ = _reconcile(datasets['research'], decision)
+        _event('ROSTER_RECONCILED', roster_count=reconciliation['comparable_roster_count'],
+               matched_count=len(matched))
+        _mark('retrievals.completion')
         complete, visible_complete, completion = _completed(datasets['research'], summaries['research'], decision)
         databases = {}
         for name, data in datasets.items():
             layers = {}; indexes = {}
             for layer, table in (('raw_sec', 'sec_facts'), ('canonical', 'canonical_factor_evidence')):
-                layers[layer], indexes[layer] = _diagnose_layer(data[table], layer, matched, decision, summaries[name][table])
+                layers[layer], indexes[layer] = _diagnose_layer(data[table], layer, matched, decision, summaries[name][table], name)
+            _mark(name + '.coverage', matched_count=len(matched))
             coverage = {}
             for field in FIELDS:
                 raw = {sid for sid in matched if any(r.get('concept') in h.FIELDS[field][2]
@@ -475,10 +539,12 @@ def diagnose(*, research_db, production_db, decision_at):
                 if not all(layers[layer]['adapter_supported'] for layer in layers):
                     for key in ('raw_and_canonical', 'raw_only', 'canonical_only', 'neither'):
                         coverage[field][key] = None
+            _mark(name + '.concepts', matched_count=len(matched))
             databases[name] = {'layers': layers, 'raw_canonical_coverage': coverage,
                                'concept_explanations': _concept_explanations(data, matched, decision)}
         # Completion and absent concept checks use research only, never the
         # production-local indexes from the separate coverage loop above.
+        _mark('retrievals.gaps', matched_count=len(matched))
         research_raw = {str(r.get('security_id')): set() for r in datasets['research']['sec_facts']}
         for row in datasets['research']['sec_facts']:
             field = h.CONCEPT_FIELDS.get(row.get('concept'))
@@ -490,7 +556,9 @@ def diagnose(*, research_db, production_db, decision_at):
             'missing_exact_raw_input_after_completed_retrieval_count': len(missing & complete),
             'missing_exact_raw_input_without_completion_metadata_count': len(missing-complete),
             'completion_does_not_certify_accounting_chain': True})
+        _mark('specification')
         spec = json.loads(SPEC_PATH.read_text(encoding='utf-8'))
+        _mark('report.build')
         result = {'command': 'track-b-identity-accounting-gap-diagnostic', 'version': 'track-b-gap-diagnostic-1.0.0',
             'decision_at': decision.isoformat(), 'labels': TRACK_B_LABELS,
             'read_only': True, 'metadata_only': True, 'realized_outcome_values_read': False,
@@ -511,18 +579,42 @@ def diagnose(*, research_db, production_db, decision_at):
                 'maximum_chain_work_per_call': h.MAX_CHAIN_WORK, 'sql_memory_limit': h.MARKET_SQL_MEMORY,
                 'sql_threads': 1, 'disk_spill_allowed': False, 'unsupported_tables_read': False}}
     except duckdb.OutOfMemoryException:
+        _event('SQL_MEMORY_LIMIT')
         raise GapDiagnosticError('SQL resource bound exceeded') from None
+    except Exception:
+        # Capture the work stage before finally advances to fingerprint cleanup.
+        # Exception text remains private; explicit guard events precede this one.
+        _event('DIAGNOSTIC_FAILED')
+        raise
     finally:
         # Attempt both after fingerprints even when one fails; never publish a
         # report if a hash is unavailable or either file changed.
         after = {}; failures = []
         for name, path in paths.items():
+            _mark(name + '.fingerprint.after')
             try:
                 after[name] = h.fingerprint(path)
+                _event('FINGERPRINT_AFTER_OK')
             except Exception:
                 failures.append(name)
+                _event('FINGERPRINT_AFTER_IO_FAILED')
         if failures or before != after:
+            _mark('fingerprints.verify', baseline_count=len(before), after_count=len(after),
+                  after_failure_count=len(failures))
+            if failures:
+                _event('FINGERPRINT_AFTER_UNAVAILABLE')
+            elif len(before) != 2:
+                _event('FINGERPRINT_BASELINE_UNAVAILABLE')
+            else:
+                _event('FINGERPRINT_CHANGED', changed_database_count=sum(before[k] != after[k] for k in before))
             raise GapDiagnosticError('database fingerprint verification failed') from None
     result['database_fingerprints'] = {name: {'before': before[name], 'after': after[name], 'unchanged': True}
                                        for name in paths}
-    return _within_contract(result, MAXIMUM_BYTES)
+    _mark('report.contract', byte_limit=MAXIMUM_BYTES)
+    try:
+        result = _within_contract(result, MAXIMUM_BYTES)
+    except h.InvestmentResearchError:
+        _event('REPORT_BYTE_LIMIT', compact_utf8_bytes=result.get('compact_utf8_bytes'))
+        raise
+    _event('DIAGNOSTIC_COMPLETED', compact_utf8_bytes=result['compact_utf8_bytes'])
+    return result

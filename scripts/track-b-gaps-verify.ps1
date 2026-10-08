@@ -12,8 +12,10 @@ param(
   $Research = Join-Path $Backend "data\research\signallens-research.duckdb"
   $Production = Join-Path $Backend "data\signallens.duckdb"
   $Reports = Join-Path $Backend "data\research\reports"
+  $PreviousEncoding = $OutputEncoding
   $Pushed = $false
   try {
+    $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
     Push-Location $Backend
     $Pushed = $true
     $Verify = @'
@@ -372,9 +374,10 @@ sys.exit(int(failed))
 '@
     $Skip = if ($SkipOfflineTests) { "1" } else { "0" }
     $Inspect = if ($InspectOnly) { "1" } else { "0" }
-    & $Python -X utf8 -c $Verify $Research $Production $Reports $Skip $Inspect 2>$null
+    $Verify | & $Python -X utf8 - $Research $Production $Reports $Skip $Inspect 2>$null
     if ($LASTEXITCODE -ne 0) { throw "TRACK_B_GAPS_VERIFICATION_FAILED" }
   } finally {
     if ($Pushed) { Pop-Location }
+    $OutputEncoding = $PreviousEncoding
   }
 }

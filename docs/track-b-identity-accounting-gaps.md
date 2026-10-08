@@ -246,3 +246,59 @@ never invokes the diagnostic, failures retain captures, and both after hashes ar
 checked. These tests reproduce the confirmed loss of failure evidence, **not** an
 unconfirmed operator exception. The actual operator failure requires the safe
 inspection result before a specific cause can be reproduced or repaired offline.
+
+### Confirmed command failure and opt-in internal trace
+
+Operator evidence on c058f72 establishes exit code 1, zero stdout bytes and
+`TRACK_B_GAP_DIAGNOSTIC_FAILED` at both boundaries, with unchanged research and
+production hashes. This places failure inside the command, before JSON/schema,
+report assertions, output-limit checks or deterministic repeats. The underlying
+internal cause is unknown; operator verification remains unsuccessful.
+
+Every internal raise site for that public code is instrumented:
+
+| Internal path | Fixed reason | Integer evidence |
+| --- | --- | --- |
+| Table row bound | `METADATA_ROW_LIMIT` | row count, row limit, projected columns |
+| Metadata cell character bound | `METADATA_CELL_LIMIT` | oversized rows, character limit, table rows, projected columns |
+| SQL/projection count mismatch | `METADATA_COUNT_MISMATCH` | expected and decoded rows |
+| Comparable roster bound | `ROSTER_LIMIT` | roster count, limit, classification rows |
+| Period state bound | `PERIOD_STATE_LIMIT` | period count, limit, matched count |
+| Baseline fingerprint unavailable | `FINGERPRINT_BASELINE_UNAVAILABLE` | baseline count, required count |
+| Unsupported research roster schema | `ROSTER_SCHEMA_UNSUPPORTED` | projected and missing required columns |
+| DuckDB out-of-memory within diagnostic work | `SQL_MEMORY_LIMIT` | fixed work stage and its known counts |
+| Cleanup fingerprint verification | `FINGERPRINT_AFTER_UNAVAILABLE`, `FINGERPRINT_BASELINE_UNAVAILABLE`, `FINGERPRINT_CHANGED` | baseline/after/failure counts; changed database count when applicable |
+
+Cleanup can mask an earlier exception; the trace retains both failure events in
+order. Separate before/after I/O events distinguish databases. Chain work failure
+keeps `TRACK_B_HISTORY_INVENTORY_FAILED` with `CHAIN_WORK_LIMIT`; compact report
+budget rejection keeps `INVESTMENT_RESEARCH_NOT_READY` with `REPORT_BYTE_LIMIT`.
+Unexpected exceptions retain their public code and fixed work-stage event before
+cleanup, without exception text.
+
+`python -m app.track_b_gap_diagnostic` wraps the same read-only function, discards
+its full report, and emits only allowlisted stages/reasons and nonnegative integer
+counts. Its budget is 64 events and 16,384 compact UTF-8 bytes plus print newline.
+No paths, identities, financial values, hashes or exception messages are emitted.
+The ordinary CLI retains its redacted public error contract and emits no trace.
+No computation bound, validation, accounting contract or assertion is relaxed.
+All eight preregistration groups remain unresolved.
+
+`scripts/track-b-gaps-diagnose.ps1` uses Python stdin, never multiline `-c`.
+It skips pytest and verification repeats. At each established boundary it captures
+one public command and one opt-in internal diagnostic. Separate UTF-8 stdout and
+stderr captures, validated internal JSON and a safe summary are saved under
+`backend/data/research/reports/track-b-gaps-focused-*`. Raw captures stay local;
+console output is restricted to safe codes and counts. Launch/capture, JSON,
+UTF-8/output-limit and safe-schema failures are distinguished. Both external
+fingerprints are attempted independently in cleanup, including after failure.
+Stop concurrent writers for operator use. A completed internal diagnostic does
+not constitute successful operator verification; the summary always reports
+`operator_verification_successful: false`.
+
+Offline fault injection exercises every public-code raise site and fingerprint
+subcase, simultaneous failures, trace redaction/bounds, unchanged untraced reports,
+and focused runner capture, launch/JSON/schema/output failures and hash cleanup
+using synthetic files only. These are route tests, not a reproduction of the
+unknown operator cause. Once operator stage/reason/count evidence identifies that
+cause, reproduce the exact case offline before proposing its fix in this PR.
