@@ -343,6 +343,14 @@ The web proxy now allows prototype requests 60 seconds (as for the Model
 Laboratory): a full assessment takes about 10-15 seconds, and on a busy machine
 it exceeded the previous 15-second limit.
 
+## Stage 6 (first step): compare eligible companies
+
+The shortlist page has a "Compare eligible companies" table: market cap,
+126-session move, P/E, free-cash-flow yield, position against own history,
+financial-health strengths/weaknesses, filing risk flags and the next-results
+estimate for every eligible company, from the same report. Rows stay in the
+membership (hash) order and are never sorted by these columns.
+
 ## Remaining work
 
 1. Conservative scenario ranges with explicit assumptions, peer comparison
