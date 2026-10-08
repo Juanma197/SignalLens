@@ -23,6 +23,7 @@ from ..price_segments import detect_price_segments
 from ..research_observations import ObservationPolicy
 from ..sec_ingestion import validate_paths
 from ..track_b_gaps import _reconcile
+from .brief import analyst_brief
 from .events import event_brief, read_events
 from .financials import annual_brief, sector_notes, summary_only, valuation, valuation_history
 
@@ -506,6 +507,8 @@ def _build(db, decision, target):
     if not sessions: blockers.append('completed_visible_us_sessions_unavailable')
     # Block all results below ten; proposed membership is still visible for review.
     results = [] if blockers else sorted([c for c in members if c['calculation']['momentum_return'] > 0], key=lambda c: (-c['calculation']['momentum_return'], c['security_id']))[:CONFIG['maximum_results']]
+    for c in members:
+        c['brief'] = analyst_brief(c, decision, result=c['security_id'] in {r['security_id'] for r in results})
     return _report(companies, members, results, schema, blockers, target, decision, [c['security_id'] for c in eligible], calendar)
 
 

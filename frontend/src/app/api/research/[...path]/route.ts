@@ -3,8 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 export const DEFAULT_RESEARCH_TIMEOUT_MS = 15_000;
 export const MODEL_LABORATORY_TIMEOUT_MS = 60_000;
 
+// Prototype assessments read and fingerprint the full research database
+// (about 10-15 s, longer on a busy machine), so they share the long timeout.
 export function timeoutForResearchPath(path: string[]) {
-  return path[0] === "model-laboratory"
+  return path[0] === "model-laboratory" || path[0] === "prototype"
     ? MODEL_LABORATORY_TIMEOUT_MS
     : DEFAULT_RESEARCH_TIMEOUT_MS;
 }
@@ -42,7 +44,7 @@ export async function POST(request: NextRequest, context: {params: Promise<{path
   if (token) headers.Authorization = `Bearer ${token}`;
   try {
     const response = await fetch(target, {method: "POST", cache: "no-store", headers, body: await request.text(),
-      signal: AbortSignal.timeout(DEFAULT_RESEARCH_TIMEOUT_MS)});
+      signal: AbortSignal.timeout(timeoutForResearchPath(path))});
     return new NextResponse(await response.text(), {status: response.status,
       headers: {"Content-Type": "application/json", "Cache-Control": "no-store"}});
   } catch {

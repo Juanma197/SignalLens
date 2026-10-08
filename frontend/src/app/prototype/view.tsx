@@ -2,12 +2,13 @@ import Link from "next/link";
 
 export type Calculation = {formula: string; start_session: string; end_session: string; start_adjusted_close: number; end_adjusted_close: number; session_intervals: number; momentum_return: number; source: string[]; latest_input_retrieved_at: string};
 export type Fact = {field: string; value: number; unit: string; concept: string; reported_start: string|null; reported_end: string; period_kind: string; reported_days?: number|null; form: string; public_at: string; retrieved_at: string; known_at: string; citation: {fact_key: string; accession: string; cik: string; source_endpoint: string}};
-export type Company = {security_id: string; qualified_symbol: string|null; company_name: string|null; eligible: boolean; reasons: string[]; calculation: Calculation|null; direct_evidence: Fact[]; missing_data: {field: string; reasons: string[]}[]; risks: string[]; identity_evidence: Record<string, string|null>|null; action_coverage: ActionCoverage|null; industry?: Industry|null; size?: Size|null; financials?: Financials|null; valuation?: Valuation|null; sector_notes?: string[]; events?: Events|null};
+export type Company = {security_id: string; qualified_symbol: string|null; company_name: string|null; eligible: boolean; reasons: string[]; calculation: Calculation|null; direct_evidence: Fact[]; missing_data: {field: string; reasons: string[]}[]; risks: string[]; identity_evidence: Record<string, string|null>|null; action_coverage: ActionCoverage|null; industry?: Industry|null; size?: Size|null; financials?: Financials|null; valuation?: Valuation|null; sector_notes?: string[]; events?: Events|null; brief?: AnalystBrief|null};
 export type FinValue = {value: number; concept: string; accession: string; form: string; known_at: string};
 export type FinYear = {fiscal_year_end: string; values: Record<string, FinValue>; calculated: Record<string, number>};
 export type Observation = {kind: "strength"|"weakness"|"neutral"|"gap"; area: string; text: string; fiscal_years: string[]};
 export type Financials = {years: FinYear[]; observations: Observation[]; method: string; not_available: string[]; tables_omitted?: string; fiscal_years_available?: number};
 export type Valuation = {market_cap_usd: number; fiscal_year_end: string; multiples: Partial<Record<"price_to_earnings"|"price_to_sales"|"price_to_free_cash_flow"|"price_to_book", number>>; not_meaningful: string[]; basis: string; earnings_yield?: number; free_cash_flow_yield?: number; history?: ValuationHistory|null};
+export type AnalystBrief = {label: string; sections: {title: string; points: string[]}[]; counterarguments: string[]; missing_evidence: string[]};
 export type FilingEvent = {accession: string; form: string; filing_date: string; known_at: string; items: string[]; category: string; label: string; confidence: number; amendment: boolean; url: string|null};
 export type Events = {window_days: number; event_count: number; counts: Record<string, number>; note: string; latest_known_at: string|null;
   flags: {kind: "risk"|"catalyst"; category: string; count: number; text: string}[];
@@ -80,6 +81,7 @@ export function CompanyView({detail}: {detail: Detail}) {
     <p>{detail.qualifying_result?"Qualifying research result in the unfrozen proposal.":detail.proposed_member?"Proposed member; not a qualifying result.":"Company inspected during roster review; outside the proposal."}</p><p>{c.eligible?"Required evidence checks passed.":`Withheld: ${c.reasons.join("; ")}`}</p>
     {detail.blockers.length>0 && <p className="notice warning">Universe blockers: {detail.blockers.join("; ")}</p>}
     <CalculationView calculation={c.calculation}/></section>
+    {c.brief && <AnalystBriefView brief={c.brief}/>}
     <section className="panel prototype-panel"><h2>Size and industry</h2>
       {c.size ? <><p><b>{money(c.size.market_cap_usd)} market cap</b> (band {money(c.size.band_usd[0])}–{money(c.size.band_usd[1])})</p>
         <p><code>{c.size.shares_outstanding.toLocaleString("en-GB")} shares × ${c.size.close.toFixed(2)} close</code></p>
@@ -168,5 +170,14 @@ export function EventsView({events}: {events: Events}) {
     {events.events.length > 0 && <><h3>Filings</h3><ul>{events.events.map(e => <li key={e.accession + e.category}>
       {e.filing_date} · {e.label}{e.amendment ? " (amendment)" : ""} · {e.form} items {e.items.join(", ") || "none"} · confidence {e.confidence.toFixed(2)}
       {e.url && <> · <a href={e.url} target="_blank" rel="noopener noreferrer">SEC filing</a></>}</li>)}</ul></>}
+  </section>;
+}
+
+/** One-page summary of the sections below, with counterarguments and gaps. */
+export function AnalystBriefView({brief}: {brief: AnalystBrief}) {
+  return <section className="panel prototype-panel prototype-fin prototype-brief"><h2>Analyst brief</h2><p>{brief.label}</p>
+    {brief.sections.map(section => <div key={section.title}><h3>{section.title}</h3><ul>{section.points.map(point => <li key={point}>{point}</li>)}</ul></div>)}
+    <h3>Counterarguments</h3><ul>{brief.counterarguments.map(point => <li key={point}>{point}</li>)}</ul>
+    <details><summary>Missing evidence ({brief.missing_evidence.length})</summary><ul>{brief.missing_evidence.map(point => <li key={point}>{point}</li>)}</ul></details>
   </section>;
 }

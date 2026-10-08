@@ -323,10 +323,30 @@ Operator check (read-only, 2026-10-08): all 12 eligible companies have 6-19
 events in the last year; 11 have a next-results estimate (late October to early
 November 2026 for most). Hashes unchanged.
 
+## Stage 5: one-page analyst brief
+
+For each proposed member, an "Analyst brief" sits at the top of the company page:
+what it is, why it is on the list, financial health (top strengths and
+weaknesses), valuation (current multiples and own-history position), catalysts
+and timing, and filing/data risks. Every point is restated from the sections
+below. **Counterarguments** are fixed rules that argue against the case, for
+example a large price rise with an operating loss or negative free cash flow,
+multiples below the company's own range alongside falling revenue, valuations
+above history, a falling price, dilution, weak cash conversion and sector
+caveats. If none triggers, the brief says so and asks you to look for one.
+**Missing evidence** lists every gap, including what is never stored (what the
+company sells, competitive position), no peer comparison and no scenario range.
+The brief is rule-based interpretation, not a forecast or recommendation, and
+never affects the shortlist; your thesis stays separate.
+
+The web proxy now allows prototype requests 60 seconds (as for the Model
+Laboratory): a full assessment takes about 10-15 seconds, and on a busy machine
+it exceeded the previous 15-second limit.
+
 ## Remaining work
 
-1. Stage 5: a one-page analyst brief that combines the sections, with
-   counterarguments and missing evidence. Then conservative scenario ranges.
+1. Conservative scenario ranges with explicit assumptions, peer comparison
+   within the universe, and Stage 6 (month-to-month changes and holdings review).
 2. Fresh prices for a current-month shortlist and for tracking to advance
    (operator-run acquisition with the existing ingestion). Corporate-action
    coverage for the 39 `coverage_missing` companies would widen the eligible pool.

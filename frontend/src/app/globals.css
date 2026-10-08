@@ -202,3 +202,4 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; }
 @media (max-width:760px) { .prototype-cards { grid-template-columns:1fr; } .prototype-cards article { border-right:0; border-bottom:1px solid var(--line); } }
 .prototype-fin h3 { font-size:17px; margin:20px 0 6px; }
 .prototype-fin th small { display:block; font-weight:400; color:var(--muted); font-size:11px; }
+.prototype-brief { border-color:var(--green); }
