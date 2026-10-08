@@ -190,9 +190,11 @@ def test_chain_failure_keeps_other_public_contract(tmp_path,monkeypatch):
 
 
 @pytest.mark.parametrize('column',g.IDENTITY_KEYS)
-def test_confirmed_operator_guard_each_possible_column(tmp_path,column):
+def test_confirmed_operator_guard_each_possible_column(tmp_path,column,monkeypatch):
     """Reproduce confirmed table/guard/counts without guessing its column."""
     from test_track_b_gaps import create, add
+    # Reproduce the pre-fix projection, not the fingerprinted replacement.
+    monkeypatch.setattr(g,'_projection_expression',lambda table,column:f'"{column}"')
     paths=(tmp_path/'research.duckdb',tmp_path/'production.duckdb')
     with duckdb.connect(str(paths[1])): pass
     with duckdb.connect(str(paths[0])) as db:
@@ -228,7 +230,8 @@ def test_optional_cell_detail_failure_keeps_original_guard(tmp_path,monkeypatch)
     assert 'METADATA_CELL_DETAILS_UNAVAILABLE' in {e['reason_code'] for e in result['events']}
 
 
-def test_cell_details_all_columns_no_values():
+def test_cell_details_all_columns_no_values(monkeypatch):
+    monkeypatch.setattr(g,'_projection_expression',lambda table,column:f'"{column}"')
     trace=d.Trace(); token=g._TRACE.set(trace)
     try:
         with duckdb.connect(':memory:') as db:
@@ -280,3 +283,58 @@ def test_cell_only_runner_no_other_tables_or_subprocesses(tmp_path,monkeypatch,c
         detail=next(e for e in summary['events'] if e['reason_code']=='METADATA_CELL_COLUMN_LIMIT')
         assert detail['stage']=='cell_lengths.research.sec_liquidity_runs.cell_count.plan_id'
         assert detail['counts']['maximum_cell_characters']==length
+
+
+def test_confirmed_11171_plan_capability_reproduction_and_fix(tmp_path,monkeypatch):
+    from app.sec_liquidity_plan import _encode_identifier, _decode_identifier
+    import hashlib
+    paths=fixture(tmp_path)
+    plan=next(p for n in range(8200,8350) if len(p:=_encode_identifier(D,
+        {'issued_at':D.isoformat(),'synthetic':'x'*n}))==11171)
+    assert _decode_identifier(plan)[0]==D
+    with duckdb.connect(str(paths[0])) as db:
+        # Exactly one run row with six projected identity columns.
+        db.execute('DELETE FROM sec_liquidity_runs WHERE run_id<>?', ['run-s0'])
+        for table in g.PLAN_ID_TABLES:
+            db.execute('UPDATE '+table+' SET plan_id=? WHERE run_id=?',[plan,'run-s0'])
+    before=[h.fingerprint(p) for p in paths]
+    with monkeypatch.context() as old:
+        old.setattr(g,'_projection_expression',lambda table,column:f'"{column}"')
+        rejected=traced(paths); check(rejected,'METADATA_CELL_LIMIT')
+        detail=next(e for e in rejected['events'] if e['reason_code']=='METADATA_CELL_COLUMN_LIMIT')
+        assert detail['stage']=='research.sec_liquidity_runs.cell_count.plan_id'
+        assert detail['counts']=={'row_count':1,'projected_column_count':6,
+            'oversized_row_count':1,'cell_character_limit':1024,'maximum_cell_characters':11171}
+    result=run(paths)
+    assert result['controlled_sec_retrievals']['completed_current_count']==1
+    assert result['controlled_sec_retrievals']['completed_by_boundary_count']==1
+    assert result['unresolved_requirement_count']==8 and not result['preregistration_ready']
+    assert result['bounds']['maximum_metadata_cell_characters']==1024
+    assert [h.fingerprint(p) for p in paths]==before
+    assert plan not in json.dumps(result)
+    with duckdb.connect(str(paths[0]),read_only=True,config=h._sql_config()) as db:
+        summary,rows=g._read(db,'sec_liquidity_runs')
+    assert rows[0]['plan_id']=='sha256:'+hashlib.sha256(plan.encode('utf-8')).hexdigest()
+    assert summary['identity_projection']['plan_id']=='sha256_full_stored_utf8_preserving_null_and_empty'
+    # Difference beyond the old bound must break completion; no prefix matching.
+    with duckdb.connect(str(paths[0])) as db:
+        db.execute('UPDATE sec_liquidity_raw_provenance SET plan_id=? WHERE run_id=?',[plan+'z','run-s0'])
+    assert run(paths)['controlled_sec_retrievals']['completed_current_count']==0
+
+
+@pytest.mark.parametrize('value',[None,'','é'+'x'*11170])
+def test_plan_projection_null_empty_unicode(value):
+    import hashlib
+    with duckdb.connect(':memory:') as db:
+        db.execute('CREATE TABLE sec_liquidity_runs(plan_id VARCHAR)')
+        db.execute('INSERT INTO sec_liquidity_runs VALUES (?)',[value])
+        summary,rows=g._read(db,'sec_liquidity_runs')
+    expected=value if value in (None,'') else 'sha256:'+hashlib.sha256(value.encode('utf-8')).hexdigest()
+    assert rows[0]['plan_id']==expected
+
+
+def test_other_identity_columns_still_fail_at_original_bound():
+    with duckdb.connect(':memory:') as db:
+        db.execute('CREATE TABLE sec_liquidity_runs(plan_id VARCHAR,run_id VARCHAR)')
+        db.execute('INSERT INTO sec_liquidity_runs VALUES (?,?)',['x'*11171,'x'*1025])
+        with pytest.raises(g.GapDiagnosticError): g._read(db,'sec_liquidity_runs')

@@ -45,6 +45,17 @@ SOURCES.update({
     'sec_liquidity_raw_provenance': IDENTITY_KEYS + ('security_id', 'cik',
         'endpoint_class', 'retrieved_at', 'response_sha256', 'byte_count', 'parser_version'),
 })
+PLAN_ID_TABLES = frozenset(('sec_liquidity_runs', 'sec_liquidity_checkpoints',
+                            'sec_liquidity_raw_provenance'))
+
+
+def _projection_expression(table, column):
+    if table in PLAN_ID_TABLES and column == 'plan_id':
+        # Plan capabilities embed encoded documents. Fingerprint the FULL stored
+        # string inside bounded SQL; never truncate or decode a capability.
+        # Preserve NULL/empty identity rejection, including in completion joins.
+        return "CASE WHEN plan_id IS NULL OR plan_id='' THEN plan_id ELSE 'sha256:' || sha256(plan_id) END"
+    return f'"{column}"'
 
 
 class GapDiagnosticError(h.InventoryError):
@@ -78,8 +89,10 @@ def _bounded(items):
             'truncated': len(items) > SAMPLE_LIMIT}
 
 
-def _read(db, table, database='research'):
+def _read(db, table, database='research', *, fingerprint_plan_ids=True):
     """Fixed base-table projections only; no payloads, amounts or dynamic adapters."""
+    expression = lambda column: (_projection_expression(table,column) if fingerprint_plan_ids
+                                 else f'"{column}"')
     prefix = database + '.' + table
     _mark(prefix + '.schema')
     base = db.execute("""SELECT table_type FROM information_schema.tables
@@ -105,10 +118,13 @@ def _read(db, table, database='research'):
     summary = {'state': 'metadata_only' if columns else 'incompatible_schema',
                'row_count': count, 'columns': columns,
                'missing_adapter_columns': sorted(set(SOURCES[table]) - set(columns))}
+    if fingerprint_plan_ids and table in PLAN_ID_TABLES and 'plan_id' in columns:
+        summary['identity_projection'] = {'plan_id': 'sha256_full_stored_utf8_preserving_null_and_empty'}
     if not columns:
         _event('METADATA_SCHEMA_INCOMPATIBLE', row_count=count)
         return summary, []
-    oversized = ' OR '.join(f'length(CAST("{c}" AS VARCHAR)) > {MAX_CELL_CHARS}' for c in columns)
+    oversized = ' OR '.join(f'length(CAST({expression(c)} AS VARCHAR)) > {MAX_CELL_CHARS}'
+                            for c in columns)
     _mark(prefix + '.cell_count', row_count=count, projected_column_count=len(columns))
     oversized_count = db.execute(f'SELECT count(*) FROM "{table}" WHERE {oversized}').fetchone()[0]
     if oversized_count:
@@ -121,7 +137,7 @@ def _read(db, table, database='research'):
             try:
                 expressions = []
                 for column in columns:
-                    length = f'length(CAST("{column}" AS VARCHAR))'
+                    length = f'length(CAST({expression(column)} AS VARCHAR))'
                     expressions.extend((f'count(*) FILTER (WHERE {length} > {MAX_CELL_CHARS})',
                                         f'max({length})'))
                 details = db.execute(f'SELECT {",".join(expressions)} FROM "{table}"').fetchone()
@@ -137,7 +153,7 @@ def _read(db, table, database='research'):
             finally:
                 _mark(prefix + '.cell_count', row_count=count, projected_column_count=len(columns))
         raise GapDiagnosticError('metadata cell bound exceeded')
-    projection = ','.join(f'"{c}"' for c in columns)
+    projection = ','.join(f'{expression(c)} AS "{c}"' for c in columns)
     _mark(prefix + '.projection', row_count=count, projected_column_count=len(columns))
     cursor = db.execute(f'SELECT {projection} FROM "{table}" LIMIT {MAX_ROWS + 1}')
     rows = []

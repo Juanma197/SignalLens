@@ -70,7 +70,7 @@ try:
             g.h.validate_paths(paths['research'],paths['production'])
             g._mark('research.connect')
             with duckdb.connect(str(paths['research']),read_only=True,config=g.h._sql_config()) as db:
-                g._read(db,'sec_liquidity_runs','research')
+                g._read(db,'sec_liquidity_runs','research',fingerprint_plan_ids=False)
         except Exception as exc:
             failed=True
             code=public_error_code(exc)
