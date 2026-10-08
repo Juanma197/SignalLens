@@ -115,3 +115,15 @@ def test_outer_powershell_handles_missing_python_and_stale_reports():
     assert '$PythonCompleted = $false' in source and 'if (-not $PythonCompleted)' in source
     assert source.index('$Before[$Name] = Database-Fingerprint $Path') < source.index('$Pending =')
     assert 'track-b-provenance-cleanup.json' in source and '$OutputEncoding = $PreviousEncoding' in source
+
+
+def test_metadata_refusal_preserves_safe_diagnostic_and_execution_failure_stage(tmp_path):
+    import duckdb
+    paths=databases(tmp_path)
+    with duckdb.connect(str(paths[0])) as db:db.execute('UPDATE sec_facts SET frame=?',['SECRET_REJECTED_'+'x'*1100])
+    ns,_=runner();ns['execute']=simulate(paths);summary=verify(tmp_path,ns,paths)
+    assert summary['execution_state']=='failed' and summary['errors']==['REPLAY_EXECUTION']
+    report=json.loads((tmp_path/'reports'/'track-b-provenance-replay.json').read_bytes())
+    assert report['errors']==['METADATA_CELL_LIMIT']
+    assert report['safe_read_diagnostic']['offending_columns'][0]['projected_column']=='frame'
+    assert 'SECRET_REJECTED_' not in json.dumps(report)

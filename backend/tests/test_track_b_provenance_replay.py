@@ -36,6 +36,8 @@ def fixture():
         source_endpoint='companyfacts',parser_contract_version=r.PARSER_VERSION,operation_type=r.OPERATION_TYPE,
         operation_contract_version=r.OPERATION_CONTRACT_VERSION,concept_contract_hash=r.CONCEPT_CONTRACT_HASH,
         ingestion_run_id='run',ingestion_plan_id='plan') for i,end in enumerate(['2025-03-31','2025-06-30'])]
+    for item in pair:item['plan_id_sha256']=hashlib.sha256(item['plan_id'].encode()).hexdigest()
+    for row in rows:row['ingestion_plan_id_sha256']=hashlib.sha256(row['ingestion_plan_id'].encode()).hexdigest()
     return pair,texts,rows
 
 
@@ -52,8 +54,10 @@ def databases(tmp_path):
         db.execute("INSERT INTO security_classification_evidence VALUES ('s','us_operating_company',?,?,?)",[OLD]*3)
         db.execute("INSERT INTO sec_issuers(security_id,qualified_symbol,ticker,cik) VALUES ('s','S.US','S','0000000100')")
         for row in rows:
+            row={k:v for k,v in row.items() if k!='ingestion_plan_id_sha256'}
             fields=list(row)+['value'];db.execute('INSERT INTO sec_facts('+','.join(fields)+') VALUES ('+','.join(['?']*len(fields))+')',list(row.values())+[123])
         for item,text in zip(pair,texts):
+            item={k:v for k,v in item.items() if k!='plan_id_sha256'}
             fields=list(item)+['payload_json'];db.execute('INSERT INTO '+r.RAW_TABLE+'('+','.join(fields)+') VALUES ('+','.join(['?']*len(fields))+')',list(item.values())+[text])
         db.execute('INSERT INTO sec_liquidity_runs(run_id,operation_type,operation_contract_version,concept_contract_hash,lineage_id,plan_id,decision_at,started_at,status,request_budget,production_sha256_before) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
             ['run',r.OPERATION_TYPE,r.OPERATION_CONTRACT_VERSION,r.CONCEPT_CONTRACT_HASH,pair[0]['lineage_id'],'plan',D,OLD,'completed',2,'synthetic'])
@@ -243,7 +247,7 @@ def test_submission_duplicates_bounded_without_truncation():
 
 def test_pair_security_operation_parser_links_required():
     pair,_,rows=fixture()
-    for key in ('security_id','cik','operation_type','ingestion_run_id','ingestion_plan_id','parser_contract_version'):
+    for key in ('security_id','cik','operation_type','ingestion_run_id','ingestion_plan_id_sha256','parser_contract_version'):
         altered=[dict(row,**{key:'wrong'}) for row in rows]
         assert r.select_pilot(pair,altered,D)[0] is None
 

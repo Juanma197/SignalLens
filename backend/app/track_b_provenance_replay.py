@@ -19,7 +19,7 @@ from .sec_ingestion import validate_paths
 from .sec_liquidity_contract import (OPERATION_TYPE, OPERATION_CONTRACT_VERSION,
                                      CONCEPT_CONTRACT_HASH, PARSER_VERSION)
 
-VERSION = 'track-b-provenance-replay-proposed-0.1.0'
+VERSION = 'track-b-provenance-replay-proposed-0.1.1'
 MAX_ROWS = 500_000
 MAX_MANIFEST = 10_000
 MAX_PAYLOAD = 5_000_000  # decimal MB, never MiB
@@ -28,6 +28,8 @@ MAX_OBSERVATIONS = 24
 MAX_ACCESSIONS = 3
 MAX_REPORT = 131_072
 MAX_CELL = 1024
+MAX_CELL_SAMPLES = 8
+OPAQUE_REFERENCES = {'plan_id': 'plan_id_sha256', 'ingestion_plan_id': 'ingestion_plan_id_sha256'}
 RAW_TABLE = 'sec_liquidity_raw_provenance'
 IDENTITY = ('operation_type', 'operation_contract_version', 'concept_contract_hash',
             'lineage_id', 'run_id', 'plan_id', 'security_id', 'cik')
@@ -71,7 +73,9 @@ BOUNDS = {'securities': 1, 'payload_pairs': 1, 'accessions': MAX_ACCESSIONS,
 
 
 class ReplayError(RuntimeError):
-    pass
+    def __init__(self, code, diagnostic=None):
+        super().__init__(code)
+        self.diagnostic = diagnostic
 
 
 def require(ok, code):
@@ -99,20 +103,66 @@ def schema(db, table):
     return {r[0] for r in db.execute("SELECT column_name FROM information_schema.columns WHERE table_catalog=current_database() AND table_schema='main' AND table_name=?", [table]).fetchall()}
 
 
-def metadata_rows(db, table, fields, required, remaining):
+def projection(column):
+    if column in OPAQUE_REFERENCES:
+        # Hash the full stored UTF-8 value in SQL, never a prefix or loaded token.
+        alias = OPAQUE_REFERENCES[column]
+        return f'CASE WHEN "{column}" IS NULL OR CAST("{column}" AS VARCHAR)=\'\' THEN NULL ELSE sha256(CAST("{column}" AS VARCHAR)) END AS "{alias}"', alias
+    return f'"{column}"', column
+
+
+def cell_diagnostics(db, table, selected, stage, *, original_projection=False, row_key=None):
+    """Only fixed field names, aggregate counts and bounded exact lengths escape SQL."""
+    findings = []
+    for column in selected:
+        if column in OPAQUE_REFERENCES and not original_projection: continue
+        predicate = f'length(CAST("{column}" AS VARCHAR))>{MAX_CELL}'
+        parameters = []
+        if row_key is not None:
+            require(table=='sec_liquidity_runs', 'UNSUPPORTED_ROW_FILTER')
+            predicate = '('+predicate+') AND run_id=?'
+            parameters = [row_key]
+        count, low, high = db.execute(f'SELECT count(*),min(length(CAST("{column}" AS VARCHAR))),max(length(CAST("{column}" AS VARCHAR))) FROM "{table}" WHERE {predicate}',parameters).fetchone()
+        if not count: continue
+        samples = db.execute(f'SELECT length(CAST("{column}" AS VARCHAR)),octet_length(encode(CAST("{column}" AS VARCHAR))) FROM "{table}" WHERE {predicate} ORDER BY 1 DESC,2 DESC LIMIT {MAX_CELL_SAMPLES}',parameters).fetchall()
+        findings.append({'read_stage': stage, 'table': table, 'source_column': column,
+            'projected_column': column if original_projection else OPAQUE_REFERENCES.get(column,column),
+            'proposed_reference_column': OPAQUE_REFERENCES.get(column), 'rejected_cell_count': count,
+            'min_characters': low, 'max_characters': high,
+            'cell_lengths': [{'characters':chars,'utf8_bytes':size} for chars,size in samples],
+            'sample_truncated': count>MAX_CELL_SAMPLES,
+            'field_class': 'opaque_capability_reference' if column in OPAQUE_REFERENCES else 'descriptive_metadata',
+            'rejected_values_returned': False})
+    return {'read_stage': stage, 'table': table, 'metadata_cell_limit': MAX_CELL,
+        'original_projection': original_projection, 'offending_columns': findings,
+        'rejected_values_returned': False, 'payloads_returned': False}
+
+
+def metadata_rows(db, table, fields, required, remaining, *, stage='metadata_read', row_key=None):
+    require('payload_json' not in fields, 'PAYLOAD_IN_METADATA_PROJECTION')
     columns = schema(db, table)
     if columns is None:
         return {'state': 'absent_evidence', 'rows': 0, 'columns': []}, []
-    count = db.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
+    where = ''; parameters = []
+    if row_key is not None:
+        require(table=='sec_liquidity_runs', 'UNSUPPORTED_ROW_FILTER')
+        where = ' WHERE run_id=?'; parameters = [row_key]
+    count = db.execute(f'SELECT count(*) FROM "{table}"{where}',parameters).fetchone()[0]
     require(count <= remaining, 'METADATA_ROW_LIMIT')
     selected = [c for c in fields if c in columns]
     if not selected or not required <= columns:
         return {'state': 'unsupported_schema', 'rows': count, 'columns': selected,
                 'missing_required': sorted(required - columns)}, []
-    checks = ' OR '.join(f'length(CAST("{c}" AS VARCHAR))>{MAX_CELL}' for c in selected)
-    require(not db.execute(f'SELECT count(*) FROM "{table}" WHERE {checks}').fetchone()[0], 'METADATA_CELL_LIMIT')
-    rows = [dict(zip(selected, r)) for r in db.execute(f'SELECT {",".join(chr(34)+c+chr(34) for c in selected)} FROM "{table}"').fetchall()]
-    return {'state': 'supported', 'rows': count, 'columns': selected}, rows
+    descriptive = [c for c in selected if c not in OPAQUE_REFERENCES]
+    checks = ' OR '.join(f'length(CAST("{c}" AS VARCHAR))>{MAX_CELL}' for c in descriptive)
+    check_where = ('('+checks+') AND run_id=?') if row_key is not None else checks
+    if checks and db.execute(f'SELECT count(*) FROM "{table}" WHERE {check_where}',parameters).fetchone()[0]:
+        diagnostic = cell_diagnostics(db,table,selected,stage,row_key=row_key)
+        raise ReplayError('METADATA_CELL_LIMIT', diagnostic)
+    projected = [projection(c) for c in selected]
+    rows = [dict(zip([alias for _,alias in projected],r)) for r in db.execute(f'SELECT {",".join(sql for sql,_ in projected)} FROM "{table}"{where}',parameters).fetchall()]
+    return {'state': 'supported', 'rows': count, 'columns': selected,
+            'opaque_identity_references': {c:OPAQUE_REFERENCES[c] for c in selected if c in OPAQUE_REFERENCES}}, rows
 
 
 def present(value):
@@ -178,13 +228,13 @@ def operation_ok(row):
 
 
 def pair_identity(row):
-    return tuple(norm(row.get(k)) for k in IDENTITY)
+    return tuple(norm(row.get(k)) for k in (OPAQUE_REFERENCES.get(c,c) for c in IDENTITY))
 
 
 def fact_matches_pair(row, pair):
     return (operation_ok(row) and all(norm(row.get(k)) == norm(pair.get(k)) for k in ('security_id', 'cik'))
         and norm(row.get('ingestion_run_id')) == norm(pair.get('run_id'))
-        and norm(row.get('ingestion_plan_id')) == norm(pair.get('plan_id'))
+        and norm(row.get('ingestion_plan_id_sha256')) == norm(pair.get('plan_id_sha256'))
         and row.get('parser_contract_version') == PARSER_VERSION)
 
 
@@ -211,7 +261,7 @@ def select_pilot(manifest, rows, decision):
         if time is None or time > decision: skipped['not_visible_or_unproven'] += 1; continue
         if not operation_ok(item) or item.get('parser_version') != PARSER_VERSION:
             skipped['unsupported_operation_or_parser'] += 1; continue
-        if not all(present(item.get(k)) for k in IDENTITY): skipped['incomplete_identity'] += 1; continue
+        if not all(present(item.get(k)) for k in (OPAQUE_REFERENCES.get(c,c) for c in IDENTITY)): skipped['incomplete_identity'] += 1; continue
         size = item.get('byte_count')
         if type(size) is not int or not 0 < size <= MAX_PAYLOAD:
             skipped['declared_payload_size_outside_bound'] += 1; continue
@@ -221,7 +271,7 @@ def select_pilot(manifest, rows, decision):
     rows_by_operation = defaultdict(list)
     for row in rows:
         if operation_ok(row) and row.get('parser_contract_version') == PARSER_VERSION:
-            key = tuple(norm(row.get(k)) for k in ('operation_type','operation_contract_version','concept_contract_hash')) + (norm(row.get('ingestion_run_id')),norm(row.get('ingestion_plan_id')),norm(row.get('security_id')),norm(row.get('cik')))
+            key = tuple(norm(row.get(k)) for k in ('operation_type','operation_contract_version','concept_contract_hash')) + (norm(row.get('ingestion_run_id')),norm(row.get('ingestion_plan_id_sha256')),norm(row.get('security_id')),norm(row.get('cik')))
             rows_by_operation[key].append(row)
     eligible = []
     seen_operation_keys = set()
@@ -257,7 +307,7 @@ def select_pilot(manifest, rows, decision):
         'payload_evidence_keys': [r['evidence_key'] for r in pair], 'qualifying_pair_count': len(eligible),
         'patterns': patterns, 'accessions': sorted({r['accession_number'] for r in selected}),
         'selected_stored_rows': len(selected), 'excluded_stored_rows': len(matching) - len(selected),
-        'selection_order': 'lexicographic_full_operation_security_cik_identity_then_accession_semantic_metadata_fact_key',
+        'selection_order': 'lexicographic_full_operation_security_cik_identity_with_full_plan_sha256_then_accession_semantic_metadata_fact_key',
         'skipped': dict(skipped)}
 
 
@@ -288,7 +338,7 @@ def verify_payload(item, text):
                      'verified_byte_count': len(raw), 'hash_and_size_verified': True}
 
 
-def verify_lineage(db, pair):
+def verify_lineage(db, pair, remaining=MAX_ROWS):
     first = pair[0]
     require(pair_identity(first) == pair_identity(pair[1]) and operation_ok(first), 'PAIR_LINEAGE_MISMATCH')
     require(first['retrieved_at'] == pair[1]['retrieved_at'], 'PAIR_RETRIEVAL_MISMATCH')
@@ -299,10 +349,12 @@ def verify_lineage(db, pair):
     fields = ('run_id', 'operation_type', 'operation_contract_version', 'concept_contract_hash', 'lineage_id', 'plan_id', 'decision_at')
     columns = schema(db, 'sec_liquidity_runs')
     require(columns is not None and set(fields) <= columns, 'RUN_LINEAGE_UNPROVEN')
-    runs = db.execute('SELECT '+','.join(fields)+' FROM sec_liquidity_runs WHERE run_id=?', [first['run_id']]).fetchall()
+    run_source, run_rows = metadata_rows(db, 'sec_liquidity_runs', fields, set(fields), remaining, stage='research.run_lineage', row_key=first['run_id'])
+    require(run_source['state']=='supported', 'RUN_LINEAGE_UNPROVEN')
+    runs = [row for row in run_rows if norm(row.get('run_id'))==norm(first['run_id'])]
     require(len(runs) == 1, 'RUN_LINEAGE_UNPROVEN')
-    run = dict(zip(fields, runs[0]))
-    require(all(norm(run[k]) == norm(first[k]) for k in fields[:-1]), 'RUN_LINEAGE_MISMATCH')
+    run = runs[0]
+    require(all(norm(run[OPAQUE_REFERENCES.get(k,k)]) == norm(first[OPAQUE_REFERENCES.get(k,k)]) for k in fields[:-1]), 'RUN_LINEAGE_MISMATCH')
     decision = feasibility.stamp(run['decision_at'])
     require(decision is not None, 'RUN_DECISION_UNPROVEN')
     lineage = hashlib.sha256(f'{OPERATION_TYPE}|{OPERATION_CONTRACT_VERSION}|{CONCEPT_CONTRACT_HASH}|{decision.isoformat()}'.encode()).hexdigest()
@@ -428,19 +480,19 @@ def base_report(decision_at):
 def audit_and_replay(db, production, decision, report):
     data = {}; total = 0
     for table in feasibility.IDENTITY_TABLES:
-        source, rows = metadata_rows(db, table, feasibility.SOURCES[table], set(), MAX_ROWS-total)
+        source, rows = metadata_rows(db, table, feasibility.SOURCES[table], set(), MAX_ROWS-total, stage='research.identity.'+table)
         total += source['rows']; data[table] = rows
         require(source['state'] != 'unsupported_schema', 'IDENTITY_SCHEMA_UNPROVEN')
         if table == 'security_classification_evidence' and source['rows']:
             require({'security_id','security_type','public_at','retrieved_at','available_at'} <= set(source['columns']), 'ROSTER_SCHEMA_UNPROVEN')
-    identity_source, data['canonical_factor_evidence'] = metadata_rows(db, 'canonical_factor_evidence', ('security_id','cik'), {'security_id'}, MAX_ROWS-total)
+    identity_source, data['canonical_factor_evidence'] = metadata_rows(db, 'canonical_factor_evidence', ('security_id','cik'), {'security_id'}, MAX_ROWS-total, stage='research.canonical_identity')
     total += identity_source['rows']
     require(identity_source['state'] != 'unsupported_schema', 'IDENTITY_SCHEMA_UNPROVEN')
     population = None
     facts = {}; report['mapping_audits'] = {}; report['source_schemas'] = {}
     for name, conn in (('research', db), ('production', production)):
         fields = tuple(dict.fromkeys(FACT_FIELDS + feasibility.OPTIONAL))
-        source, rows = metadata_rows(conn, 'sec_facts', fields, FACT_REQUIRED, MAX_ROWS-total)
+        source, rows = metadata_rows(conn, 'sec_facts', fields, FACT_REQUIRED, MAX_ROWS-total, stage=name+'.sec_facts')
         total += source['rows']; report['source_schemas'][name] = source
         if source['state'] == 'unsupported_schema':
             report['mapping_audits'][name] = {'state': 'unsupported_schema', 'counts': None, 'reason': 'unknown_not_zero'}
@@ -455,14 +507,15 @@ def audit_and_replay(db, production, decision, report):
         counts, found = visible(rows, population, decision); facts[name] = found
         report['mapping_audits'][name] = {'state': source['state'], 'scope': 'exact_ID_matched_research_perimeter_raw_SEC_only',
             'counts': counts, **mapping_audit(found, source['columns'], decision)}
-    source, manifest = metadata_rows(db, RAW_TABLE, MANIFEST, set(MANIFEST) | {'payload_json'}, min(MAX_MANIFEST, MAX_ROWS-total))
+    source, manifest = metadata_rows(db, RAW_TABLE, MANIFEST, set(MANIFEST) | {'payload_json'}, min(MAX_MANIFEST, MAX_ROWS-total), stage='research.retained_manifest')
+    total += source['rows']
     report['retained_manifest'] = source
     if source['state'] == 'unsupported_schema' or report['source_schemas']['research']['state'] == 'unsupported_schema':
         report['pilot'] = {'state': 'unproven_source_schema', 'reason': 'unknown_not_no_pair'}; return
     selection, report['pilot'] = select_pilot(manifest, facts['research'], decision)
     if selection is None: return
     pair, selected = selection
-    report['pilot']['lineage_checks'] = verify_lineage(db, pair)
+    report['pilot']['lineage_checks'] = verify_lineage(db, pair, remaining=MAX_ROWS-total)
     payloads = []; checks = []
     report['pilot']['payload_checks'] = checks
     for item in pair:
@@ -488,7 +541,9 @@ def run(*, research_db, production_db, decision_at):
         with duckdb.connect(str(paths['research']), read_only=True, config=history._sql_config()) as db, duckdb.connect(str(paths['production']), read_only=True, config=history._sql_config()) as production:
             audit_and_replay(db, production, decision, report)
         report['execution_state'] = 'completed'
-    except ReplayError as exc: errors.append(str(exc))
+    except ReplayError as exc:
+        errors.append(str(exc))
+        if exc.diagnostic is not None: report['safe_read_diagnostic'] = exc.diagnostic
     except Exception: errors.append('REPLAY_FAILED')  # Do not leak payloads/SQL/paths.
     finally:
         for name, path in paths.items():
