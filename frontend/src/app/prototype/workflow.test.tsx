@@ -5,7 +5,7 @@ import {tmpdir} from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {renderToStaticMarkup} from "react-dom/server";
-import {CompanyView,FinancialHealthView,PrototypeNotice,RosterView,ValuationView,detailHref, type Detail, type Report} from "./view";
+import {CompanyView,EventsView,FinancialHealthView,PrototypeNotice,RosterView,ValuationView,detailHref, type Detail, type Report} from "./view";
 import {SnapshotView, ThesisHistory} from "./store-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
@@ -133,4 +133,16 @@ test("valuation history renders comparisons, the same-basis current row and its 
   assert.match(html,/below range:<\/b> P\/E 5\.0 vs its own 5-year range 10\.0-30\.0/);
   assert.match(html,/Now \(same basis\)/);
   assert.match(html,/a question to research, not a conclusion/);
+});
+
+test("filing events render flags, the cadence estimate and SEC links",()=>{
+  const events={window_days:365,event_count:2,counts:{capital_raise:1,earnings_financial_results:1},note:"Categories come from the stored classifier.",latest_known_at:"2026-10-01T00:00:00+00:00",
+    flags:[{kind:"risk" as const,category:"capital_raise",count:1,text:"A capital raise or new borrowing was filed in the last year (possible dilution or more debt)."}],
+    results_timing:{last_results_filed:"2026-07-30",typical_gap_days:91,next_results_estimate:"2026-10-29",text:"Results were last filed 2026-07-30; at its usual 91-day rhythm the next are likely around 2026-10-29 (estimate from filing cadence, not an announced date)."},
+    events:[{accession:"0001065696-26-000041",form:"8-K",filing_date:"2026-07-30",known_at:"x",items:["2.02","9.01"],category:"earnings_financial_results",label:"Earnings or financial results",confidence:0.85,amendment:false,url:"https://www.sec.gov/Archives/edgar/data/1065696/000106569626000041/lkq-20260730.htm"}]};
+  const html=renderToStaticMarkup(<EventsView events={events}/>);
+  assert.match(html,/Recent filing events \(last 365 days\)/);
+  assert.match(html,/<b>Risk:<\/b> A capital raise/);
+  assert.match(html,/not an announced date/);
+  assert.match(html,/href="https:\/\/www\.sec\.gov\/Archives\/edgar\/data\/1065696\/000106569626000041\/lkq-20260730\.htm" target="_blank" rel="noopener noreferrer"/);
 });
