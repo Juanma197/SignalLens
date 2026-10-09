@@ -99,6 +99,20 @@ class IngestionLimits:
         if not 1 <= self.max_response_bytes <= 10_000_000: raise ValueError("max_response_bytes out of range")
 
 
+# What sec_raw_payloads keeps of each document: the fields the prototype reads.
+# A full companyfacts document is about 2 MB; the cover-page share counts are a few KB.
+SUBMISSION_FIELDS = ("cik","name","sic","sicDescription","entityType","tickers","exchanges","fiscalYearEnd","stateOfIncorporation")
+
+
+def retained_extract(endpoint_class: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if endpoint_class == "submissions":
+        return {k: payload[k] for k in SUBMISSION_FIELDS if k in payload}
+    dei = (payload.get("facts") or {}).get("dei") or {}
+    shares = dei.get("EntityCommonStockSharesOutstanding")
+    return {"cik": payload.get("cik"), "entityName": payload.get("entityName"),
+            "facts": {"dei": {"EntityCommonStockSharesOutstanding": shares}} if shares else {}}
+
+
 def validate_paths(research: Path, production: Path) -> None:
     if not research.exists() or not production.exists(): raise ValueError("both database paths must exist")
     if research.is_symlink() or production.is_symlink(): raise ValueError("symlinked database paths prohibited")
@@ -343,12 +357,11 @@ def ingest(*, research: Path, production: Path, authorization: str | None, dry_r
                     db.execute("INSERT INTO sec_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         [fact_key,item["security_id"],item["qualified_symbol"],ticker,cik,row["taxonomy"],row["concept"],row["value"],row["unit"],row["currency"],row["period_start"],row["period_end"],row["fiscal_year"],row["fiscal_period"],row.get("frame"),row["form"],row["accession"],row["filed_at"],row["public_at"],row["amendment"],revision,row["source_url"],timestamp])
                     inserted+=1; revisions+=int(revision)
-                # Keep both documents: the industry code (submissions) and cover-page
-                # share counts (companyfacts) are read from them later, without a
-                # second download.
+                # Keep the parts of both documents read later, without a second download:
+                # the industry code (submissions) and cover-page share counts (companyfacts).
                 for endpoint_class,url,payload in (("submissions",SEC_SUBMISSIONS.format(cik=cik),submissions),
                                                    ("companyfacts",SEC_FACTS.format(cik=cik),facts)):
-                    encoded=json.dumps(payload,separators=(",",":"),ensure_ascii=True)
+                    encoded=json.dumps(retained_extract(endpoint_class,payload),separators=(",",":"),ensure_ascii=True)
                     digest=hashlib.sha256(encoded.encode("utf-8")).hexdigest()
                     db.execute("INSERT OR IGNORE INTO sec_raw_payloads VALUES (?,?,?,?,?,?,?,?,?)",
                         [hashlib.sha256(f"{cik}|{endpoint_class}|{digest}".encode()).hexdigest(),item["security_id"],cik,
