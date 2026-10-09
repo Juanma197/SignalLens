@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS portfolio_settings(
   setting_id VARCHAR PRIMARY KEY, monthly_contribution DOUBLE NOT NULL, max_holdings INTEGER NOT NULL,
   recorded_at TIMESTAMPTZ NOT NULL);
 ALTER TABLE portfolio_settings ADD COLUMN IF NOT EXISTS fractional_shares BOOLEAN;
+CREATE TABLE IF NOT EXISTS reallocation_events(
+  event_id VARCHAR PRIMARY KEY, sent_at TIMESTAMPTZ NOT NULL, trigger VARCHAR NOT NULL, fingerprint VARCHAR NOT NULL,
+  message VARCHAR NOT NULL, delivered BOOLEAN NOT NULL);
 """
 
 
@@ -400,6 +403,22 @@ class PrototypeStore:
     def alert_events(self, limit=50):
         if not self._has_table('alert_events'): return []
         return self._rows('SELECT * FROM alert_events ORDER BY sent_at DESC, event_id DESC LIMIT ?', [int(limit)])
+
+    # Cash reassessment messages ---------------------------------------------
+    def record_reallocation(self, trigger, fingerprint, message, *, delivered, now=None):
+        with self._connect(True) as db:
+            db.execute('INSERT INTO reallocation_events VALUES (?, ?, ?, ?, ?, ?)',
+                       [uuid.uuid4().hex, now or _now(), str(trigger)[:64], str(fingerprint)[:2000], str(message)[:8000], bool(delivered)])
+
+    def last_reallocation_fingerprint(self):
+        """The fingerprint of the last cash suggestion actually delivered, or None."""
+        if not self._has_table('reallocation_events'): return None
+        rows = self._rows('SELECT fingerprint FROM reallocation_events WHERE delivered ORDER BY sent_at DESC, event_id DESC LIMIT 1')
+        return rows[0]['fingerprint'] if rows else None
+
+    def reallocation_events(self, limit=20):
+        if not self._has_table('reallocation_events'): return []
+        return self._rows('SELECT * FROM reallocation_events ORDER BY sent_at DESC, event_id DESC LIMIT ?', [int(limit)])
 
     # Benchmark fund prices ---------------------------------------------------
     def store_benchmark_prices(self, rows):

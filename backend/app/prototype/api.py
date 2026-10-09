@@ -4,10 +4,11 @@ Assessment and tracking are read-only. The only writes go to the separate
 prototype store, and only when SIGNALLENS_PROTOTYPE_WRITES_ENABLED is true.
 """
 from datetime import date, datetime, timezone
+import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..config import get_settings
@@ -18,9 +19,11 @@ from .scorecard import record_from_monthly, score
 from .decisions import DECISIONS, RULES as DECISION_RULES, decide
 from .portfolio import positions_from, read_gbp_rate, read_market, valuation
 from .service import PrototypeError, assess
+from .store import symbol as store_symbol
 from .store import ACCOUNT_CURRENCY, CURRENCIES, MAX_HOLDINGS_LIMIT, THESIS_SECTIONS, PrototypeStore, StoreError
 from .tracking import track
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix='/api/v1/research/prototype', tags=['unvalidated-prototype'])
 
 
@@ -267,12 +270,36 @@ def portfolio():
                      'cash': ledger(_call(store.cash_movements), transactions), 'settings': _call(store.settings)}
 
 
+def _telegram_configured():
+    return bool(os.environ.get('SIGNALLENS_TELEGRAM_BOT_TOKEN') and os.environ.get('SIGNALLENS_TELEGRAM_CHAT_ID'))
+
+
+def _reassess_in_background(trigger, symbol=None):
+    """Runs after the response: re-check the cash pool and message a new, worthwhile use."""
+    from . import alerts
+    try:
+        notifier = alerts.TelegramNotifier(os.environ.get('SIGNALLENS_TELEGRAM_BOT_TOKEN', ''), os.environ.get('SIGNALLENS_TELEGRAM_CHAT_ID', ''))
+        alerts.reassess(trigger, symbol=symbol, notifier=notifier)
+    except Exception as exc:  # tokens live in URLs; never log exception text
+        log.warning('cash reassessment failed: %s', type(exc).__name__)
+
+
+def _schedule_reassessment(background, trigger, symbol=None):
+    """'scheduled' when a Telegram message may follow, else why not."""
+    if not _telegram_configured(): return 'telegram_not_configured'
+    background.add_task(_reassess_in_background, trigger, symbol)
+    return 'scheduled'
+
+
 @router.post('/store/portfolio/trades')
-def record_trade(request: TradeRequest):
+def record_trade(request: TradeRequest, background: BackgroundTasks):
     store = _store(write=True)
     _call(store.record_trade, request.kind, request.qualified_symbol, request.shares, request.price,
           request.traded_on, fees=request.fees, currency=request.currency,
           company_name=request.company_name, note=request.note, account_amount=request.account_amount)
+    # A sale frees cash: reassess now rather than at the next monthly review.
+    if request.kind == 'sell':
+        return portfolio() | {'reassessment': _schedule_reassessment(background, 'sale', store_symbol(request.qualified_symbol))}
     return portfolio()
 
 
@@ -283,9 +310,11 @@ def void_trade(request: VoidRequest):
 
 
 @router.post('/store/portfolio/cash')
-def record_cash(request: CashRequest):
+def record_cash(request: CashRequest, background: BackgroundTasks):
     """A deposit (e.g. this month's contribution, once it has arrived) or a withdrawal, in pounds."""
     _call(_store(write=True).record_cash, request.kind, request.amount, request.moved_on, note=request.note)
+    if request.kind == 'deposit':
+        return portfolio() | {'reassessment': _schedule_reassessment(background, 'deposit')}
     return portfolio()
 
 
@@ -478,7 +507,7 @@ def alerts_status():
     settings = get_settings()
     job = DailyAlertJob(settings)
     return {'enabled': settings.alerts_enabled, 'utc_time': settings.alerts_utc_time,
-            'telegram_configured': bool(os.environ.get('SIGNALLENS_TELEGRAM_BOT_TOKEN') and os.environ.get('SIGNALLENS_TELEGRAM_CHAT_ID')),
+            'telegram_configured': _telegram_configured(),
             'next_run': job.next_run(datetime.now(timezone.utc)) if settings.alerts_enabled else None,
             'state': job.state(), 'recent': [{k: e[k] for k in ('sent_at', 'kind', 'qualified_symbol', 'decision', 'thesis', 'delivered', 'message')}
                                              for e in _call(_store().alert_events, 10)]}

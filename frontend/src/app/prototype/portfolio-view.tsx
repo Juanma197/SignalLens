@@ -16,7 +16,14 @@ export type CashPool = {currency: string; balance: number; overdrawn: boolean; d
   deposited_this_month: number; uncounted_trades: {transaction_id: string; qualified_symbol: string; traded_on: string}[]; entries: CashEntry[]; method: string};
 export type PortfolioSettings = {monthly_contribution: number; max_holdings: number; fractional_shares: boolean; currency: string; is_default: boolean; recorded_at: string|null};
 export type Portfolio = {as_of: string; method: string; positions: Position[]; closed_positions: Position[]; totals: Total[]; transactions: Transaction[]; currencies: string[];
-  account_currency: string; cash: CashPool; settings: PortfolioSettings};
+  account_currency: string; cash: CashPool; settings: PortfolioSettings; reassessment?: "scheduled"|"telegram_not_configured"};
+
+export function ReassessmentNotice({status}: {status?: Portfolio["reassessment"]}) {
+  if (!status) return null;
+  return <p role="status" className="notice">
+    {status === "scheduled" ? "Reassessing your cash now. You'll get a Telegram message only if it has a worthwhile use; nothing is bought for you." :
+      "Telegram isn't set up, so no message will follow."}{" "}See <Link href="/prototype/monthly">This month</Link> for the suggested use of your cash.</p>;
+}
 
 export const money = (value: number, currency: string) =>
   new Intl.NumberFormat("en-US", {style: "currency", currency, maximumFractionDigits: 2}).format(value);
@@ -163,6 +170,7 @@ export function PortfolioView({portfolio, cutoff, today, busy, onTrade, onVoid, 
   onTrade: (draft: TradeDraft) => Promise<boolean>; onVoid: (id: string) => void; onCash: (draft: CashDraft) => Promise<boolean>;
   onVoidCash: (id: string) => void; onSettings: (draft: SettingsDraft) => Promise<boolean>}) {
   return <div className="brief-stack">
+    <ReassessmentNotice status={portfolio.reassessment}/>
     <PortfolioSummary totals={portfolio.totals}/>
     <CashPanel key={`cash-${portfolio.settings.recorded_at}`} cash={portfolio.cash} settings={portfolio.settings} holdings={portfolio.positions.length} today={today} busy={busy} onCash={onCash} onVoid={onVoidCash}/>
     <HoldingsTable positions={portfolio.positions} cutoff={cutoff}/>

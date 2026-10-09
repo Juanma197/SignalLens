@@ -8,7 +8,7 @@ import {renderToStaticMarkup} from "react-dom/server";
 import {AnalystBriefView,CompanyView,EventsView,FinancialHealthView,PrototypeNotice,RosterView,ScenarioView,ValuationView,detailHref, type Detail, type Report} from "./view";
 import {SnapshotView, ThesisHistory} from "./store-view";
 import {ValueRankingView, type ValueRanking} from "./value-view";
-import {PortfolioView, type Portfolio} from "./portfolio-view";
+import {PortfolioView, ReassessmentNotice, type Portfolio} from "./portfolio-view";
 import {ChecksOverview, type ChecksReport} from "./checks-view";
 import {MonthlyView, type Monthly} from "./monthly-view";
 import {AllocationView, type Allocation} from "./monthly-view";
@@ -375,4 +375,10 @@ test("dates are chosen as Latest or a past day, never typed as timestamps",()=>{
   assert.equal(friendlyError("SOMETHING_NEW"),"SOMETHING_NEW");
   const html=renderToStaticMarkup(<WhenPicker when={{mode:"date",date:"2026-09-15"}} onChange={()=>{}}/>);
   assert.match(html,/Show data as of/); assert.match(html,/type="date"/); assert.doesNotMatch(html,/ISO timestamp/);
+});
+
+test("recording a sale or deposit says whether a Telegram reassessment follows",()=>{
+  assert.match(renderToStaticMarkup(<ReassessmentNotice status="scheduled"/>),/Reassessing your cash now\. You&#x27;ll get a Telegram message only if it has a worthwhile use/);
+  assert.match(renderToStaticMarkup(<ReassessmentNotice status="telegram_not_configured"/>),/Telegram isn&#x27;t set up/);
+  assert.equal(renderToStaticMarkup(<ReassessmentNotice/>),"");
 });
