@@ -19,7 +19,7 @@ export default function Snapshots() {
     try {await call("snapshots", {decision_at: new Date(cutoff).toISOString()}); await load();}
     catch (e) {setError(e instanceof Error ? e.message : "PROTOTYPE_SERVICE_UNAVAILABLE");} finally {setBusy(false);}
   }
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Monthly snapshots</strong><Link href="/prototype">Shortlist</Link><Link href="/prototype/portfolio">Portfolio</Link><Link href="/prototype/checks">Thesis checks</Link><Link href="/prototype/watchlist">Watchlist</Link></nav><PrototypeNotice/>
+  return <main className="research-page"><nav><span className="mark">SL</span><strong>Monthly snapshots</strong><Link href="/prototype">Shortlist</Link><Link href="/prototype/monthly">This month</Link><Link href="/prototype/portfolio">Portfolio</Link><Link href="/prototype/checks">Thesis checks</Link><Link href="/prototype/watchlist">Watchlist</Link></nav><PrototypeNotice/>
     <form onSubmit={create} className="panel research-form"><label>Freeze this month&apos;s shortlist at cutoff (no more than 14 days ago; one per month)<input type="text" required placeholder="2026-10-02T12:00:00Z" value={cutoff} onChange={e => setCutoff(e.target.value)}/></label><button disabled={busy}>{busy ? "Assessing and recording…" : "Record snapshot"}</button></form>
     {error && <p role="alert" className="notice warning">{error}</p>}
     <section className="panel prototype-panel"><h2>Recorded snapshots</h2>

@@ -10,6 +10,8 @@ import {SnapshotView, ThesisHistory} from "./store-view";
 import {ValueRankingView, type ValueRanking} from "./value-view";
 import {PortfolioView, type Portfolio} from "./portfolio-view";
 import {ChecksOverview, type ChecksReport} from "./checks-view";
+import {MonthlyView, type Monthly} from "./monthly-view";
+import {AllocationView, type Allocation} from "./monthly-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
 // No provider, browser download, credentials or operator database is used.
@@ -252,4 +254,42 @@ test("thesis checks show broken conditions first, automatic signs and uncovered 
   assert.match(html,/Held but outside SignalLens data, so not checked: MSFT\.US/);
   assert.match(html,/no conditions of your own yet/);
   assert.doesNotMatch(html,/<i>A<\/i>/);
+});
+
+test("monthly view lists picks, held flags and a reasoned decision per holding",()=>{
+  const evidence={upside:null,weight:null,thesis:"not_covered",value_status:null,conviction:null,risk:null};
+  const monthly:Monthly={decision_at:"2026-10-09T00:00:00+00:00",notice:"",synthetic_fixture:false,target_members:15,population:7,
+    picks:[{security_id:"l",qualified_symbol:"LKQ.US",company_name:"LKQ Corporation",status:"candidate",reasons:[],rank:1,recommendation:"buy",upside:1.3,conviction:"medium",risk:"low",held:true}],
+    holdings:[{qualified_symbol:"EGY.US",security_id:"e",company_name:"Vaalco",currency:"USD",shares:200,average_cost:6,cost_basis:1200,price:{close:4,trading_date:"2026-10-08"},market_value:800,unrealised_return:-0.33,weight:0.4,
+        checks:null,decision:"SELL",reasons:["The thesis is broken:","Net loss in the latest fiscal year."],evidence:{...evidence,upside:-0.36,weight:0.4,thesis:"broken"}},
+      {qualified_symbol:"MSFT.US",security_id:null,company_name:"Microsoft",currency:"USD",shares:5,average_cost:410,cost_basis:2050,price:null,market_value:null,unrealised_return:null,weight:null,
+        checks:null,decision:"REVIEW",reasons:["SignalLens has no evidence for this holding; decide from your own research."],evidence}],
+    totals:[],counts:{"SELL":1,"REDUCE":0,"REVIEW":1,"BUY MORE":0,"HOLD":0},method:"Fixed rules.",label:"Decision support only. Nothing is executed.",
+    rules:{buy_more_minimum_upside:0.15,maximum_position_weight_for_buying:0.25,reduce_above_position_weight:0.35,sell_below_upside:-0.2,reduce_below_upside:0}};
+  const html=renderToStaticMarkup(<MonthlyView monthly={monthly}/>);
+  assert.match(html,/SELL 1/);
+  assert.match(html,/BUY MORE 0/);
+  assert.match(html,/LKQ Corporation · already held/);
+  assert.match(html,/\+130\.00%/);
+  assert.match(html,/Net loss in the latest fiscal year\./);
+  assert.match(html,/decide from your own research/);
+  assert.match(html,/no stored price/);
+  assert.match(html,/Nothing is executed/);
+  assert.match(html,/SELL when the thesis breaks or the price is 20\.00% above/);
+});
+
+test("allocation lists sales then buys, the cash left and never executes",()=>{
+  const allocation:Allocation={new_cash:1000,reinvest_sales:true,sale_proceeds:800,available:1800,invested:1500,left_as_cash:300,portfolio_after:9000,
+    rules:{position_limit:0.25,minimum_purchase_usd:50},method:"Sales first.",label:"Nothing is executed.",
+    sales:[{action:"SELL",qualified_symbol:"EGY.US",security_id:"e",company_name:"Vaalco",shares:200,price:4,amount:800,why:"Sell the whole position."}],
+    buys:[{action:"NEW BUY",qualified_symbol:"GPI.US",security_id:"g",company_name:"Group 1",shares:6,price:236.61,amount:1419.66,weight_after:0.158,why:"Open: one of this month's top picks."}]};
+  const html=renderToStaticMarkup(<AllocationView allocation={allocation} decision="2026-10-09T00:00:00Z" target={15}/>);
+  assert.match(html,/\$1,000\.00.{0,20}new money/);
+  assert.match(html,/\$1,800\.00/);
+  assert.match(html,/\$300\.00/);
+  assert.ok(html.indexOf("EGY.US")<html.indexOf("GPI.US"));
+  assert.match(html,/15\.80%/);
+  assert.match(html,/Nothing is executed/);
+  const none=renderToStaticMarkup(<AllocationView allocation={{...allocation,sales:[],buys:[]}} decision="2026-10-09T00:00:00Z" target={15}/>);
+  assert.match(none,/Holding cash is a valid outcome/);
 });

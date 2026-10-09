@@ -233,3 +233,14 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; }
 .prototype-check-form select,.prototype-check-form input { width:100%; font:inherit; background:#09100d; color:var(--ink); border:1px solid var(--line); padding:9px; border-radius:8px; color-scheme:dark; }
 .prototype-threshold { display:flex; gap:6px; align-items:center; color:var(--muted); font-size:12px; }
 @media (max-width:760px) { .prototype-check-row { grid-template-columns:1fr 1fr; } }
+.prototype-decision { display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:800; letter-spacing:.04em; border:1px solid var(--line); white-space:nowrap; }
+.prototype-decision-counts { display:flex; flex-wrap:wrap; gap:8px; }
+.prototype-decision-sell { background:#3a1715; color:#f2a7a0; border-color:#6b2a25; }
+.prototype-decision-reduce { background:#3a2c12; color:#f0c674; border-color:#6b5222; }
+.prototype-decision-review { background:#1d2430; color:#a9c1e8; border-color:#33425a; }
+.prototype-decision-buy-more { background:#123326; color:var(--green); border-color:#225c44; }
+.prototype-decision-hold { background:transparent; color:var(--ink); }
+.prototype-reasons { margin:0; padding-left:16px; }
+.prototype-reasons li { padding:2px 0; }
+.prototype-holdings-table td:nth-child(4),.prototype-holdings-table td:nth-child(5) { white-space:nowrap; }
+.prototype-inline-check { display:flex !important; flex:0 0 auto !important; align-items:center; gap:8px; white-space:nowrap; }

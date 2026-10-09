@@ -23,7 +23,7 @@ function ChecksPage() {
       setReport(value);
     } catch (e) {setError(e instanceof Error ? e.message : "PROTOTYPE_SERVICE_UNAVAILABLE");} finally {setLoading(false);}
   }
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Thesis checks</strong><Link href="/prototype">Shortlist</Link><Link href="/prototype/portfolio">Portfolio</Link><Link href="/prototype/watchlist">Watchlist</Link><Link href="/prototype/snapshots">Snapshots</Link></nav>
+  return <main className="research-page"><nav><span className="mark">SL</span><strong>Thesis checks</strong><Link href="/prototype">Shortlist</Link><Link href="/prototype/monthly">This month</Link><Link href="/prototype/portfolio">Portfolio</Link><Link href="/prototype/watchlist">Watchlist</Link><Link href="/prototype/snapshots">Snapshots</Link></nav>
     <section className="hero compact"><p className="eyebrow">HOLDINGS · WATCHLIST · YOUR CONDITIONS</p><h1>Is the thesis still true?<br/><span>Check before the price tells you.</span></h1>
       <p className="lede">Every holding, watched company and company with conditions, re-checked against the stored evidence. Broken theses come first.</p></section>
     <PrototypeNotice/>
