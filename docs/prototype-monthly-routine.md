@@ -82,7 +82,13 @@ the cutoff, never changed; refused when nothing could be assessed). **Scorecard*
 then measures each call after about 1, 3, 6 and 12 months (21/63/126/252
 sessions) against the equal-weight average of every company assessed that month:
 picks, BUY MORE and HOLD are right when they beat it; SELL and REDUCE when they
-lagged it. It is not a market index; no index prices are stored yet.
+lagged it. Stage 4 of the monthly script also downloads index-fund prices
+(SPY for the S&P 500, plus IJH and IJR for mid and small caps; 3 requests) into
+the prototype store, so every call is also compared with the S&P 500 over
+exactly the same sessions. To fetch them without a full refresh:
+`$env:SIGNALLENS_EODHD_API_TOKEN = "<token>"` then, in `backend`,
+`..\.venv\Scripts\python.exe -m app.prototype.benchmarks --prototype-db data\prototype\signallens-prototype.duckdb`
+(with the prototype stopped).
 
 ## Things to know
 

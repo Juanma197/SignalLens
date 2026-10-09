@@ -4,8 +4,9 @@ Every recorded month freezes its picks and holding decisions. Afterwards each is
 measured from the last completed session at the decision cutoff to exactly
 21/63/126/252 derived US sessions later, on stored adjusted closes (no filling;
 missing prices are shown). The benchmark is the equal-weight average return of
-every company assessed that month, so the question is "did the calls beat the
-rest of the list?", not "did they beat the market" (no index prices are stored).
+every company assessed that month ("did the calls beat the rest of the list?").
+When index-fund prices are stored (see benchmarks.py), every call is also
+compared with SPY over exactly the same sessions ("did they beat the market?").
 
 A call is right when it beat the benchmark (picks, BUY MORE, HOLD) or lagged it
 (SELL, REDUCE: selling avoided the shortfall). REVIEW is not scored. Read-only
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from ..model_readiness import fingerprint
 from .service import MAX_FILE_BYTES, PrototypeError, _sessions, day, finite
+from .benchmarks import FUNDS, MARKET
 from .tracking import CHECKPOINTS, _read
 
 GROUPS = {'pick': 'Top picks', 'BUY MORE': 'Buy more', 'HOLD': 'Hold', 'sell_or_reduce': 'Sell or reduce'}
@@ -27,10 +29,13 @@ def _group(item):
     return item['decision'] if item['decision'] in ('BUY MORE', 'HOLD') else None
 
 
-def score(records, *, research_db, now=None):
+def score(records, *, research_db, funds=None, now=None):
+    """`funds` is {symbol: {date: adjusted_close}} from the prototype store."""
+    funds = funds or {}
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     base = {'checkpoints': list(CHECKPOINTS), 'as_of': now.isoformat(), 'groups': GROUPS,
             'benchmark': 'Equal-weight average of every company assessed that month (not a market index).',
+            'market': FUNDS[MARKET] if MARKET in funds else None, 'funds': {s: FUNDS[s] for s in FUNDS if s in funds},
             'rule': 'Picks, BUY MORE and HOLD are right when they beat the benchmark; SELL and REDUCE are right when they lagged it. REVIEW is not scored.'}
     if not records: return dict(base, months=[], summary=[])
     decisions = [datetime.fromisoformat(str(r['decision_at']).replace('Z', '+00:00')) for r in records]
@@ -77,6 +82,16 @@ def score(records, *, research_db, now=None):
         for i, k in enumerate(CHECKPOINTS):
             values = [m[i]['return'] for m in member_returns if m[i]['status'] == 'available']
             bench.append({'sessions': k, 'return': sum(values) / len(values) if values else None, 'available': len(values), 'of': len(member_returns)})
+        def fund_returns(symbol):
+            series = funds.get(symbol, {})
+            out = []
+            for k in CHECKPOINTS:
+                start_price = series.get(base_session) if base_session else None
+                end_price = series.get(after[k - 1]) if base_session and len(after) >= k else None
+                out.append({'sessions': k, 'return': end_price / start_price - 1 if start_price and end_price else None})
+            return out
+        fund_rows = [{'qualified_symbol': s, 'label': FUNDS[s], 'checkpoints': fund_returns(s)} for s in FUNDS if s in funds]
+        market = next((f['checkpoints'] for f in fund_rows if f['qualified_symbol'] == MARKET), None)
         items = []
         for item in record['items']:
             group = _group(item)
@@ -88,16 +103,27 @@ def score(records, *, research_db, now=None):
                 p['right'] = p['excess'] < 0 if group == 'sell_or_reduce' else p['excess'] > 0
                 t = tallies.setdefault((group, p['sessions']), {'scored': 0, 'right': 0, 'excess': 0.0})
                 t['scored'] += 1; t['right'] += p['right']; t['excess'] += p['excess']
+            for i, p in enumerate(points):
+                m = market[i]['return'] if market else None
+                if p['status'] != 'available' or m is None or group is None: continue
+                p['excess_market'] = p['return'] - m
+                p['right_market'] = p['excess_market'] < 0 if group == 'sell_or_reduce' else p['excess_market'] > 0
+                t = tallies.setdefault((group, p['sessions'], 'market'), {'scored': 0, 'right': 0, 'excess': 0.0})
+                t['scored'] += 1; t['right'] += p['right_market']; t['excess'] += p['excess_market']
             items.append(item | {'group': group, 'checkpoints': points})
         months.append({'record_id': record['record_id'], 'month': record['month'], 'decision_at': record['decision_at'],
-                       'base_session': base_session.isoformat() if base_session else None, 'benchmark': bench, 'items': items})
+                       'base_session': base_session.isoformat() if base_session else None, 'benchmark': bench, 'funds': fund_rows, 'items': items})
     summary = []
     for group in GROUPS:
         for k in CHECKPOINTS:
             t = tallies.get((group, k), {'scored': 0, 'right': 0, 'excess': 0.0})
+            m = tallies.get((group, k, 'market'), {'scored': 0, 'right': 0, 'excess': 0.0})
             summary.append({'group': group, 'sessions': k, 'scored': t['scored'], 'right': t['right'],
                             'hit_rate': t['right'] / t['scored'] if t['scored'] else None,
-                            'mean_excess': t['excess'] / t['scored'] if t['scored'] else None})
+                            'mean_excess': t['excess'] / t['scored'] if t['scored'] else None,
+                            'market_scored': m['scored'], 'market_right': m['right'],
+                            'market_hit_rate': m['right'] / m['scored'] if m['scored'] else None,
+                            'mean_excess_market': m['excess'] / m['scored'] if m['scored'] else None})
     return dict(base, months=months, summary=summary, latest_stored_session=sessions[-1].isoformat() if sessions else None)
 
 
