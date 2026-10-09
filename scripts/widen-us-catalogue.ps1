@@ -71,8 +71,10 @@ try {
     Write-Host "US exclusions: outside band $($Dry.exclusions_by_reason.excluded_outside_size_band); size unknown $($Dry.exclusions_by_reason.excluded_size_unknown)"
     if ((Read-Host "Replace the active catalogue with this selection? Type yes") -ne "yes") { Write-Host "Stopped; nothing changed."; return }
     $Cat = Invoke-Step "catalogue" (@("-m", "app.eodhd_ingestion_cli", "ingest-catalogue") + $Db + @("--us-securities", "$UsSecurities"))
-    if ($Cat.status -ne "validated") { throw "Catalogue did not validate." }
-    Write-Host "Active catalogue now has $($Cat.accepted) listings."
+    # Saving reports the universe refresh's status: "completed", or "already_exists" when this
+    # exact selection is already active (for example on a rerun).
+    if (-not $Cat.activated -or @("completed", "already_exists", "validated") -notcontains $Cat.status) { throw "Catalogue was not activated (status $($Cat.status))." }
+    Write-Host "Active catalogue: $($Cat.accepted) listings ($($Cat.status))."
 
     Stage "3/6 Ten years of prices and dividends for new listings (EODHD, 60/min)"
     $Limits = @("--daily-request-budget", "6000", "--requests-per-minute", "60", "--maximum-runtime-seconds", "14400")
