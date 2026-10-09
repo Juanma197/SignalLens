@@ -2,6 +2,12 @@
 
 ## Unvalidated 15-company prototype — first slice
 
+The `/prototype` page opens with **Top 3 undervalued candidates**: every eligible
+company is ranked by middle-scenario upside x conviction x risk after value-trap
+exclusions (losses, negative free cash flow, materially falling revenue, negative
+equity). At most three picks, never forced; every reason is shown. Rules live in
+`backend/app/prototype/ranking.py`. Unvalidated arithmetic, not advice.
+
 The separate `/prototype` view proposes a deterministic, unfrozen membership and
 zero-to-three positive 126-session momentum results from stored evidence only.
 Company details show calculations, citations, risks and exact missing-data states.

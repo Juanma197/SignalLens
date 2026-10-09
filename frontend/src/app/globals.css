@@ -203,3 +203,10 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; }
 .prototype-fin h3 { font-size:17px; margin:20px 0 6px; }
 .prototype-fin th small { display:block; font-weight:400; color:var(--muted); font-size:11px; }
 .prototype-brief { border-color:var(--green); }
+.prototype-picks { margin:16px 0 24px; }
+.prototype-pick ul { list-style:none; padding:0; margin:12px 0 0; font-size:13px; }
+.prototype-pick li { padding:3px 0; }
+.prototype-pick-line { color:var(--ink) !important; }
+.prototype-pick-first { outline:1px solid var(--green); outline-offset:-1px; }
+.prototype-panel > h3 { font-size:20px; margin:28px 0 8px; }
+.prototype-value-table th,.prototype-value-table td:nth-child(4),.prototype-value-table td:nth-child(6) { white-space:nowrap; }
