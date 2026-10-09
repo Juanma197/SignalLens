@@ -41,6 +41,14 @@ To review the roster without refreshing: `.\scripts\monthly-prototype.ps1 -SkipR
 - Write or revise each company's **thesis**; every save keeps earlier versions.
 - Open earlier snapshots to see results at 21/63/126/252 trading sessions.
 
+## 4. Update your portfolio
+
+On **Portfolio**, record every buy and sell you made with your broker since last
+month (ticker, shares, price, fees, date and, ideally, why). SignalLens never
+places orders. Holdings use the average-cost method and are valued at the latest
+stored close; a ticker outside SignalLens data shows its cost but no value. Trades
+cannot be edited or deleted: void a mistake and record the correct trade.
+
 ## Things to know
 
 - Recorded snapshots are safe from later refreshes. Recomputing an old cutoff

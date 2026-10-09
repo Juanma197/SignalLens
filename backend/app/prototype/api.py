@@ -3,15 +3,16 @@
 Assessment and tracking are read-only. The only writes go to the separate
 prototype store, and only when SIGNALLENS_PROTOTYPE_WRITES_ENABLED is true.
 """
-from datetime import datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..config import get_settings
+from .portfolio import read_market, valuation
 from .service import PrototypeError, assess
-from .store import THESIS_SECTIONS, PrototypeStore, StoreError
+from .store import CURRENCIES, THESIS_SECTIONS, PrototypeStore, StoreError
 from .tracking import track
 
 router = APIRouter(prefix='/api/v1/research/prototype', tags=['unvalidated-prototype'])
@@ -84,6 +85,23 @@ class ThesisRequest(BaseModel):
     sections: dict[str, str | None]
 
 
+class TradeRequest(BaseModel):
+    kind: str = Field(pattern='^(buy|sell)$')
+    qualified_symbol: str = Field(min_length=1, max_length=32)
+    shares: float = Field(gt=0)
+    price: float = Field(gt=0)
+    fees: float = Field(0, ge=0)
+    currency: str = Field('USD', pattern='^(' + '|'.join(CURRENCIES) + ')$')
+    traded_on: date
+    company_name: str | None = Field(None, max_length=256)
+    note: str | None = Field(None, max_length=4000)
+
+
+class VoidRequest(BaseModel):
+    transaction_id: str = Field(min_length=1, max_length=64)
+    reason: str | None = Field(None, max_length=4000)
+
+
 class SnapshotRequest(BaseModel):
     decision_at: datetime
     target_members: int = Field(15, ge=10, le=20)
@@ -105,7 +123,7 @@ def _call(function, *args, **kwargs):
     try:
         return function(*args, **kwargs)
     except StoreError as exc:
-        status = 404 if exc.code == 'PROTOTYPE_UNKNOWN_SNAPSHOT' else 409
+        status = 404 if exc.code in ('PROTOTYPE_UNKNOWN_SNAPSHOT', 'PROTOTYPE_UNKNOWN_TRANSACTION') else 409
         raise HTTPException(status, detail={'code': exc.code}) from None
 
 
@@ -181,3 +199,45 @@ def snapshot(snapshot_id: str):
         if len(_TRACKING) >= 8: _TRACKING.clear()
         _TRACKING[key] = tracking
     return {'snapshot': frozen, 'tracking': _TRACKING[key]}
+
+
+_MARKET = {}
+
+
+@router.get('/store/portfolio')
+def portfolio():
+    """Holdings from recorded trades, valued at the latest stored close."""
+    settings = get_settings()
+    store = _store()
+    transactions = _call(store.transactions)
+    trades = [t for t in transactions if t['voided_at'] is None]
+    now = datetime.now(timezone.utc)
+    symbols = tuple(sorted({t['qualified_symbol'] for t in trades}))
+    key = (symbols, now.date(), _stat(settings.research_database_path))
+    if key not in _MARKET:
+        try:
+            market = read_market(settings.research_database_path, symbols, now)
+        except PrototypeError as exc:
+            raise HTTPException(409, detail={'code': exc.code, 'message': 'Stored prices could not safely be read.'}) from None
+        if len(_MARKET) >= 8: _MARKET.clear()
+        _MARKET[key] = market
+    try:
+        result = valuation(trades, _MARKET[key], as_of=now)
+    except PrototypeError as exc:
+        raise HTTPException(409, detail={'code': exc.code}) from None
+    return result | {'transactions': transactions, 'currencies': list(CURRENCIES)}
+
+
+@router.post('/store/portfolio/trades')
+def record_trade(request: TradeRequest):
+    store = _store(write=True)
+    _call(store.record_trade, request.kind, request.qualified_symbol, request.shares, request.price,
+          request.traded_on, fees=request.fees, currency=request.currency,
+          company_name=request.company_name, note=request.note)
+    return portfolio()
+
+
+@router.post('/store/portfolio/voids')
+def void_trade(request: VoidRequest):
+    _call(_store(write=True).void_trade, request.transaction_id, reason=request.reason)
+    return portfolio()
