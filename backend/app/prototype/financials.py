@@ -64,14 +64,14 @@ def _latest(rows, stamp, revision='latest'):
             'known_at': max(stamp(r['public_at']), stamp(r['retrieved_at']))}
 
 
-def annual_brief(sec, facts, decision, *, stamp, finite, revision='latest'):
+def annual_brief(sec, facts, decision, *, stamp, finite, revision='latest', known=None):
     """Series for up to YEARS fiscal years plus rule-based observations."""
     wanted = set(REVENUE) | {c for cs in DURATIONS.values() for c in cs} | {c for cs in INSTANTS.values() for c in cs}
     rows = [r for r in facts if str(r.get('security_id')) == sec['security_id'] and r.get('concept') in wanted
             and r.get('taxonomy') == 'us-gaap' and r.get('form') in ANNUAL_FORMS and finite(r.get('value'))
             and r.get('cik') and str(r['cik']).lstrip('0') == str(sec.get('cik') or '').lstrip('0')
             and stamp(r.get('public_at')) and stamp(r.get('retrieved_at'))
-            and max(stamp(r['public_at']), stamp(r['retrieved_at'])) <= decision and _day(r.get('period_end'))]
+            and stamp(r['public_at']) <= decision and stamp(r['retrieved_at']) <= (known or decision) and _day(r.get('period_end'))]
     periods = defaultdict(list)
     for r in rows:
         start, end = _day(r.get('period_start')), _day(r['period_end'])

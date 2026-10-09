@@ -203,30 +203,33 @@ def _group(rows, key):
     return out
 
 
-def _identity(sec, data, decision, matched, window_start):
+def _identity(sec, data, decision, matched, window_start, known=None):
     """Identity at the cutoff (config identity_rule). The stored catalogue keeps
     CIK in sec_issuers/classification, not security_listings, so the CIK must be
     agreed there; a listing CIK, when present, must also agree. An approved
     full-window mapping is cited when it exists but is not required."""
+    known = known or decision
     sid, symbol = sec['security_id'], sec['qualified_symbol']
     reasons = []
     if sid not in matched: reasons.append('durable_id_not_matched_or_conflicting')
     classes = [r for r in data['security_classification_evidence'] if str(r.get('security_id')) == sid]
-    classification = classify_security(classes, decision, security_id=sid)
+    # Identity (classification, CIK mapping) is evidence about who the company is:
+    # in replay it is taken as known today (`known`), a documented simplification.
+    classification = classify_security(classes, known, security_id=sid)
     if not classification.included: reasons.append(classification.reason_code)
-    if any(r.get('review_required') is True for r in classes if visible(r, decision)):
+    if any(r.get('review_required') is True for r in classes if visible(r, known)):
         reasons.append('classification_review_required')
-    if not any(visible(r, decision) and r.get('source_record_identifier') for r in classes):
+    if not any(visible(r, known) and r.get('source_record_identifier') for r in classes):
         reasons.append('classification_provenance_unproven')
-    issuers = [r for r in data['sec_issuers'] if str(r.get('security_id')) == sid and stamp(r.get('mapped_at')) and stamp(r['mapped_at']) <= decision]
+    issuers = [r for r in data['sec_issuers'] if str(r.get('security_id')) == sid and stamp(r.get('mapped_at')) and stamp(r['mapped_at']) <= known]
     values = {cik(r.get('cik')) for r in issuers}
     expected = next(iter(values)) if len(values) == 1 else None
     if not expected or any(r.get('qualified_symbol') != symbol or not r.get('mapping_source') for r in issuers):
         reasons.append('stored_cik_mapping_missing_or_conflicting'); expected = None
-    class_ciks = {cik(r.get('cik')) for r in classes if visible(r, decision) and r.get('cik')}
+    class_ciks = {cik(r.get('cik')) for r in classes if visible(r, known) and r.get('cik')}
     if expected and class_ciks != {expected}: reasons.append('classification_cik_mismatch')
     if sec.get('cik') is not None and cik(sec['cik']) != expected: reasons.append('listing_cik_mismatch')
-    mappings = [r for r in data['issuer_mapping_candidates'] if str(r.get('security_id')) == sid and stamp(r.get('observed_at')) and stamp(r['observed_at']) <= decision]
+    mappings = [r for r in data['issuer_mapping_candidates'] if str(r.get('security_id')) == sid and stamp(r.get('observed_at')) and stamp(r['observed_at']) <= known]
     if any(r.get('conflict_state') not in ('none', None) for r in mappings):
         reasons.append('issuer_mapping_conflict')
     approved = []
@@ -242,14 +245,15 @@ def _identity(sec, data, decision, matched, window_start):
     return sorted(set(reasons)), expected, approved[0] if len(approved) == 1 else None
 
 
-def _sessions(data, decision):
+def _sessions(data, decision, known=None):
     """Session calendar derived from stored prices (no session table exists in
     the operator database). Weekdays are never assumed; a date counts only when
     most US symbols have a visible, completed price on it."""
+    known = known or decision
     by_date = defaultdict(set)
     for r in data['global_price_observations']:
         d, retrieved = day(r.get('trading_date')), stamp(r.get('retrieved_at'))
-        if (r.get('exchange') == 'US' and d and retrieved and retrieved <= decision and r.get('qualified_symbol')
+        if (r.get('exchange') == 'US' and d and retrieved and retrieved <= known and r.get('qualified_symbol')
                 and datetime.combine(d, time(22), timezone.utc) <= decision):
             by_date[d].add(r['qualified_symbol'])
     symbols = set().union(*by_date.values()) if by_date else set()
@@ -260,9 +264,10 @@ def _sessions(data, decision):
         'first_session': sessions[0] if sessions else None, 'last_session': sessions[-1] if sessions else None}
 
 
-def _price(sec, data, decision, sessions):
+def _price(sec, data, decision, sessions, known=None):
+    known = known or decision
     symbol = sec['qualified_symbol']
-    rows = [r for r in data['global_price_observations'] if r.get('qualified_symbol') == symbol and stamp(r.get('retrieved_at')) and stamp(r['retrieved_at']) <= decision]
+    rows = [r for r in data['global_price_observations'] if r.get('qualified_symbol') == symbol and stamp(r.get('retrieved_at')) and stamp(r['retrieved_at']) <= known]
     by_date = defaultdict(list)
     for r in rows: by_date[day(r.get('trading_date'))].append(r)
     reasons = []
@@ -282,7 +287,9 @@ def _price(sec, data, decision, sessions):
             or r.get('exchange') != 'US' or not r.get('source')
             or stamp(r['retrieved_at']).date() < day(r['trading_date'])):
             reasons.append('invalid_price_history')
-    actions = [r for r in data['global_corporate_actions'] if r.get('qualified_symbol') == symbol and day(r.get('ex_date')) and stamp(r.get('retrieved_at')) and stamp(r['retrieved_at']) <= decision]
+    actions = [r for r in data['global_corporate_actions'] if r.get('qualified_symbol') == symbol and day(r.get('ex_date')) and stamp(r.get('retrieved_at')) and stamp(r['retrieved_at']) <= known
+               # In replay, actions retrieved later but dated after the decision did not exist yet.
+               and (known == decision or day(r['ex_date']) <= decision.date())]
     if not reasons and selected:
         if not detect_price_segments(pd.DataFrame(selected), pd.DataFrame(actions)).empty:
             reasons.append('unresolved_price_discontinuity')
@@ -302,7 +309,7 @@ def _price(sec, data, decision, sessions):
 DIVIDEND_FETCH_SOURCE = 'eodhd_ingestion_checkpoints: completed prices (10-year) or refresh run; the dividends endpoint was queried'
 
 
-def _dividend_fetch_coverage(sec, data, decision, wanted, actions):
+def _dividend_fetch_coverage(sec, data, decision, wanted, actions, known=None):
     """Coverage from the dividend queries themselves, for companies with no stored
     coverage record (in practice: companies that never paid a dividend, for which
     nothing is stored). A completed 10-year 'prices' run queried the dividends
@@ -310,9 +317,10 @@ def _dividend_fetch_coverage(sec, data, decision, wanted, actions):
     'refresh' re-queried it; both must bracket the price window. An empty answer is
     then evidence of no dividend, not a gap. Splits are not fetched by this
     provider path for any company; the price-discontinuity rule covers them."""
+    known = known or decision
     symbol = sec['qualified_symbol']
     done = [c for c in data['eodhd_ingestion_checkpoints'] if c.get('qualified_symbol') == symbol and c.get('status') == 'completed'
-            and c.get('stage') in ('prices', 'refresh', 'bulk_daily') and stamp(c.get('updated_at')) and stamp(c['updated_at']) <= decision]
+            and c.get('stage') in ('prices', 'refresh', 'bulk_daily') and stamp(c.get('updated_at')) and stamp(c['updated_at']) <= known]
     full = [stamp(c['updated_at']) for c in done if c['stage'] == 'prices']
     if not full or min(full).date() - timedelta(days=CONFIG['dividend_fetch_history_days']) > wanted[0]:
         return ['corporate_action_coverage_missing_or_incomplete'], None
@@ -327,15 +335,16 @@ def _dividend_fetch_coverage(sec, data, decision, wanted, actions):
                 'available_at': latest, 'extension': None}
 
 
-def _actions(sec, data, decision, wanted, actions):
+def _actions(sec, data, decision, wanted, actions, known=None):
     """Coverage over the whole price window: a stored coverage record, optionally
     extended past its end by a completed EODHD dividend refresh recorded after the
     window's last session closed (config coverage_extension)."""
+    known = known or decision
     if len(wanted) != 127: return ['corporate_action_window_unproven'], None
-    rows = [r for r in data['corporate_action_coverage_evidence'] if str(r.get('security_id')) == sec['security_id'] and r.get('qualified_symbol') == sec['qualified_symbol'] and visible(r, decision)]
+    rows = [r for r in data['corporate_action_coverage_evidence'] if str(r.get('security_id')) == sec['security_id'] and r.get('qualified_symbol') == sec['qualified_symbol'] and visible(r, known)]
     rows = [r for r in rows if day(r.get('assessed_from')) and day(r.get('assessed_to')) and day(r['assessed_from']) <= wanted[0]
             and day(r['assessed_to']) >= wanted[0] and r.get('source_identifier') and r.get('evidence_key')]
-    if not rows: return _dividend_fetch_coverage(sec, data, decision, wanted, actions)
+    if not rows: return _dividend_fetch_coverage(sec, data, decision, wanted, actions, known)
     extension = None
     if any(day(r['assessed_to']) >= wanted[-1] for r in rows):
         rows = [r for r in rows if day(r['assessed_to']) >= wanted[-1]]
@@ -346,7 +355,7 @@ def _actions(sec, data, decision, wanted, actions):
         # 'bulk_daily' (app.daily_prices) is written only after every day since the last full refresh was read.
         refreshes = [c for c in data['eodhd_ingestion_checkpoints'] if c.get('stage') in ('refresh', 'bulk_daily') and c.get('status') == 'completed'
                      and c.get('qualified_symbol') == sec['qualified_symbol'] and stamp(c.get('updated_at'))
-                     and closed <= stamp(c['updated_at']) <= decision]
+                     and closed <= stamp(c['updated_at']) <= known]
         if not refreshes: return ['corporate_action_coverage_missing_or_incomplete'], None
         rows = [r for r in rows if day(r['assessed_to']) == through]
         extension = {'stored_record_through': through, 'dividend_refresh_completed_at': max(stamp(c['updated_at']) for c in refreshes),
@@ -368,8 +377,9 @@ def _actions(sec, data, decision, wanted, actions):
                     available_at=stamp(row['available_at']), extension=extension)
 
 
-def _evidence(sec, data, decision):
+def _evidence(sec, data, decision, known=None):
     """Direct facts only, no canonical alias activation or interval arithmetic."""
+    known = known or decision
     rows = [r for r in data['sec_facts'] if str(r.get('security_id')) == sec['security_id'] and r.get('concept') in FACTS]
     grouped = defaultdict(list)
     rejected = defaultdict(set)
@@ -379,7 +389,7 @@ def _evidence(sec, data, decision):
         public, retrieved = stamp(r.get('public_at')), stamp(r.get('retrieved_at'))
         end, start = day(r.get('period_end')), day(r.get('period_start'))
         if not public or not retrieved: reason = 'missing_availability_timestamps'
-        elif max(public, retrieved) > decision: reason = 'evidence_after_cutoff'
+        elif public > decision or retrieved > known: reason = 'evidence_after_cutoff'
         elif cik(r.get('cik')) != cik(sec.get('cik')) or r.get('qualified_symbol') != sec['qualified_symbol']: reason = 'evidence_identity_mismatch'
         elif r.get('taxonomy') != 'us-gaap' or r.get('unit') != 'USD' or r.get('currency') not in (None, 'USD'): reason = 'incompatible_taxonomy_unit_or_currency'
         elif not finite(r.get('value')): reason = 'nonfinite_value'
@@ -432,7 +442,7 @@ def _payload_sources(db):
     return [(t, d) for t, d in PAYLOAD_TABLES if t in tables]
 
 
-def _industry(db, decision):
+def _industry(db, known):
     """SIC/entity fields extracted in SQL from retained SEC submissions payloads,
     so payload text is never projected. Visible from their retrieval time."""
     sources = _payload_sources(db)
@@ -447,7 +457,7 @@ def _industry(db, decision):
         FROM {table} WHERE endpoint_class = 'submissions'""").fetchall()
     found = defaultdict(list)
     for sid, row_cik, retrieved, digest, sic, description, entity_type, name in rows:
-        if stamp(retrieved) and stamp(retrieved) <= decision:
+        if stamp(retrieved) and stamp(retrieved) <= known:
             found[str(sid)].append({'cik': cik(row_cik), 'sic': sic, 'sic_description': description, 'entity_type': entity_type,
                                     'sec_name': name, 'retrieved_at': stamp(retrieved), 'response_sha256': digest})
     return found, 'supported'
@@ -469,12 +479,30 @@ def _industry_gate(sec, records):
     return reasons, dict(record, sic=code, names_checked=names)
 
 
-def _share_counts(db, decision):
+def _share_counts(db, decision, known=None, cache=None):
     """Cover-page share counts from retained SEC companyfacts payloads, one row per
     reported entry (extracted in SQL; payload text is never projected). An entry is
-    known from the later of its filing day (end of day, UTC) and payload retrieval."""
+    known from the later of its filing day (end of day, UTC) and payload retrieval.
+    In replay the filing day must be by the decision and the retrieval by `known`;
+    the parsed entries do not depend on the decision, so a replay reuses `cache`."""
+    known = known or decision
+    if cache is not None and 'share_count_rows' in cache: rows = cache['share_count_rows']
+    else:
+        rows = _share_count_rows(db)
+        if cache is not None: cache['share_count_rows'] = rows
+    found = defaultdict(list)
+    for sid, row_cik, retrieved, digest, end, value, accession, form, filed in rows:
+        public = datetime.combine(filed + timedelta(days=1), time.min, timezone.utc)
+        if stamp(retrieved) and stamp(retrieved) <= known and public <= decision:
+            found[sid].append({'cik': cik(row_cik), 'end': end, 'value': value, 'accession': accession,
+                               'form': form, 'filed': filed, 'known_at': max(stamp(retrieved), public), 'response_sha256': digest})
+    return found
+
+
+def _share_count_rows(db):
+    """Every valid cover-page share-count entry with its retrieval time (decision-independent)."""
     sources = _payload_sources(db)
-    if not sources: return {}
+    if not sources: return []
     # One payload at a time, parsed in Python: companyfacts documents reach several
     # MB each and exceed the bounded SQL memory limit when parsed in SQL. A payload
     # whose bytes do not match its stored SHA-256 and byte count is not used.
@@ -495,18 +523,16 @@ def _share_counts(db, decision):
             if isinstance(e, dict):
                 rows.append((sid, row_cik, retrieved, digest, e.get('end'), e.get('val'), e.get('accn'), e.get('form'), e.get('filed')))
         if len(rows) > MAX_ROWS: raise PrototypeError('PROTOTYPE_ROW_LIMIT')
-    found = defaultdict(list)
+    valid = []
     for sid, row_cik, retrieved, digest, end, value, accession, form, filed in rows:
         try:
             end, filed = date.fromisoformat(end), date.fromisoformat(filed)
             value = float(value)
         except (TypeError, ValueError):
             continue
-        known = max(stamp(retrieved), datetime.combine(filed + timedelta(days=1), time.min, timezone.utc)) if stamp(retrieved) else None
-        if known and known <= decision and finite(value) and value > 0 and form in ('10-K', '10-K/A', '10-Q', '10-Q/A') and end <= filed:
-            found[str(sid)].append({'cik': cik(row_cik), 'end': end, 'value': value, 'accession': accession,
-                                    'form': form, 'filed': filed, 'known_at': known, 'response_sha256': digest})
-    return found
+        if finite(value) and value > 0 and form in ('10-K', '10-K/A', '10-Q', '10-Q/A') and end <= filed:
+            valid.append((str(sid), row_cik, retrieved, digest, end, value, accession, form, filed))
+    return valid
 
 
 def _size(sec, entries, decision, calculation):
@@ -534,7 +560,7 @@ def _size(sec, entries, decision, calculation):
     return ([] if low <= value <= high else ['market_cap_outside_band']), size
 
 
-def _fiscal_year_prices(db, symbol, ends, decision):
+def _fiscal_year_prices(db, symbol, ends, known):
     """Unadjusted close on the last stored US session on or before each fiscal
     year end (within 7 days), visible by the cutoff. Prices beyond the main
     450-day read are needed, so this is a small separate query per company."""
@@ -544,13 +570,18 @@ def _fiscal_year_prices(db, symbol, ends, decision):
             WHERE qualified_symbol = ? AND exchange = 'US' AND status = 'available'
               AND trading_date BETWEEN ? AND ? AND retrieved_at <= ?
             ORDER BY trading_date DESC, source LIMIT 1""",
-            [symbol, end - timedelta(days=7), end, decision.replace(tzinfo=None)]).fetchone()
+            [symbol, end - timedelta(days=7), end, known.replace(tzinfo=None)]).fetchone()
         if row and finite(row[1]) and float(row[1]) > 0:
             found[end] = {'session': day(row[0]), 'close': float(row[1])}
     return found
 
 
-def _build(db, decision, target):
+def _build(db, decision, target, known=None, cache=None):
+    """`known` is the knowledge horizon: live use passes nothing (known = decision);
+    a historical replay passes the run time, so data counts once it was public by
+    the decision and retrieved by `known`. `cache` holds decision-independent
+    parsing reused across a replay's cutoffs."""
+    known = known or decision
     data, schema, remaining = {}, {}, MAX_ROWS
     for table in COLUMNS:
         if table == 'sec_facts': continue  # read per company below
@@ -560,23 +591,27 @@ def _build(db, decision, target):
     required_catalogue = {'security_master_retrievals', 'security_listings'}
     if any(schema[t] != 'supported' for t in required_catalogue):
         return _report([], [], [], schema, ['active_catalogue_schema_unavailable'], target, decision)
-    active = select_active_catalogue(db, as_of=decision.replace(tzinfo=None))
+    active = select_active_catalogue(db, as_of=known.replace(tzinfo=None))
     if active is None: return _report([], [], [], schema, ['completed_active_catalogue_unavailable'], target, decision)
     selected = [r for r in data['security_listings'] if r.get('retrieval_id') == active.retrieval_id and r.get('primary_exchange') == 'US' and r.get('active') is True]
     # Exact-ID reconciliation (track_b_gaps rule) with cutoff-visible inputs only.
     reconcile_data = dict(data,
         security_listings=[r for r in data['security_listings'] if r.get('retrieval_id') == active.retrieval_id],
-        sec_issuers=[r for r in data['sec_issuers'] if stamp(r.get('mapped_at')) and stamp(r['mapped_at']) <= decision],
-        sec_facts=[r for r in data['sec_facts'] if stamp(r.get('public_at')) and stamp(r.get('retrieved_at')) and max(stamp(r['public_at']), stamp(r['retrieved_at'])) <= decision])
-    matched = _matched(reconcile_data, decision)
+        sec_issuers=[r for r in data['sec_issuers'] if stamp(r.get('mapped_at')) and stamp(r['mapped_at']) <= known],
+        sec_facts=[r for r in data['sec_facts'] if stamp(r.get('public_at')) and stamp(r.get('retrieved_at'))
+                   and stamp(r['public_at']) <= decision and stamp(r['retrieved_at']) <= known])
+    matched = _matched(reconcile_data, known)
     # Keep every ordinary-roster identity, including absent/inactive listings, in
     # review output so identity exclusions are not silently lost.
-    roster_ids = {str(r['security_id']) for r in data['security_classification_evidence'] if r.get('security_id') and r.get('security_type') == 'us_operating_company' and visible(r, decision)}
+    roster_ids = {str(r['security_id']) for r in data['security_classification_evidence'] if r.get('security_id') and r.get('security_type') == 'us_operating_company' and visible(r, known)}
     if len(roster_ids) > MAX_ROSTER: raise PrototypeError('PROTOTYPE_ROSTER_LIMIT')
-    sessions, calendar = _sessions(data, decision)
-    industries, schema['sec_liquidity_raw_provenance'] = _industry(db, decision)
-    share_counts = _share_counts(db, decision)
-    filing_events, schema['sec_event_metadata'] = read_events(db, decision, stamp)
+    sessions, calendar = _sessions(data, decision, known)
+    if cache is not None and 'industries' in cache: industries, schema['sec_liquidity_raw_provenance'] = cache['industries']
+    else:
+        industries, schema['sec_liquidity_raw_provenance'] = _industry(db, known)
+        if cache is not None: cache['industries'] = (industries, schema['sec_liquidity_raw_provenance'])
+    share_counts = _share_counts(db, decision, known, cache)
+    filing_events, schema['sec_event_metadata'] = read_events(db, decision, stamp, known=known)
     # Each company sees only its own rows: grouped once instead of rescanning every table per company.
     by_sid = {t: _group(data[t], lambda r: str(r.get('security_id'))) for t in
               ('security_classification_evidence', 'sec_issuers', 'issuer_mapping_candidates', 'corporate_action_coverage_evidence')}
@@ -594,13 +629,13 @@ def _build(db, decision, target):
         sec = dict(listings[0], security_id=sid)
         facts = _company_facts(db, sid)
         own = {t: rows.get(sid, []) for t, rows in by_sid.items()} | {t: rows.get(sec['qualified_symbol'], []) for t, rows in by_symbol.items()} | {'sec_facts': facts}
-        prices, calculation, wanted, actions = _price(sec, own, decision, sessions)
-        identity, resolved_cik, mapping = _identity(sec, own, decision, matched, wanted[0] if wanted else decision.date())
+        prices, calculation, wanted, actions = _price(sec, own, decision, sessions, known)
+        identity, resolved_cik, mapping = _identity(sec, own, decision, matched, wanted[0] if wanted else decision.date(), known)
         sec['cik'] = resolved_cik
         if sec.get('currency') != 'USD' or sec.get('instrument_type') not in ('common_stock', 'ordinary_share'): identity.append('listing_not_ordinary_us_usd_equity')
         if symbol_counts[sec['qualified_symbol']] != 1: identity.append('qualified_symbol_identity_ambiguous')
-        coverage_reasons, coverage = _actions(sec, own, decision, wanted, actions)
-        evidence, missing = _evidence(sec, own, decision)
+        coverage_reasons, coverage = _actions(sec, own, decision, wanted, actions, known)
+        evidence, missing = _evidence(sec, own, decision, known)
         industry_reasons, industry = _industry_gate(sec, industries.get(sid, []))
         size_reasons, size = _size(sec, share_counts.get(sid, []), decision, calculation)
         reasons = identity + prices + coverage_reasons + industry_reasons + size_reasons
@@ -619,7 +654,7 @@ def _build(db, decision, target):
             'identity_evidence': {k: mapping.get(k) for k in ('candidate_key', 'evidence_source', 'source_identifier', 'effective_from', 'effective_to', 'observed_at')} if mapping else None,
             'action_coverage': coverage, 'industry': industry, 'size': size,
             # Context only: never used for eligibility, membership or ordering.
-            'financials': annual_brief(sec, facts, decision, stamp=stamp, finite=finite)})
+            'financials': annual_brief(sec, facts, decision, stamp=stamp, finite=finite, known=known)})
         if not reasons: company_facts[sid] = facts  # kept for the first-reported history below
     eligible = sorted([c for c in companies if c['eligible']], key=lambda c: (hashlib.sha256((CONFIG['version'] + ':' + c['security_id']).encode()).hexdigest(), c['security_id']))
     for c in companies:
@@ -628,8 +663,8 @@ def _build(db, decision, target):
         if c.get('cik'): c['events'] = event_brief(c, filing_events.get(c['security_id'], []), decision, full=c['eligible'])
         if c['eligible'] and c.get('valuation'):
             first = annual_brief({'security_id': c['security_id'], 'cik': c['cik']}, company_facts[c['security_id']], decision,
-                                 stamp=stamp, finite=finite, revision='first')
-            prices = _fiscal_year_prices(db, c['qualified_symbol'], [y['fiscal_year_end'] for y in first['years']], decision)
+                                 stamp=stamp, finite=finite, revision='first', known=known)
+            prices = _fiscal_year_prices(db, c['qualified_symbol'], [y['fiscal_year_end'] for y in first['years']], known)
             c['valuation']['history'] = valuation_history(first, prices, c['size']['close'])
             c['valuation']['scenarios'] = scenario_ranges(c['financials'], c['valuation']['history'], c['size'])
         if not c['eligible'] and c.get('financials'): c['financials'] = summary_only(c['financials'])
@@ -644,6 +679,7 @@ def _build(db, decision, target):
     report = _report(companies, members, results, schema, blockers, target, decision, [c['security_id'] for c in eligible], calendar)
     # Separate from the momentum results above: every eligible company, not only members.
     report['value_ranking'] = value_ranking(companies)
+    if known != decision: report['knowledge_horizon'] = known
     return report
 
 
