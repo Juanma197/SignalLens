@@ -1,6 +1,7 @@
 # Holding alerts on your phone (Telegram)
 
-Every weekday after the US close, SignalLens can check your holdings and message
+Every weekday before the US market opens (12:00 UTC), SignalLens checks your
+holdings against the previous close and overnight filings, and messages
 you **only when a decision changes**: for example `HOLD → SELL` because a new
 quarterly report shows a loss, or `HOLD → BUY MORE` because the price fell while the
 thesis still holds. On Fridays it also sends a short summary. The first run sends one

@@ -83,6 +83,15 @@ from .financial_strength import (aggregate_evidence_audit as financial_strength_
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0")
+
+
+@app.on_event("startup")
+def start_daily_alerts() -> None:
+    """Weekday holding alerts in this process (off unless SIGNALLENS_ALERTS_ENABLED=true)."""
+    if settings.alerts_enabled:
+        from .prototype.daily_job import DailyAlertJob
+        app.state.daily_alerts = DailyAlertJob(settings)
+        app.state.daily_alerts.start()
 app.include_router(prototype_router)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True,
                    allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["*"])

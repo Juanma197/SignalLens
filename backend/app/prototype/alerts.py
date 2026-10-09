@@ -1,6 +1,6 @@
 """Daily holding alerts: message only when a decision changes.
 
-Each run (weekdays after the US close):
+Each run (weekdays before the US open, on the previous close):
 1. optionally updates prices and dividends from EODHD's whole-market files
    (app.daily_prices, two requests per trading day);
 2. optionally checks each held company's SEC submissions (one request each) and,
