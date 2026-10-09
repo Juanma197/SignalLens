@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
 import duckdb
+import pandas as pd
 
 from .global_universe import utc_naive
 
@@ -245,18 +246,15 @@ class GlobalMarketDataRepository:
                         row.qualified_symbol, row.trading_date, row.exchange, row.currency, row.open, row.high,
                         row.low, row.close, row.adjusted_close, row.volume, row.status, row.source, utc_naive(row.retrieved_at)]
                     for row in prices]
-                if price_values:
-                    connection.executemany("INSERT OR REPLACE INTO global_price_observations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", price_values)
+                _replace_rows(connection, "global_price_observations", price_values)
                 action_values = [[
                         row.qualified_symbol, row.ex_date, row.action_type, row.value, row.currency,
                         row.source, utc_naive(row.retrieved_at)] for row in actions]
-                if action_values:
-                    connection.executemany("INSERT OR REPLACE INTO global_corporate_actions VALUES (?,?,?,?,?,?,?)", action_values)
+                _replace_rows(connection, "global_corporate_actions", action_values)
                 fx_values = [[
                         row.base_currency, row.quote_currency, row.observed_on, row.rate, row.source,
                         utc_naive(row.retrieved_at), utc_naive(row.available_at)] for row in fx]
-                if fx_values:
-                    connection.executemany("INSERT OR REPLACE INTO global_fx_observations VALUES (?,?,?,?,?,?,?)", fx_values)
+                _replace_rows(connection, "global_fx_observations", fx_values)
                 connection.execute("COMMIT")
             except BaseException:
                 connection.execute("ROLLBACK")
@@ -396,3 +394,20 @@ class GlobalMarketDataRepository:
 
 def _empty_market_coverage() -> dict:
     return {"status": "unavailable", "price_coverage": [], "fx_coverage": [], "latest_run": None}
+
+
+def _replace_rows(connection, table: str, rows: list[list]) -> None:
+    """INSERT OR REPLACE `rows` as one set-based statement.
+
+    Row-by-row executemany costs minutes per company once the table holds millions
+    of keyed rows; scanning a DataFrame is about a thousand times faster. Decimals
+    travel as text and are cast back to the column's exact type."""
+    if not rows: return
+    columns = connection.execute(
+        "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ? ORDER BY ordinal_position", [table]).fetchall()
+    names = [f"c{i}" for i in range(len(columns))]
+    frame = pd.DataFrame([[str(v) if isinstance(v, Decimal) else v for v in row] for row in rows], columns=names, dtype=object)
+    select = ", ".join(f'CAST("{n}" AS {kind})' for n, (_, kind) in zip(names, columns))
+    connection.register("replacement_rows", frame)
+    try: connection.execute(f"INSERT OR REPLACE INTO {table} SELECT {select} FROM replacement_rows")
+    finally: connection.unregister("replacement_rows")
