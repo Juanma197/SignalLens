@@ -35,9 +35,11 @@ def test_first_run_downloads_ten_years_then_only_an_overlap(tmp_path):
     assert report['funds']['SPY.US'] == {'status': 'completed', 'from': '2016-10-08', 'rows': 2}
     assert report['funds']['IJR.US']['status'] == 'failed'
     assert store.benchmark_prices(now) == {'SPY.US': {date(2026, 10, 7): 99.0, date(2026, 10, 8): 100.0},
-                                           'IJH.US': {date(2026, 10, 7): 99.0, date(2026, 10, 8): 100.0}}
+                                           'IJH.US': {date(2026, 10, 7): 99.0, date(2026, 10, 8): 100.0},
+                                           'VT.US': {date(2026, 10, 7): 99.0, date(2026, 10, 8): 100.0}}
     assert store.benchmark_prices(datetime(2026, 10, 9, tzinfo=timezone.utc)) == {}  # not yet retrieved then
     again = FakeClient()
     fetch(store, again, today=TODAY, now=now)
-    assert dict(again.calls) == {'eod/SPY.US': '2026-09-07', 'eod/IJH.US': '2026-09-07', 'eod/IJR.US': '2016-10-08'}
+    assert dict(again.calls) == {'eod/SPY.US': '2026-09-07', 'eod/IJH.US': '2026-09-07', 'eod/IJR.US': '2016-10-08',
+                                 'eod/VT.US': '2026-09-07'}
     assert len(store.benchmark_prices(now)['SPY.US']) == 2  # rewritten, not duplicated

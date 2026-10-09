@@ -77,7 +77,8 @@ def compact(report, decision):
         eligible.append({'security_id': c['security_id'], 'qualified_symbol': c['qualified_symbol'], 'cik': c.get('cik'),
                          'close': calc.get('end_close'), 'close_session': calc.get('end_session'),
                          'market_cap_usd': size.get('market_cap_usd'), 'shares_filed': size.get('shares_filed'),
-                         'thesis': signs['overall'], 'warnings': [w['text'] for w in signs['automatic'] if w['severity'] in ('broken', 'warning')]})
+                         # The automatic signs feed the live decision rules when the company is held.
+                         'thesis': signs['overall'], 'signs': signs['automatic']})
     return {'decision_at': decision, 'knowledge_horizon': report.get('knowledge_horizon'),
             'eligible_count': report['eligible_count'], 'blockers': report['blockers'],
             'withholding_counts': report['withholding_counts'], 'session_calendar': report.get('session_calendar'),

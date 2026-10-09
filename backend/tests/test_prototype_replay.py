@@ -104,7 +104,7 @@ def test_run_stores_compact_months_leaves_databases_unchanged_and_holds_out_once
     october = months['2026-10-01']
     assert october['eligible_count'] == len(october['eligible']) > 0 and october['population'] == october['eligible_count']
     first = october['eligible'][0]
-    assert {'security_id', 'qualified_symbol', 'close', 'market_cap_usd', 'thesis', 'warnings'} <= set(first)
+    assert {'security_id', 'qualified_symbol', 'close', 'market_cap_usd', 'thesis', 'signs'} <= set(first)
     assert months['2026-09-01']['eligible_count'] == 0      # not enough sessions before September in the fixture
     with pytest.raises(ReplayError, match='REPLAY_HOLDOUT_ALREADY_RUN'): run(**args)
     with pytest.raises(ReplayError, match='REPLAY_DB_NOT_SEPARATE'): run(**(args | {'replay_db': research[0], 'holdout': False,
