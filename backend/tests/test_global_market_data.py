@@ -129,3 +129,19 @@ def test_representative_global_fixture_covers_required_cases() -> None:
     euro = [item for item in items if item.lei == "LEIEUR"]
     assert len(euro) == 2
     assert choose_canonical(euro)[company_key(euro[0])] == "xpar:EUR"
+
+
+def test_bulk_insert_fills_leading_columns_exactly_and_honours_conflicts(tmp_path):
+    from decimal import Decimal
+    import duckdb
+    from app.global_market_data import bulk_insert
+    with duckdb.connect(str(tmp_path / "t.duckdb")) as db:
+        db.execute("CREATE TABLE t(k VARCHAR PRIMARY KEY, v DECIMAL(24,10), d DATE, extra VARCHAR)")
+        bulk_insert(db, "t", [["a", Decimal("1.0123456789"), "2020-01-02"], ["b", None, None]])
+        bulk_insert(db, "t", [["a", Decimal("9"), "2021-01-01"]], conflict="IGNORE")
+        assert db.execute("SELECT * FROM t ORDER BY k").fetchall() == [("a", Decimal("1.0123456789"), date(2020, 1, 2), None), ("b", None, None, None)]
+        bulk_insert(db, "t", [["a", Decimal("9"), "2021-01-01"]], conflict="REPLACE")
+        assert db.execute("SELECT v FROM t WHERE k = 'a'").fetchone()[0] == Decimal("9")
+        with pytest.raises(Exception): bulk_insert(db, "t", [["a", 1, None]])          # plain INSERT keeps the key check
+        with pytest.raises(ValueError): bulk_insert(db, "t", [["c", 1, None, "x", "too many"]])
+        with pytest.raises(ValueError): bulk_insert(db, "t", [["c", 1], ["d"]])

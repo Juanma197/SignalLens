@@ -228,3 +228,21 @@ def test_ingestion_keeps_the_two_documents_it_downloads(tmp_path):
     run(research,production)  # a resumed run keeps one copy
     with duckdb.connect(str(research),read_only=True) as db:
         assert db.execute("SELECT count(*) FROM sec_raw_payloads").fetchone()[0]==2
+
+
+def test_ingestion_writes_when_other_code_has_added_optional_columns(tmp_path):
+    # The operator database's sec_facts and sec_filings carry extra optional columns
+    # added by the liquidity ingestion; positional-only writes failed on every company.
+    research,production=databases(tmp_path)
+    initialize_schema(research)
+    with duckdb.connect(str(research)) as db:
+        for table in ("sec_facts","sec_filings"):
+            db.execute(f"ALTER TABLE {table} ADD COLUMN operation_type VARCHAR")
+            db.execute(f"ALTER TABLE {table} ADD COLUMN ingestion_run_id VARCHAR")
+    result=run(research,production)
+    assert result["status"]=="completed" and result["inserted"]>0
+    with duckdb.connect(str(research),read_only=True) as db:
+        assert db.execute("SELECT count(*) FROM sec_facts").fetchone()[0]==result["inserted"]
+        assert db.execute("SELECT count(*) FROM sec_facts WHERE operation_type IS NOT NULL").fetchone()[0]==0
+        assert db.execute("SELECT count(*) FROM sec_checkpoints WHERE status='completed'").fetchone()[0]==1
+        assert db.execute("SELECT count(*) FROM sec_failures").fetchone()[0]==0
