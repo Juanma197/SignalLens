@@ -286,7 +286,10 @@ def initialize_schema(research: Path) -> None:
 def ingest(*, research: Path, production: Path, authorization: str | None, dry_run: bool,
            limits: IngestionLimits, fixture: dict[str, Any] | None = None,
            retry_only: bool = False, now: datetime | None = None,
-           transport: httpx.BaseTransport | None = None, clock=time.monotonic) -> dict[str, Any]:
+           transport: httpx.BaseTransport | None = None, clock=time.monotonic,
+           security_ids: set[str] | None = None, refresh: bool = False) -> dict[str, Any]:
+    """`security_ids` limits the run to those securities; `refresh` re-reads them even
+    when already completed (new filings: stored facts are recognised, new ones added)."""
     if authorization != AUTHORIZATION_PHRASE: raise PermissionError("exact SEC ingestion authorization phrase required")
     validate_paths(research, production); production_before=fingerprint(production)
     with duckdb.connect(str(production), read_only=True) as db: db.execute("SELECT 1")
@@ -294,7 +297,10 @@ def ingest(*, research: Path, production: Path, authorization: str | None, dry_r
     timestamp=(now or datetime.now(timezone.utc)).astimezone(timezone.utc); run_id=str(uuid.uuid4())
     with duckdb.connect(str(research)) as db:
         selected=_catalogue(db)
-        if retry_only:
+        if security_ids is not None:
+            selected=[r for r in selected if r["security_id"] in security_ids]
+        if refresh: pass  # every selected security, completed or not
+        elif retry_only:
             retry_ids={r[0] for r in db.execute("SELECT security_id FROM sec_checkpoints WHERE status='retryable_failure'").fetchall()}
             selected=[r for r in selected if r["security_id"] in retry_ids]
         else:

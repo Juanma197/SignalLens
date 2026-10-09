@@ -312,7 +312,7 @@ def _dividend_fetch_coverage(sec, data, decision, wanted, actions):
     provider path for any company; the price-discontinuity rule covers them."""
     symbol = sec['qualified_symbol']
     done = [c for c in data['eodhd_ingestion_checkpoints'] if c.get('qualified_symbol') == symbol and c.get('status') == 'completed'
-            and c.get('stage') in ('prices', 'refresh') and stamp(c.get('updated_at')) and stamp(c['updated_at']) <= decision]
+            and c.get('stage') in ('prices', 'refresh', 'bulk_daily') and stamp(c.get('updated_at')) and stamp(c['updated_at']) <= decision]
     full = [stamp(c['updated_at']) for c in done if c['stage'] == 'prices']
     if not full or min(full).date() - timedelta(days=CONFIG['dividend_fetch_history_days']) > wanted[0]:
         return ['corporate_action_coverage_missing_or_incomplete'], None
@@ -343,7 +343,8 @@ def _actions(sec, data, decision, wanted, actions):
     else:
         through = max(day(r['assessed_to']) for r in rows)
         closed = datetime.combine(wanted[-1], time(22), timezone.utc)
-        refreshes = [c for c in data['eodhd_ingestion_checkpoints'] if c.get('stage') == 'refresh' and c.get('status') == 'completed'
+        # 'bulk_daily' (app.daily_prices) is written only after every day since the last full refresh was read.
+        refreshes = [c for c in data['eodhd_ingestion_checkpoints'] if c.get('stage') in ('refresh', 'bulk_daily') and c.get('status') == 'completed'
                      and c.get('qualified_symbol') == sec['qualified_symbol'] and stamp(c.get('updated_at'))
                      and closed <= stamp(c['updated_at']) <= decision]
         if not refreshes: return ['corporate_action_coverage_missing_or_incomplete'], None
