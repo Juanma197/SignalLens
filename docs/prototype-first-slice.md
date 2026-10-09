@@ -351,10 +351,34 @@ financial-health strengths/weaknesses, filing risk flags and the next-results
 estimate for every eligible company, from the same report. Rows stay in the
 membership (hash) order and are never sorted by these columns.
 
+## Stage 3 (completed): scenario ranges
+
+Eligible companies with a valuation history get a "Scenario range": cautious,
+middle and optimistic value per share, built only from the company's own past.
+
+- **Measure**: annual free cash flow or net income, whichever has three or more
+  years and three or more usable own multiples (0-100x; a near-zero profit year
+  makes a larger multiple meaningless) and is steadier: fewer zero or negative
+  years, then the lower coefficient of variation. On operator data this picks
+  earnings for auto dealers, lumber and payroll firms, whose cash flows swing.
+- **Cases**: only the profit level varies: worst, median and best year, all at
+  the median own multiple, so pessimism and optimism are not compounded. Divided
+  by the current cover-page share count and compared with the decision-session
+  close. A zero or negative year gives no value for that case. The lowest and
+  highest own multiples are shown separately as a sensitivity on the middle case.
+- **Warnings**: a coefficient of variation of 0.5 or more marks the range as
+  unreliable; the brief also notes when the latest year is below the median
+  (the middle case then assumes a recovery).
+- **Reference**: book value per share at the latest fiscal year end.
+- **Caveats on the page**: arithmetic, not a price target or forecast; assumes
+  the past range is representative; ignores debt, cyclicality and structural
+  change. The analyst brief lists the three values, and adds a counterargument
+  when the middle case is below today's price.
+
 ## Remaining work
 
-1. Conservative scenario ranges with explicit assumptions, peer comparison
-   within the universe, and Stage 6 (month-to-month changes and holdings review).
+1. Peer comparison within the universe, and Stage 6 (month-to-month changes
+   and holdings review, once two snapshots exist).
 2. Fresh prices for a current-month shortlist and for tracking to advance
    (operator-run acquisition with the existing ingestion). Corporate-action
    coverage for the 39 `coverage_missing` companies would widen the eligible pool.

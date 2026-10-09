@@ -315,3 +315,66 @@ SECTOR_NOTES = (
 def sector_notes(industry):
     if not industry or industry.get('sic') is None: return []
     return [note for (low, high), note in SECTOR_NOTES if low <= int(industry['sic']) <= high]
+
+
+MAX_USABLE_MULTIPLE = 100
+VOLATILE_VARIATION = 0.5
+
+
+def scenario_ranges(brief, history, size):
+    """Cautious / middle / optimistic value per share from the company's own past.
+
+    Measure: free cash flow or net income, whichever has three or more years and
+    three or more usable own multiples (0-100x; near-zero profits make larger ones
+    meaningless) and is steadier: fewer zero or negative years, then the lower
+    coefficient of variation. Only the profit level varies between cases (worst,
+    median, best year), all at the median own multiple, so pessimism is not
+    compounded; the lowest and highest own multiples are shown separately as a
+    sensitivity. Values are per current cover-page share against the decision-
+    session close. Arithmetic from history, not a target or forecast."""
+    if not size or not brief or not history: return None
+    years = brief.get('years', [])[-5:]
+    hist = history.get('years', [])
+    shares, price = size['shares_outstanding'], size['close']
+    equity = years[-1]['values'].get('equity', {}).get('value') if years else None
+    book = equity / shares if equity is not None and shares else None
+    candidates = []
+    for label, source, key, multiple, short in (('free cash flow', 'calculated', 'free_cash_flow', 'price_to_free_cash_flow', 'P/FCF'),
+                                                ('net income', 'values', 'net_income', 'price_to_earnings', 'P/E')):
+        values = [y[source][key] if source == 'calculated' else y[source][key]['value'] for y in years if key in y[source]]
+        multiples = sorted(h['multiples'][multiple] for h in hist if 0 < h['multiples'].get(multiple, 0) <= MAX_USABLE_MULTIPLE)
+        if len(values) < 3 or len(multiples) < 3: continue
+        mean = sum(values) / len(values)
+        spread = (sum((v - mean) ** 2 for v in values) / len(values)) ** 0.5
+        variation = spread / abs(mean) if mean else float('inf')
+        candidates.append(((sum(v <= 0 for v in values), variation), label, values, multiples, short, variation))
+    if not candidates:
+        return {'available': False, 'reason': 'Needs at least three years of free cash flow or net income and three usable own multiples (0-100x).',
+                'book_value_per_share': book, 'price': price}
+    _, label, values, multiples, short, variation = min(candidates, key=lambda c: c[0])
+    def median(xs):
+        xs = sorted(xs)
+        return xs[len(xs) // 2] if len(xs) % 2 else (xs[len(xs) // 2 - 1] + xs[len(xs) // 2]) / 2
+    multiple = median(multiples)
+    cases = []
+    for name, profit, which in (('cautious', min(values), 'worst'), ('middle', median(values), 'median'), ('optimistic', max(values), 'best')):
+        explain = f'{which} {label} of the last {len(values)} years x median own {short}'
+        if profit <= 0:
+            cases.append({'case': name, 'assumption': explain, 'profit': profit, 'multiple': multiple, 'value_per_share': None,
+                          'vs_price': None, 'note': f'{label.capitalize()} was zero or negative; no earnings-based value.'})
+            continue
+        value = profit * multiple / shares
+        cases.append({'case': name, 'assumption': explain, 'profit': profit, 'multiple': multiple,
+                      'value_per_share': value, 'vs_price': value / price - 1})
+    middle_profit = median(values)
+    sensitivity = None
+    if middle_profit > 0:
+        sensitivity = {'low_multiple': multiples[0], 'high_multiple': multiples[-1],
+                       'low_value_per_share': middle_profit * multiples[0] / shares, 'high_value_per_share': middle_profit * multiples[-1] / shares}
+    volatility_note = (f'{label.capitalize()} varied a lot from year to year (coefficient of variation {variation:.2f}); '
+                       'treat this range as unreliable.') if variation >= VOLATILE_VARIATION else None
+    return {'available': True, 'measure': label, 'multiple_name': short, 'years_used': len(values), 'multiples_used': len(multiples),
+            'variation': variation, 'volatility_note': volatility_note, 'latest_profit': values[-1], 'median_profit': middle_profit,
+            'cases': cases, 'multiple_sensitivity': sensitivity, 'price': price,
+            'price_session': size['close_session'], 'book_value_per_share': book,
+            'label': "Arithmetic from the company's own past results and multiples, assuming that past range is representative. Not a price target or a forecast."}

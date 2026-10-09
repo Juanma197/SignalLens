@@ -124,3 +124,51 @@ def test_sector_notes_follow_sic_ranges():
     assert 'floor-plan' in sector_notes({'sic': 5500})[0]
     assert 'lease-to-own' in sector_notes({'sic': 7359})[0]
     assert sector_notes({'sic': 3560}) == [] and sector_notes(None) == []
+
+
+def test_scenario_ranges_vary_profit_at_the_median_own_multiple():
+    from app.prototype.financials import scenario_ranges, valuation_history
+    rows = [r for y, ocf in zip(range(2021, 2026), (100, 140, 120, 160, 180)) for r in year(y, 1000, 150, 90, ocf, 20, 10)]
+    rows.append(fact('StockholdersEquity', 500, date(2025, 12, 31)))
+    first = annual_brief(SEC, rows, DECISION, stamp=stamp, finite=finite, revision='first')
+    prices = {date(y, 12, 31): {'session': date(y, 12, 31), 'close': c} for y, c in zip(range(2021, 2026), (80, 120, 100, 140, 160))}
+    s = scenario_ranges(brief(rows), valuation_history(first, prices, current_close=150.0),
+                        {'shares_outstanding': 10, 'close': 150.0, 'close_session': date(2026, 9, 30)})
+    # Net income (90 every year) is steadier than free cash flow, so it is chosen.
+    assert s['available'] and s['measure'] == 'net income' and s['multiple_name'] == 'P/E' and s['variation'] == 0
+    pe = sorted(p * 10 / 90 for p in (80, 120, 100, 140, 160))
+    assert all(c['multiple'] == pytest.approx(pe[2]) for c in s['cases'])
+    assert s['cases'][1]['value_per_share'] == pytest.approx(90 * pe[2] / 10)
+    assert s['multiple_sensitivity']['low_value_per_share'] == pytest.approx(90 * pe[0] / 10)
+    assert s['book_value_per_share'] == pytest.approx(50)
+    assert s['volatility_note'] is None and s['latest_profit'] == s['median_profit'] == 90
+
+
+def test_volatile_earnings_and_absurd_multiples_are_avoided():
+    from app.prototype.financials import scenario_ranges, valuation_history
+    # Free cash flow is steady (100 a year); earnings swing, so free cash flow is chosen.
+    rows = [r for y, ni in zip(range(2021, 2026), (10, 200, 1, 150, 90)) for r in year(y, 1000, 150, ni, 120, 20, 10)]
+    first = annual_brief(SEC, rows, DECISION, stamp=stamp, finite=finite, revision='first')
+    prices = {date(y, 12, 31): {'session': date(y, 12, 31), 'close': 100.0} for y in range(2021, 2026)}
+    s = scenario_ranges(brief(rows), valuation_history(first, prices, 100.0),
+                        {'shares_outstanding': 10, 'close': 100.0, 'close_session': date(2026, 9, 30)})
+    assert s['measure'] == 'free cash flow' and s['cases'][0]['value_per_share'] == pytest.approx(100 * 10 / 10)
+    assert all(0 < c['multiple'] <= 100 for c in s['cases'])
+    swinging = [r for y, ocf in zip(range(2021, 2026), (40, 300, 60, 250, 30)) for r in year(y, 1000, 150, -5, ocf, 20, 10)]
+    first = annual_brief(SEC, swinging, DECISION, stamp=stamp, finite=finite, revision='first')
+    v = scenario_ranges(brief(swinging), valuation_history(first, prices, 100.0), {'shares_outstanding': 10, 'close': 100.0, 'close_session': date(2026, 9, 30)})
+    assert v['measure'] == 'free cash flow' and 'unreliable' in v['volatility_note']
+
+
+def test_scenarios_report_losses_and_refuse_without_history():
+    from app.prototype.financials import scenario_ranges, valuation_history
+    rows = [r for y in range(2021, 2026) for r in year(y, 1000, 150, 90 if y != 2023 else -10, 50, 60, 10)]  # FCF always negative
+    first = annual_brief(SEC, rows, DECISION, stamp=stamp, finite=finite, revision='first')
+    prices = {date(y, 12, 31): {'session': date(y, 12, 31), 'close': 100.0} for y in range(2021, 2026)}
+    s = scenario_ranges(brief(rows), valuation_history(first, prices, 100.0),
+                        {'shares_outstanding': 10, 'close': 100.0, 'close_session': date(2026, 9, 30)})
+    assert s['measure'] == 'net income' and s['cases'][0]['value_per_share'] is None and 'zero or negative' in s['cases'][0]['note']
+    assert s['cases'][1]['value_per_share'] > 0
+    none = scenario_ranges(brief(rows), valuation_history(first, {}, 100.0),
+                           {'shares_outstanding': 10, 'close': 100.0, 'close_session': date(2026, 9, 30)})
+    assert none['available'] is False and 'three' in none['reason']
