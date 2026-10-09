@@ -367,3 +367,28 @@ def test_identity_matching_equals_the_track_b_rule_beyond_its_roster_bound(monke
     _, expected, _ = track_b_gaps._reconcile(data, decision)
     assert _matched(data, decision) == expected
     assert len(expected) == 300 - 30 - 5 and not {'id-001', 'id-002', 'id-003', 'id-004', 'id-005'} & expected
+
+
+def test_industry_and_share_counts_are_read_from_retained_sec_documents(tmp_path):
+    import hashlib, json
+    from datetime import datetime, timezone
+    import duckdb
+    from app.prototype.service import _industry, _share_counts
+    from app.sec_ingestion import SCHEMA
+    path = tmp_path / 'r.duckdb'
+    at = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    docs = {'submissions': {'sic': '3714', 'sicDescription': 'Motor Vehicle Parts', 'entityType': 'operating', 'name': 'LKQ CORP'},
+            'companyfacts': {'facts': {'dei': {'EntityCommonStockSharesOutstanding': {'units': {'shares': [
+                {'end': '2026-07-20', 'val': 260000000, 'accn': '0000065984-26-000010', 'form': '10-Q', 'filed': '2026-07-25'}]}}}}}}
+    with duckdb.connect(str(path)) as db:
+        db.execute(SCHEMA)
+        for kind, payload in docs.items():
+            text = json.dumps(payload, separators=(',', ':'))
+            digest = hashlib.sha256(text.encode()).hexdigest()
+            db.execute('INSERT INTO sec_raw_payloads VALUES (?,?,?,?,?,?,?,?,?)', [kind, 'sid-1', '0001065696', kind, 'url', at, digest, len(text.encode()), text])
+        # A tampered copy is never used.
+        db.execute("INSERT INTO sec_raw_payloads VALUES ('bad','sid-2','0000000002','companyfacts','url',?,'0',1,'{}')", [at])
+        found, state = _industry(db, datetime(2026, 10, 9, tzinfo=timezone.utc))
+        shares = _share_counts(db, datetime(2026, 10, 9, tzinfo=timezone.utc))
+    assert state == 'supported' and found['sid-1'][0]['sic'] == '3714' and found['sid-1'][0]['cik'] == '0001065696'
+    assert [e['value'] for e in shares['sid-1']] == [260000000.0] and 'sid-2' not in shares
