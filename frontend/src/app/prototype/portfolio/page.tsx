@@ -3,22 +3,24 @@ import {Suspense, useCallback, useEffect, useState} from "react";
 import {useSearchParams} from "next/navigation";
 import Link from "next/link";
 import {PrototypeNotice} from "../view";
+import {cutoffFor, friendlyError} from "../when";
 import {call} from "../store-view";
 import {Portfolio, PortfolioView, TradeDraft} from "../portfolio-view";
 
 function PortfolioPage() {
   const query = useSearchParams();
-  const [cutoff, setCutoff] = useState(query.get("decision_at") ?? "");
+  // Company links open on the latest data unless the page was opened with a date.
+  const [cutoff] = useState(() => query.get("decision_at") || cutoffFor({mode: "latest"}));
   const [portfolio, setPortfolio] = useState<Portfolio|null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
-  const load = useCallback(() => call<Portfolio>("portfolio").then(setPortfolio).catch(e => setError(e.message)), []);
+  const load = useCallback(() => call<Portfolio>("portfolio").then(setPortfolio).catch(e => setError(friendlyError(e.message))), []);
   useEffect(() => {load();}, [load]);
   async function run(path: string, body: unknown) {
     setBusy(true); setError("");
     try {setPortfolio(await call<Portfolio>(path, body)); return true;}
-    catch (e) {setError(e instanceof Error ? e.message : "PROTOTYPE_SERVICE_UNAVAILABLE"); return false;}
+    catch (e) {setError(friendlyError(e instanceof Error ? e.message : "PROTOTYPE_SERVICE_UNAVAILABLE")); return false;}
     finally {setBusy(false);}
   }
   const trade = (d: TradeDraft) => run("portfolio/trades", {kind: d.kind, qualified_symbol: d.qualified_symbol, shares: Number(d.shares), price: Number(d.price),
@@ -31,7 +33,6 @@ function PortfolioPage() {
     <section className="hero compact"><p className="eyebrow">YOUR HOLDINGS · YOUR TRADES · STORED PRICES</p><h1>What you own.<br/><span>What it is worth.</span></h1>
       <p className="lede">Holdings are built only from trades you record here. Market values use the latest stored close; holdings outside SignalLens data are shown at cost and never estimated.</p></section>
     <PrototypeNotice/>
-    <form className="panel research-form" onSubmit={e => e.preventDefault()}><label>Evidence cutoff for company links (optional)<input type="text" placeholder="2026-10-02T12:00:00Z" value={cutoff} onChange={e => setCutoff(e.target.value)}/></label></form>
     {error && <p role="alert" className="notice warning">{error}</p>}
     {portfolio ? <PortfolioView portfolio={portfolio} cutoff={cutoff} today={today} busy={busy} onTrade={trade} onVoid={voidTrade}/> : !error && <p role="status">Reading the prototype store…</p>}</main>;
 }

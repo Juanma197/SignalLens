@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {detailHref, percent} from "./view";
+import {describeCutoff} from "./when";
 
 export type ValueStatus = "candidate"|"watch"|"not_undervalued"|"value_trap"|"not_assessable";
 export type ValueAssessment = {security_id: string; qualified_symbol: string; company_name: string|null; status: ValueStatus; reasons: string[]; rank?: number|null;
@@ -30,7 +31,7 @@ function PickCard({a, decision, target}: {a: ValueAssessment; decision: string; 
 export function ValueRankingView({ranking, decision, target}: {ranking: ValueRanking; decision: string; target: number}) {
   const picks = ranking.companies.filter(a => a.rank != null);
   return <section className="panel prototype-panel"><p className="eyebrow">THIS MONTH · UNDERVALUATION RANKING</p><h2>Top {ranking.rules.maximum_picks} undervalued candidates</h2>
-    <p>Ranked from {ranking.population} eligible companies at {decision}. {ranking.label}</p>
+    <p>Ranked from {ranking.population} eligible companies, as of {describeCutoff(decision)}. {ranking.label}</p>
     {ranking.population < 10 && <p className="notice warning">Only {ranking.population} companies could be assessed. With so few, a pick is the best of a small set, not of the market.</p>}
     {picks.length === 0 ? <p>No company passes the filters this month. Nothing is forced: holding cash or current positions is a valid outcome.</p>
       : <div className="prototype-cards prototype-picks">{picks.map(a => <PickCard key={a.security_id} a={a} decision={decision} target={target}/>)}</div>}

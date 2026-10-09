@@ -1,4 +1,5 @@
 import Link from "next/link";
+import {describeCutoff} from "./when";
 import type {ValueRanking} from "./value-view";
 
 export type Calculation = {formula: string; start_session: string; end_session: string; start_adjusted_close: number; end_adjusted_close: number; session_intervals: number; momentum_return: number; source: string[]; latest_input_retrieved_at: string};
@@ -63,7 +64,7 @@ export function RosterView({report}: {report: Report}) {
   const companies = new Map(report.companies.map(c=>[c.security_id,c]));
   return <div className="brief-stack">
     {report.synthetic_fixture && <p className="notice warning">SYNTHETIC FIXTURE — invented companies and evidence. This is not the actual operator roster.</p>}
-    <section className="panel prototype-panel"><h2>Proposed research shortlist</h2><p>Known at {report.decision_at}. {report.proposed_membership.length} proposed members from {report.eligible_count} eligible companies; minimum {report.minimum_members}, target {report.target_members}.</p>
+    <section className="panel prototype-panel"><h2>Proposed research shortlist</h2><p>As of {describeCutoff(report.decision_at)}. {report.proposed_membership.length} proposed members from {report.eligible_count} eligible companies; minimum {report.minimum_members}, target {report.target_members}.</p>
       {report.blockers.length > 0 && <p role="status" className="notice warning">Results withheld: {report.blockers.map(words).join(" · ")}. Requirements remain unchanged.</p>}
       {report.results.length === 0 ? <p>No qualifying results at this cutoff.</p> : <div className="prototype-cards">{report.results.map((id,index)=>{const c=companies.get(id)!;return <article key={id}><p className="eyebrow">Research result {index+1}</p><h3>{c.qualified_symbol}</h3><p>{c.company_name}</p><p>{sizeLine(c)}</p>{c.financials && <p>{healthLine(c.financials)}</p>}{c.valuation && <p>{valuationLine(c.valuation)}</p>}{c.events && <p>{eventsLine(c.events)}</p>}<b>{percent(c.calculation!.momentum_return)} over 126 sessions</b><p>Qualified with positive momentum, identity checked at the cutoff, complete price/action coverage and direct financial context.</p><p>{c.risks.join(" ")}</p><Link href={detailHref(id,report.decision_at,report.target_members)}>View calculation and evidence</Link></article>;})}</div>}
     </section>

@@ -2,6 +2,7 @@ import Link from "next/link";
 import {OVERALL, type CompanyChecks} from "./checks-view";
 import {money, type Total} from "./portfolio-view";
 import {detailHref, percent} from "./view";
+import {describeCutoff} from "./when";
 import type {ValueAssessment} from "./value-view";
 
 export type Decision = "SELL"|"REDUCE"|"REVIEW"|"BUY MORE"|"HOLD";
@@ -43,7 +44,7 @@ export function MonthlyView({monthly}: {monthly: Monthly}) {
     h.security_id ? <Link href={detailHref(h.security_id, monthly.decision_at, monthly.target_members)}>{h.qualified_symbol}</Link> : h.qualified_symbol;
   return <div className="brief-stack">
     {monthly.synthetic_fixture && <p className="notice warning">SYNTHETIC FIXTURE — invented companies and evidence.</p>}
-    <section className="panel prototype-panel"><p className="eyebrow">DECISIONS AT {monthly.decision_at}</p><h2>What to do this month</h2>
+    <section className="panel prototype-panel"><p className="eyebrow">AS OF {describeCutoff(monthly.decision_at).toUpperCase()}</p><h2>What to do this month</h2>
       <p className="prototype-decision-counts">{ORDER.map(d => <span key={d} className={`prototype-decision prototype-decision-${slug(d)}`}>{d} {monthly.counts[d]}</span>)}</p>
       <p>{monthly.label}</p></section>
 
