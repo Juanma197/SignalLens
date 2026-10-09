@@ -315,3 +315,28 @@ def test_edited_payload_without_matching_hash_is_not_used(paths):
     change(paths, "UPDATE sec_liquidity_raw_provenance SET payload_json=replace(payload_json,'\"val\":10000000','\"val\":20000000') WHERE security_id='synthetic-00' AND endpoint_class='companyfacts'")
     c = company(run(paths))
     assert 'market_cap_unavailable' in c['reasons'] and c['size'] is None
+
+
+def test_completed_dividend_queries_count_as_coverage_for_non_payers():
+    """No stored coverage record (a company that never paid a dividend): the completed
+    10-year prices run and a run after the window's close are the evidence."""
+    from datetime import date, datetime, timezone
+    from app.prototype.service import _dividend_fetch_coverage
+    sec = {'qualified_symbol': 'NOPAY.US'}
+    wanted = [date(2026, 4, 9), date(2026, 10, 8)]
+    decision = datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
+    def checkpoint(stage, at): return {'qualified_symbol': 'NOPAY.US', 'stage': stage, 'status': 'completed', 'updated_at': at}
+    full, refresh = checkpoint('prices', datetime(2026, 9, 27)), checkpoint('refresh', datetime(2026, 10, 8, 23, 30))
+    reasons, coverage = _dividend_fetch_coverage(sec, {'eodhd_ingestion_checkpoints': [full, refresh]}, decision, wanted, [])
+    assert reasons == [] and coverage['coverage_state'] == 'verified_no_action' and coverage['assessed_to'] == wanted[-1]
+    dividend = {'ex_date': date(2026, 6, 1), 'action_type': 'cash_distribution', 'value': 0.1, 'source': 'eodhd'}
+    assert _dividend_fetch_coverage(sec, {'eodhd_ingestion_checkpoints': [full, refresh]}, decision, wanted, [dividend])[1]['coverage_state'] == 'action_present'
+    missing = ['corporate_action_coverage_missing_or_incomplete']
+    # Only the refresh (no 10-year run), or nothing after the window closed, or a refresh not yet visible: not covered.
+    assert _dividend_fetch_coverage(sec, {'eodhd_ingestion_checkpoints': [refresh]}, decision, wanted, [])[0] == missing
+    assert _dividend_fetch_coverage(sec, {'eodhd_ingestion_checkpoints': [full]}, decision, wanted, [])[0] == missing
+    assert _dividend_fetch_coverage(sec, {'eodhd_ingestion_checkpoints': [full, refresh]}, datetime(2026, 10, 8, 23, tzinfo=timezone.utc), wanted, [])[0] == missing
+    failed = dict(refresh, status='failed')
+    assert _dividend_fetch_coverage(sec, {'eodhd_ingestion_checkpoints': [full, failed]}, decision, wanted, [])[0] == missing
+    odd = dict(dividend, action_type='spinoff')
+    assert _dividend_fetch_coverage(sec, {'eodhd_ingestion_checkpoints': [full, refresh]}, decision, wanted, [odd])[0] == ['unresolved_corporate_action']

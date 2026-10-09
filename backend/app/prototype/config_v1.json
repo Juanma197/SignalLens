@@ -39,6 +39,8 @@
     ]
   ],
   "excluded_sic_note": "finance, insurance, real estate, REITs, holding and investment offices: specialist accounting not yet supported",
+  "dividend_fetch_history_days": 3650,
+  "dividend_absence_evidence": "with no stored coverage record, a completed 10-year EODHD prices run (which queried dividends) plus a completed run after the window's last session close count as dividend coverage; an empty answer means no dividend",
   "coverage_extension": "a stored coverage record that ends inside the price window is extended to the window end only by a completed EODHD refresh checkpoint (prices and dividends) recorded after 22:00 UTC on the last window session",
   "partnership_name_pattern": "(?i)(\\bL\\.?P\\.?$|\\bPartners\\b)"
 }

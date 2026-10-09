@@ -388,3 +388,17 @@ middle and optimistic value per share, built only from the company's own past.
 
 Historical backfills, accounting constructions, PR #96 expansion, scoring weights
 and further audit tooling remain deferred.
+
+## Non-dividend payers (dividend-query evidence)
+
+Until 2026-10-09 a company with no stored coverage record was withheld as
+`corporate_action_coverage_missing_or_incomplete`. In practice that was every
+company that never paid a dividend: the 10-year EODHD prices run queries the
+dividends endpoint for each company, and an empty answer stores nothing, so no
+coverage record was ever written. The prototype now accepts the queries
+themselves as evidence: a completed 10-year `prices` run (dividends queried from
+at least ten years before it finished) plus any completed `prices` or `refresh`
+run at or after 22:00 UTC on the window's last session. An empty answer then
+means no dividend. Splits are not fetched for any company on this path; the
+price-discontinuity rule covers them. On the operator database this took the
+eligible count from 7 to 23 at a current cutoff. Track A/B are unchanged.
