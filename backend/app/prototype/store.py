@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS monthly_snapshots(
   snapshot_id VARCHAR PRIMARY KEY, month VARCHAR NOT NULL UNIQUE, decision_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL, version VARCHAR NOT NULL, configuration_hash VARCHAR NOT NULL,
   synthetic_fixture BOOLEAN NOT NULL, report_sha256 VARCHAR NOT NULL, report_json VARCHAR NOT NULL);
+CREATE TABLE IF NOT EXISTS alert_events(
+  event_id VARCHAR PRIMARY KEY, sent_at TIMESTAMPTZ NOT NULL, kind VARCHAR NOT NULL CHECK(kind IN ('baseline','change','summary')),
+  qualified_symbol VARCHAR, decision VARCHAR, thesis VARCHAR, message VARCHAR NOT NULL, delivered BOOLEAN NOT NULL);
 CREATE TABLE IF NOT EXISTS benchmark_prices(
   qualified_symbol VARCHAR NOT NULL, trading_date DATE NOT NULL, close DOUBLE NOT NULL, adjusted_close DOUBLE NOT NULL,
   retrieved_at TIMESTAMPTZ NOT NULL, source VARCHAR NOT NULL, PRIMARY KEY (qualified_symbol, trading_date));
@@ -278,6 +281,31 @@ class PrototypeStore:
         with self._connect(True) as db:
             db.execute("INSERT INTO portfolio_transactions (transaction_id, kind, note, voids_transaction_id, recorded_at) VALUES (?, 'void', ?, ?, ?)",
                 [uuid.uuid4().hex, reason, target['transaction_id'], _now()])
+
+    # Alerts ------------------------------------------------------------------
+    def record_alert(self, kind, message, *, delivered, qualified_symbol=None, decision=None, thesis=None, now=None):
+        with self._connect(True) as db:
+            db.execute('INSERT INTO alert_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                       [uuid.uuid4().hex, now or _now(), kind, qualified_symbol, decision, thesis, str(message)[:8000], bool(delivered)])
+
+    def alert_states(self):
+        """{symbol: (decision, thesis)} last delivered for each holding."""
+        if not self._has_table('alert_events'): return {}
+        out = {}
+        for r in self._rows("""SELECT qualified_symbol, decision, thesis FROM alert_events
+                WHERE delivered AND kind IN ('baseline', 'change') AND qualified_symbol IS NOT NULL
+                ORDER BY sent_at, event_id"""):
+            out[r['qualified_symbol']] = (r['decision'], r['thesis'])
+        return out
+
+    def last_alert_at(self, kind):
+        if not self._has_table('alert_events'): return None
+        rows = self._rows('SELECT max(sent_at) AS at FROM alert_events WHERE delivered AND kind = ?', [kind])
+        return rows[0]['at'] if rows and rows[0]['at'] else None
+
+    def alert_events(self, limit=50):
+        if not self._has_table('alert_events'): return []
+        return self._rows('SELECT * FROM alert_events ORDER BY sent_at DESC, event_id DESC LIMIT ?', [int(limit)])
 
     # Benchmark fund prices ---------------------------------------------------
     def store_benchmark_prices(self, rows):
