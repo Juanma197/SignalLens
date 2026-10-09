@@ -74,6 +74,16 @@ large), then money split by ranking score between BUY MORE holdings and new
 picks, with no position above 25% and whole shares only. Whatever does not fit
 stays as cash.
 
+## 7. Record the month and keep score
+
+After reviewing **This month**, press **Record this month's decisions**. It
+freezes the picks and holding decisions (one record per month, within 14 days of
+the cutoff, never changed; refused when nothing could be assessed). **Scorecard**
+then measures each call after about 1, 3, 6 and 12 months (21/63/126/252
+sessions) against the equal-weight average of every company assessed that month:
+picks, BUY MORE and HOLD are right when they beat it; SELL and REDUCE when they
+lagged it. It is not a market index; no index prices are stored yet.
+
 ## Things to know
 
 - Recorded snapshots are safe from later refreshes. Recomputing an old cutoff

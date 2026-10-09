@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from ..config import get_settings
 from .allocation import allocate
 from .checks import catalogue, evaluate
+from .scorecard import record_from_monthly, score
 from .decisions import DECISIONS, RULES as DECISION_RULES, decide
 from .portfolio import positions_from, read_market, valuation
 from .service import PrototypeError, assess
@@ -108,6 +109,13 @@ class VoidRequest(BaseModel):
 class CheckSetRequest(BaseModel):
     security_id: str = Field(min_length=1, max_length=128)
     checks: list[dict] = Field(max_length=20)
+
+
+class RecordRequest(BaseModel):
+    decision_at: datetime
+    target_members: int = Field(15, ge=10, le=20)
+    cash: float = Field(0, ge=0, le=1e9)
+    reinvest: bool = True
 
 
 class SnapshotRequest(BaseModel):
@@ -349,4 +357,43 @@ def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, 
             'method': 'Holdings are built from your trades up to the cutoff and valued at the last stored close on or before it. '
                       'Each decision follows fixed rules in order: no evidence, broken thesis, overvaluation, position size, then room to add.',
             'label': 'Decision support only. Nothing is executed. The rules have not been validated against later returns.'}
+
+
+@router.post('/store/decision-records')
+def create_decision_record(request: RecordRequest):
+    """Freeze this month's picks and holding decisions so they can be scored later."""
+    store = _store(write=True)
+    if request.decision_at.tzinfo is None:
+        raise HTTPException(422, detail={'code': 'PROTOTYPE_INVALID_TIMESTAMP'})
+    view = monthly(request.decision_at, request.target_members, request.cash, request.reinvest)
+    record = record_from_monthly(view, report_at(request.decision_at, request.target_members))
+    if not record['benchmark_symbols']:
+        # Nothing was assessed at this cutoff, so the month could never be scored.
+        raise HTTPException(409, detail={'code': 'PROTOTYPE_RECORD_NO_ASSESSED_COMPANIES',
+            'message': 'No company could be assessed at this cutoff; refresh prices or choose a later cutoff.'})
+    return _call(store.create_decision_record, record)
+
+
+@router.get('/store/decision-records')
+def decision_records():
+    return {'records': [{k: r[k] for k in ('record_id', 'month', 'decision_at', 'created_at', 'record_sha256', 'integrity_verified')}
+                        | {'items': len(r['items'])} for r in _call(_store().decision_records)]}
+
+
+_SCORECARD = {}
+
+
+@router.get('/scorecard')
+def scorecard():
+    settings = get_settings()
+    records = _call(_store().decision_records)
+    key = (tuple(r['record_id'] for r in records), datetime.now(timezone.utc).date(), _stat(settings.research_database_path))
+    if key not in _SCORECARD:
+        try:
+            result = score(records, research_db=settings.research_database_path)
+        except PrototypeError as exc:
+            raise HTTPException(409, detail={'code': exc.code, 'message': 'Stored prices could not safely be read.'}) from None
+        if len(_SCORECARD) >= 8: _SCORECARD.clear()
+        _SCORECARD[key] = result
+    return _SCORECARD[key] | {'label': 'Description of recorded calls, not validation. Small samples are noisy.'}
 

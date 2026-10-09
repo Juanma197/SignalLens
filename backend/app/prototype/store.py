@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS monthly_snapshots(
   snapshot_id VARCHAR PRIMARY KEY, month VARCHAR NOT NULL UNIQUE, decision_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL, version VARCHAR NOT NULL, configuration_hash VARCHAR NOT NULL,
   synthetic_fixture BOOLEAN NOT NULL, report_sha256 VARCHAR NOT NULL, report_json VARCHAR NOT NULL);
+CREATE TABLE IF NOT EXISTS monthly_decision_records(
+  record_id VARCHAR PRIMARY KEY, month VARCHAR NOT NULL UNIQUE, decision_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL, record_sha256 VARCHAR NOT NULL, record_json VARCHAR NOT NULL);
 CREATE TABLE IF NOT EXISTS thesis_check_sets(
   set_id VARCHAR PRIMARY KEY, security_id VARCHAR NOT NULL, checks_json VARCHAR NOT NULL,
   recorded_at TIMESTAMPTZ NOT NULL);
@@ -270,6 +273,35 @@ class PrototypeStore:
         with self._connect(True) as db:
             db.execute("INSERT INTO portfolio_transactions (transaction_id, kind, note, voids_transaction_id, recorded_at) VALUES (?, 'void', ?, ?, ?)",
                 [uuid.uuid4().hex, reason, target['transaction_id'], _now()])
+
+    # Monthly decision records ---------------------------------------------
+    def create_decision_record(self, record, *, now=None):
+        """Freeze one month's picks and decisions for later scoring. Same rules as
+        snapshots: a recent cutoff only (no backfill) and one record per month."""
+        now = now or _now()
+        decision = datetime.fromisoformat(str(record['decision_at']).replace('Z', '+00:00')).astimezone(timezone.utc)
+        if decision > now: raise StoreError('PROTOTYPE_FUTURE_CUTOFF')
+        if now - decision > timedelta(days=SNAPSHOT_MAX_LAG_DAYS): raise StoreError('PROTOTYPE_RECORD_BACKFILL_REFUSED')
+        month = decision.strftime('%Y-%m')
+        encoded = json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False)
+        digest = hashlib.sha256(encoded.encode('utf-8')).hexdigest()
+        with self._connect(True) as db:
+            if db.execute('SELECT count(*) FROM monthly_decision_records WHERE month = ?', [month]).fetchone()[0]:
+                raise StoreError('PROTOTYPE_RECORD_MONTH_EXISTS')
+            record_id = uuid.uuid4().hex
+            db.execute('INSERT INTO monthly_decision_records VALUES (?, ?, ?, ?, ?, ?)', [record_id, month, decision, now, digest, encoded])
+        return next(r for r in self.decision_records() if r['record_id'] == record_id)
+
+    def decision_records(self):
+        """Every record, oldest first, verified against its SHA-256 on each read."""
+        if not self._has_table('monthly_decision_records'): return []
+        out = []
+        for row in self._rows('SELECT * FROM monthly_decision_records ORDER BY decision_at'):
+            encoded = row.pop('record_json')
+            if hashlib.sha256(encoded.encode('utf-8')).hexdigest() != row['record_sha256']:
+                raise StoreError('PROTOTYPE_RECORD_INTEGRITY_FAILED')
+            out.append(row | json.loads(encoded) | {'decision_at': row['decision_at'], 'integrity_verified': True})
+        return out
 
     # Snapshots -------------------------------------------------------------
     def create_snapshot(self, report, *, now=None):

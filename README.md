@@ -12,7 +12,8 @@ equity). At most three picks, never forced; every reason is shown. Rules live in
 thesis conditions and automatic warning signs, so a broken thesis shows up even
 when the price has not fallen. `/prototype/monthly` brings it together: the Top 3
 plus BUY MORE / HOLD / REDUCE / SELL / REVIEW for every holding, with reasons, and a
-suggested allocation of new money within a 25% position limit.
+suggested allocation of new money within a 25% position limit. Recording a month
+freezes its calls; `/prototype/scorecard` later shows whether each was right.
 
 The separate `/prototype` view proposes a deterministic, unfrozen membership and
 zero-to-three positive 126-session momentum results from stored evidence only.
