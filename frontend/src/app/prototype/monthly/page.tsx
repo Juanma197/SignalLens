@@ -4,6 +4,7 @@ import {useSearchParams} from "next/navigation";
 import Link from "next/link";
 import {PrototypeNotice} from "../view";
 import {Monthly, MonthlyView} from "../monthly-view";
+import {money} from "../portfolio-view";
 import {When, WhenPicker, cutoffFor, describeCutoff, friendlyError, getJson, whenFromQuery} from "../when";
 
 function MonthlyPage() {
@@ -13,7 +14,7 @@ function MonthlyPage() {
   const [monthly, setMonthly] = useState<Monthly|null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [cash, setCash] = useState(query.get("cash") ?? "0");
+  const [contribution, setContribution] = useState(query.get("include_contribution") === "true");
   const [reinvest, setReinvest] = useState(true);
   const [recorded, setRecorded] = useState("");
   const [recording, setRecording] = useState(false);
@@ -22,24 +23,24 @@ function MonthlyPage() {
     setRecording(true); setRecorded("");
     try {
       const response = await fetch("/api/research/prototype/store/decision-records", {method: "POST", cache: "no-store", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({decision_at: monthly.decision_at, target_members: Number(target), cash: Number(cash) || 0, reinvest})});
+        body: JSON.stringify({decision_at: monthly.decision_at, target_members: Number(target), include_contribution: contribution, reinvest})});
       const value = await response.json();
       if (!response.ok) throw new Error(value.detail?.code ?? "PROTOTYPE_SERVICE_UNAVAILABLE");
       setRecorded(`Recorded ${value.month}. Follow it on the Scorecard.`);
     } catch (e) {setRecorded(friendlyError(e instanceof Error ? e.message : "PROTOTYPE_SERVICE_UNAVAILABLE"));} finally {setRecording(false);}
   }
-  const load = useCallback((chosen: When, money: string, reinvesting: boolean) =>
-    getJson<Monthly>(`/api/research/prototype/monthly?decision_at=${encodeURIComponent(cutoffFor(chosen))}&target_members=${encodeURIComponent(target)}&cash=${encodeURIComponent(Number(money) || 0)}&reinvest=${reinvesting}`)
+  const load = useCallback((chosen: When, including: boolean, reinvesting: boolean) =>
+    getJson<Monthly>(`/api/research/prototype/monthly?decision_at=${encodeURIComponent(cutoffFor(chosen))}&target_members=${encodeURIComponent(target)}&include_contribution=${including}&reinvest=${reinvesting}`)
       .then(setMonthly).catch(e => setError(friendlyError(e instanceof Error ? e.message : "PROTOTYPE_SERVICE_UNAVAILABLE")))
       .finally(() => setLoading(false)), [target]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on open with the initial choices
-  useEffect(() => {load(when, cash, reinvest);}, [load]);
-  function submit(event: FormEvent) {event.preventDefault(); setLoading(true); setError(""); setMonthly(null); setRecorded(""); load(when, cash, reinvest);}
+  useEffect(() => {load(when, contribution, reinvest);}, [load]);
+  function submit(event: FormEvent) {event.preventDefault(); setLoading(true); setError(""); setMonthly(null); setRecorded(""); load(when, contribution, reinvest);}
   return <main className="research-page"><nav><span className="mark">SL</span><strong>This month</strong><Link href="/prototype">Shortlist</Link><Link href="/prototype/portfolio">Portfolio</Link><Link href="/prototype/checks">Thesis checks</Link><Link href="/prototype/watchlist">Watchlist</Link><Link href="/prototype/scorecard">Scorecard</Link><Link href="/prototype/snapshots">Snapshots</Link></nav>
     <section className="hero compact"><p className="eyebrow">MONTHLY DECISIONS · DECISION SUPPORT ONLY</p><h1>What to buy, keep and sell.<br/><span>And why.</span></h1>
       <p className="lede">New undervalued opportunities and a decision for every holding, from your trades, the valuation ranking and your thesis checks at one cutoff. Nothing is executed.</p></section>
     <PrototypeNotice/>
-    <form onSubmit={submit} className="panel research-form"><WhenPicker when={when} onChange={setWhen} disabled={loading}/><label>New money to invest (USD)<input type="number" min="0" step="any" value={cash} onChange={e => setCash(e.target.value)}/></label><label className="prototype-inline-check"><input type="checkbox" checked={reinvest} onChange={e => setReinvest(e.target.checked)}/> Reinvest sale proceeds</label><button disabled={loading}>{loading ? "Working it out…" : "Update"}</button></form>
+    <form onSubmit={submit} className="panel research-form"><WhenPicker when={when} onChange={setWhen} disabled={loading}/><label className="prototype-inline-check"><input type="checkbox" checked={contribution} onChange={e => setContribution(e.target.checked)}/> Include this month&apos;s planned contribution{monthly?.allocation?.account ? ` (${money(monthly.allocation.account.monthly_contribution, monthly.allocation.account.currency)})` : ""}, not yet deposited</label><label className="prototype-inline-check"><input type="checkbox" checked={reinvest} onChange={e => setReinvest(e.target.checked)}/> Reinvest sale proceeds</label><button disabled={loading}>{loading ? "Working it out…" : "Update"}</button></form>
     {monthly && <p className="prototype-as-of">Showing data as of {describeCutoff(monthly.decision_at)}.</p>}
     {error && <p role="alert" className="notice warning">{error}</p>}
     {monthly && <><MonthlyView monthly={monthly}/>

@@ -5,7 +5,9 @@ sells half; REDUCE because of size trims back to the buying limit. Money then
 goes to BUY MORE holdings and new picks not yet held, in proportion to their
 ranking score, without any position ending above the buying limit of the
 portfolio after the trades. Money that has nowhere to go stays as cash rather
-than being forced into weaker names. Whole shares only; USD positions only,
+than being forced into weaker names. New names are only opened while the
+portfolio stays within its maximum number of holdings (a cap, not a target):
+when slots are short, the highest-scoring picks get them. Whole shares only; USD positions only,
 because the picks are US-listed. Suggestions only: nothing is executed.
 """
 import math
@@ -39,7 +41,7 @@ def _sales(holdings):
     return sales
 
 
-def allocate(holdings, picks, cash, *, reinvest=True):
+def allocate(holdings, picks, cash, *, reinvest=True, max_holdings=None):
     """`holdings` and `picks` as produced for the monthly view; `cash` in USD."""
     cash = max(0.0, float(cash or 0))
     sales = _sales(holdings)
@@ -61,6 +63,13 @@ def allocate(holdings, picks, cash, *, reinvest=True):
             targets.append({'action': 'NEW BUY', 'security_id': p['security_id'], 'qualified_symbol': p['qualified_symbol'],
                             'company_name': p['company_name'], 'price': p['price'], 'score': p.get('score') or 0, 'current': 0.0})
     targets = [t for t in targets if t['score'] > 0]
+    sold_out = {s['qualified_symbol'] for s in sales if s['action'] == 'SELL'}
+    kept = sum(1 for h in holdings if h['qualified_symbol'] not in sold_out)
+    no_slot = []
+    if max_holdings is not None:
+        new = sorted((t for t in targets if t['action'] == 'NEW BUY'), key=lambda t: -t['score'])
+        no_slot = new[max(0, max_holdings - kept):]
+        targets = [t for t in targets if t not in no_slot]
     room = {t['security_id']: max(0.0, RULES['position_limit'] * total - t['current']) for t in targets}
     planned = {t['security_id']: 0.0 for t in targets}
     remaining, active = available, [t for t in targets if room[t['security_id']] > 0]
@@ -88,7 +97,9 @@ def allocate(holdings, picks, cash, *, reinvest=True):
                     | {'shares': shares, 'amount': amount, 'weight_after': (t['current'] + amount) / total if total else None,
                        'why': ('Add: still undervalued with room to grow.' if t['action'] == 'BUY MORE' else 'Open: one of this month\'s top picks.')})
     spent = sum(b['amount'] for b in buys)
-    return {'new_cash': cash, 'reinvest_sales': reinvest, 'sale_proceeds': proceeds, 'available': available,
+    return {'max_holdings': max_holdings, 'holdings_after': kept + sum(b['action'] == 'NEW BUY' for b in buys),
+            'skipped_no_slot': [{k: t[k] for k in ('qualified_symbol', 'security_id', 'company_name')} for t in no_slot],
+            'new_cash': cash, 'reinvest_sales': reinvest, 'sale_proceeds': proceeds, 'available': available,
             'sales': sales, 'buys': buys, 'invested': spent, 'left_as_cash': available - spent if reinvest else cash - spent + proceeds,
             'portfolio_after': total, 'rules': RULES,
             'method': 'Sales first; then money split by ranking score, no position above the limit after the trades; whole shares; '

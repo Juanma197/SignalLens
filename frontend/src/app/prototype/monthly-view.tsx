@@ -13,23 +13,42 @@ export type Holding = {qualified_symbol: string; security_id: string|null; compa
 export type Monthly = {decision_at: string; notice: string; synthetic_fixture: boolean; target_members: number; population: number;
   picks: (ValueAssessment & {held: boolean})[]; holdings: Holding[]; totals: Total[]; counts: Record<Decision, number>;
   rules: Record<string, number>; method: string; label: string; allocation?: Allocation};
-type Order = {action: string; qualified_symbol: string; security_id: string|null; company_name: string|null; shares: number; price: number; amount: number; why: string; weight_after?: number|null};
+type Order = {action: string; qualified_symbol: string; security_id: string|null; company_name: string|null; shares: number; price: number; amount: number; why: string;
+  weight_after?: number|null; amount_gbp?: number|null};
+export type Account = {currency: string; cash_pool: number; overdrawn: boolean; uncounted_trades: number; deposited_this_month: number; monthly_contribution: number;
+  contribution_included: number; available: number; gbp_per_usd: {rate: number; observed_on: string; source: "stored"|"your_last_trade"}|null;
+  sale_proceeds: number|null; invested: number|null; left_as_cash: number};
 export type Allocation = {new_cash: number; reinvest_sales: boolean; sale_proceeds: number; available: number; sales: Order[]; buys: Order[];
-  invested: number; left_as_cash: number; portfolio_after: number; rules: {position_limit: number; minimum_purchase_usd: number}; method: string; label: string};
+  invested: number; left_as_cash: number; portfolio_after: number; rules: {position_limit: number; minimum_purchase_usd: number}; method: string; label: string;
+  max_holdings?: number|null; holdings_after?: number; skipped_no_slot?: {qualified_symbol: string; security_id: string|null; company_name: string|null}[]; account?: Account};
 
 export function AllocationView({allocation, decision, target}: {allocation: Allocation; decision: string; target: number}) {
   const usd = (v: number) => money(v, "USD");
+  const account = allocation.account;
+  const pounds = (v: number|null|undefined) => v == null ? "—" : money(v, account?.currency ?? "GBP");
   const orders = [...allocation.sales, ...allocation.buys];
+  const skipped = allocation.skipped_no_slot ?? [];
   return <section className="panel prototype-panel"><h2>Suggested allocation</h2>
-    <p>{usd(allocation.new_cash)} new money{allocation.reinvest_sales ? ` + ${usd(allocation.sale_proceeds)} from sales` : ""} = <b>{usd(allocation.available)}</b> to invest.
-      {" "}Suggested buys use <b>{usd(allocation.invested)}</b>; <b>{usd(allocation.left_as_cash)}</b> stays as cash.</p>
+    {account ? <>
+      <p>{pounds(account.cash_pool)} in the cash pool{account.contribution_included ? ` + ${pounds(account.contribution_included)} planned contribution` : ""}
+        {allocation.reinvest_sales && allocation.sale_proceeds > 0 ? ` + ${pounds(account.sale_proceeds)} from suggested sales` : ""}.
+        {" "}Suggested buys use <b>{pounds(account.invested)}</b>; <b>{pounds(account.left_as_cash)}</b> stays as cash for later.</p>
+      {!account.contribution_included && account.deposited_this_month === 0 && <p>This month&apos;s {pounds(account.monthly_contribution)} contribution isn&apos;t recorded yet. Include it above, or record it on the <Link href="/prototype/portfolio">Portfolio</Link> page once it arrives.</p>}
+      {account.overdrawn && <p className="notice warning">Your cash pool is below zero, so a deposit is probably missing. It is treated as zero here.</p>}
+      {account.uncounted_trades > 0 && <p className="notice warning">{account.uncounted_trades} trade(s) have no {account.currency} total, so the cash pool may not match your broker.</p>}
+      {account.gbp_per_usd ? <p><small>Pounds converted at {account.gbp_per_usd.rate.toFixed(4)} per dollar ({account.gbp_per_usd.source === "stored" ? "stored rate" : "implied by your last dollar trade"}, {account.gbp_per_usd.observed_on}). Your broker&apos;s rate and fees will differ slightly.</small></p>
+        : <p className="notice warning">No recent pound/dollar rate is stored and no dollar trade has a pound total, so no purchases can be sized yet.</p>}
+    </> : <p>{usd(allocation.new_cash)} new money{allocation.reinvest_sales ? ` + ${usd(allocation.sale_proceeds)} from sales` : ""} = <b>{usd(allocation.available)}</b> to invest.
+      {" "}Suggested buys use <b>{usd(allocation.invested)}</b>; <b>{usd(allocation.left_as_cash)}</b> stays as cash.</p>}
     {orders.length === 0 ? <p>No orders suggested. Holding cash is a valid outcome when nothing qualifies or every position is at its limit.</p> :
       <div className="prototype-table-wrap"><table className="prototype-holdings-table"><thead><tr><th>Order</th><th>Stock</th><th>Shares</th><th>Approx. amount</th><th>Weight after</th><th>Why</th></tr></thead><tbody>
         {orders.map(o => <tr key={o.action + o.qualified_symbol}><td><span className={`prototype-decision prototype-decision-${o.action === "SELL" || o.action === "TRIM" ? (o.action === "SELL" ? "sell" : "reduce") : "buy-more"}`}>{o.action}</span></td>
           <td>{o.security_id ? <Link href={detailHref(o.security_id, decision, target)}>{o.qualified_symbol}</Link> : o.qualified_symbol}<small>{o.company_name}</small></td>
-          <td>{o.shares.toLocaleString("en-US")}<small>at ~{usd(o.price)}</small></td><td>{usd(o.amount)}</td>
+          <td>{o.shares.toLocaleString("en-US")}<small>at ~{usd(o.price)}</small></td><td>{account ? pounds(o.amount_gbp) : usd(o.amount)}{account && <small>{usd(o.amount)}</small>}</td>
           <td>{o.weight_after == null ? "—" : percent(o.weight_after)}</td><td>{o.why}</td></tr>)}
       </tbody></table></div>}
+    {allocation.max_holdings != null && <p>Holdings after these orders: {allocation.holdings_after} of at most {allocation.max_holdings}.
+      {skipped.length > 0 && <> No free place for {skipped.map(s => s.qualified_symbol).join(", ")}; a new name only replaces a holding when one is sold.</>}</p>}
     <p><small>{allocation.method} No position above {percent(allocation.rules.position_limit)}; purchases under {usd(allocation.rules.minimum_purchase_usd)} are skipped. Prices are the last stored close, so real fills will differ. {allocation.label}</small></p>
   </section>;
 }

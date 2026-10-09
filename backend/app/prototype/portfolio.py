@@ -55,38 +55,64 @@ def positions_from(trades):
     return open_, closed
 
 
-def read_market(research_db, symbols, now):
-    """Latest stored close and listing identity per symbol, at or before `now`."""
-    symbols = sorted(set(symbols))[:MAX_SYMBOLS]
-    if not symbols: return {}
+def _read_only(research_db, reader):
+    """Run `reader(db)` on a read-only connection; the file must be unchanged afterwards."""
     path = Path(research_db)
     try:
         if not path.is_file() or path.stat().st_size > MAX_FILE_BYTES: raise PrototypeError('PROTOTYPE_DATABASE_UNAVAILABLE')
         before = fingerprint(path)
     except PrototypeError: raise
     except Exception: raise PrototypeError('PROTOTYPE_DATABASE_UNAVAILABLE') from None
-    failure, market = None, {}
-    marks = ', '.join('?' for _ in symbols)
-    naive_now = now.astimezone(timezone.utc).replace(tzinfo=None)
+    failure, result = None, None
     try:
         with duckdb.connect(str(path), read_only=True, config={'memory_limit': '256MB', 'threads': 1, 'enable_external_access': False}) as db:
-            for symbol, trading_date, close, retrieved in db.execute(f"""
-                SELECT qualified_symbol, trading_date, close, retrieved_at FROM (
-                  SELECT *, row_number() OVER (PARTITION BY qualified_symbol ORDER BY trading_date DESC, retrieved_at DESC) AS n
-                  FROM global_price_observations
-                  WHERE qualified_symbol IN ({marks}) AND status = 'available' AND trading_date <= ?
-                    AND retrieved_at <= ?) WHERE n = 1""",
-                    [*symbols, naive_now.date(), naive_now]).fetchall():
-                if close is not None and math.isfinite(float(close)) and float(close) > 0:
-                    market.setdefault(symbol, {})['price'] = {'close': float(close), 'trading_date': str(trading_date)}
-            for sid, symbol, name in db.execute(f"""SELECT security_id, qualified_symbol, company_name
-                    FROM security_listings WHERE qualified_symbol IN ({marks})""", symbols).fetchall():
-                market.setdefault(symbol, {}).setdefault('listings', []).append({'security_id': str(sid), 'company_name': name})
+            result = reader(db)
     except PrototypeError as exc: failure = exc
     except Exception: failure = PrototypeError('PROTOTYPE_EVIDENCE_READ_FAILED')
     if fingerprint(path) != before: raise PrototypeError('PROTOTYPE_DATABASE_CHANGED')
     if failure: raise failure
-    return market
+    return result
+
+
+def read_market(research_db, symbols, now):
+    """Latest stored close and listing identity per symbol, at or before `now`."""
+    symbols = sorted(set(symbols))[:MAX_SYMBOLS]
+    if not symbols: return {}
+    marks = ', '.join('?' for _ in symbols)
+    naive_now = now.astimezone(timezone.utc).replace(tzinfo=None)
+
+    def reader(db):
+        market = {}
+        for symbol, trading_date, close, retrieved in db.execute(f"""
+            SELECT qualified_symbol, trading_date, close, retrieved_at FROM (
+              SELECT *, row_number() OVER (PARTITION BY qualified_symbol ORDER BY trading_date DESC, retrieved_at DESC) AS n
+              FROM global_price_observations
+              WHERE qualified_symbol IN ({marks}) AND status = 'available' AND trading_date <= ?
+                AND retrieved_at <= ?) WHERE n = 1""",
+                [*symbols, naive_now.date(), naive_now]).fetchall():
+            if close is not None and math.isfinite(float(close)) and float(close) > 0:
+                market.setdefault(symbol, {})['price'] = {'close': float(close), 'trading_date': str(trading_date)}
+        for sid, symbol, name in db.execute(f"""SELECT security_id, qualified_symbol, company_name
+                FROM security_listings WHERE qualified_symbol IN ({marks})""", symbols).fetchall():
+            market.setdefault(symbol, {}).setdefault('listings', []).append({'security_id': str(sid), 'company_name': name})
+        return market
+    return _read_only(research_db, reader)
+
+
+def read_gbp_rate(research_db, currency, now, *, tolerance_days=7):
+    """Stored pounds per one unit of `currency` known at `now`, or None when there is no recent rate."""
+    naive_now = now.astimezone(timezone.utc).replace(tzinfo=None)
+
+    def reader(db):
+        if not db.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'global_fx_observations'").fetchone()[0]:
+            return None
+        row = db.execute("""SELECT rate, observed_on FROM global_fx_observations
+            WHERE base_currency = ? AND quote_currency = 'GBP' AND observed_on <= ? AND available_at <= ?
+            ORDER BY observed_on DESC, available_at DESC LIMIT 1""", [currency, naive_now.date(), naive_now]).fetchone()
+        if row is None or (naive_now.date() - row[1]).days > tolerance_days: return None
+        rate = float(row[0])
+        return {'rate': rate, 'observed_on': str(row[1]), 'source': 'stored'} if math.isfinite(rate) and rate > 0 else None
+    return _read_only(research_db, reader)
 
 
 def valuation(trades, market, *, as_of):

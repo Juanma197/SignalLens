@@ -12,12 +12,13 @@ from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from .allocation import allocate
+from .cash import implied_gbp_rate, ledger
 from .checks import catalogue, evaluate
 from .scorecard import record_from_monthly, score
 from .decisions import DECISIONS, RULES as DECISION_RULES, decide
-from .portfolio import positions_from, read_market, valuation
+from .portfolio import positions_from, read_gbp_rate, read_market, valuation
 from .service import PrototypeError, assess
-from .store import CURRENCIES, THESIS_SECTIONS, PrototypeStore, StoreError
+from .store import ACCOUNT_CURRENCY, CURRENCIES, MAX_HOLDINGS_LIMIT, THESIS_SECTIONS, PrototypeStore, StoreError
 from .tracking import track
 
 router = APIRouter(prefix='/api/v1/research/prototype', tags=['unvalidated-prototype'])
@@ -100,11 +101,30 @@ class TradeRequest(BaseModel):
     traded_on: date
     company_name: str | None = Field(None, max_length=256)
     note: str | None = Field(None, max_length=4000)
+    # Pounds that left or reached the cash pool, as the broker reported (fees and conversion included).
+    account_amount: float | None = Field(None, gt=0, le=1e12)
 
 
 class VoidRequest(BaseModel):
     transaction_id: str = Field(min_length=1, max_length=64)
     reason: str | None = Field(None, max_length=4000)
+
+
+class CashRequest(BaseModel):
+    kind: str = Field(pattern='^(deposit|withdrawal)$')
+    amount: float = Field(gt=0, le=1e12)
+    moved_on: date
+    note: str | None = Field(None, max_length=4000)
+
+
+class CashVoidRequest(BaseModel):
+    movement_id: str = Field(min_length=1, max_length=64)
+    reason: str | None = Field(None, max_length=4000)
+
+
+class SettingsRequest(BaseModel):
+    monthly_contribution: float = Field(ge=0, le=1e6)
+    max_holdings: int = Field(ge=1, le=MAX_HOLDINGS_LIMIT)
 
 
 class CheckSetRequest(BaseModel):
@@ -115,7 +135,7 @@ class CheckSetRequest(BaseModel):
 class RecordRequest(BaseModel):
     decision_at: datetime
     target_members: int = Field(15, ge=10, le=20)
-    cash: float = Field(0, ge=0, le=1e9)
+    include_contribution: bool = False
     reinvest: bool = True
 
 
@@ -140,7 +160,7 @@ def _call(function, *args, **kwargs):
     try:
         return function(*args, **kwargs)
     except StoreError as exc:
-        status = 404 if exc.code in ('PROTOTYPE_UNKNOWN_SNAPSHOT', 'PROTOTYPE_UNKNOWN_TRANSACTION') else 409
+        status = 404 if exc.code in ('PROTOTYPE_UNKNOWN_SNAPSHOT', 'PROTOTYPE_UNKNOWN_TRANSACTION', 'PROTOTYPE_UNKNOWN_CASH_MOVEMENT') else 409
         raise HTTPException(status, detail={'code': exc.code}) from None
 
 
@@ -242,7 +262,8 @@ def portfolio():
         result = valuation(trades, _MARKET[key], as_of=now)
     except PrototypeError as exc:
         raise HTTPException(409, detail={'code': exc.code}) from None
-    return result | {'transactions': transactions, 'currencies': list(CURRENCIES)}
+    return result | {'transactions': transactions, 'currencies': list(CURRENCIES), 'account_currency': ACCOUNT_CURRENCY,
+                     'cash': ledger(_call(store.cash_movements), transactions), 'settings': _call(store.settings)}
 
 
 @router.post('/store/portfolio/trades')
@@ -250,13 +271,33 @@ def record_trade(request: TradeRequest):
     store = _store(write=True)
     _call(store.record_trade, request.kind, request.qualified_symbol, request.shares, request.price,
           request.traded_on, fees=request.fees, currency=request.currency,
-          company_name=request.company_name, note=request.note)
+          company_name=request.company_name, note=request.note, account_amount=request.account_amount)
     return portfolio()
 
 
 @router.post('/store/portfolio/voids')
 def void_trade(request: VoidRequest):
     _call(_store(write=True).void_trade, request.transaction_id, reason=request.reason)
+    return portfolio()
+
+
+@router.post('/store/portfolio/cash')
+def record_cash(request: CashRequest):
+    """A deposit (e.g. this month's contribution, once it has arrived) or a withdrawal, in pounds."""
+    _call(_store(write=True).record_cash, request.kind, request.amount, request.moved_on, note=request.note)
+    return portfolio()
+
+
+@router.post('/store/portfolio/cash/voids')
+def void_cash(request: CashVoidRequest):
+    _call(_store(write=True).void_cash, request.movement_id, reason=request.reason)
+    return portfolio()
+
+
+@router.post('/store/portfolio/settings')
+def save_settings(request: SettingsRequest):
+    """Change the monthly contribution or the maximum number of holdings; earlier values are kept."""
+    _call(_store(write=True).save_settings, monthly_contribution=request.monthly_contribution, max_holdings=request.max_holdings)
     return portfolio()
 
 
@@ -310,9 +351,10 @@ def thesis_checks(decision_at: datetime = Query(...), target_members: int = Quer
 
 @router.get('/monthly')
 def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, ge=10, le=20),
-            cash: float = Query(0, ge=0, le=1e9), reinvest: bool = Query(True)):
+            include_contribution: bool = Query(False), reinvest: bool = Query(True)):
     """The monthly view: Top 3 picks, a decision for every holding and a suggested
-    allocation of `cash` new USD (plus sale proceeds when `reinvest`), all at one cutoff."""
+    allocation of the cash pool at the cutoff (plus the planned monthly contribution
+    when `include_contribution`, and sale proceeds when `reinvest`), all at one cutoff."""
     if decision_at.tzinfo is None:
         raise HTTPException(422, detail={'code': 'PROTOTYPE_INVALID_TIMESTAMP'})
     settings = get_settings()
@@ -350,14 +392,39 @@ def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, 
     holdings.sort(key=lambda h: (DECISIONS.index(h['decision']), h['qualified_symbol']))
     held = {h['security_id'] for h in holdings if h['security_id']}
     picks = [assessments[sid] | {'held': sid in held} for sid in ranking['picks']]
+    plan = _allocation(store, trades, holdings, picks, decision, include_contribution=include_contribution, reinvest=reinvest)
     return {'decision_at': report['decision_at'], 'notice': report['notice'], 'synthetic_fixture': report['synthetic_fixture'],
             'target_members': report['target_members'], 'population': ranking['population'], 'picks': picks,
             'holdings': holdings, 'totals': book['totals'], 'rules': DECISION_RULES,
             'counts': {d: sum(h['decision'] == d for h in holdings) for d in DECISIONS},
-            'allocation': allocate(holdings, picks, cash, reinvest=reinvest),
+            'allocation': plan,
             'method': 'Holdings are built from your trades up to the cutoff and valued at the last stored close on or before it. '
                       'Each decision follows fixed rules in order: no evidence, broken thesis, overvaluation, position size, then room to add.',
             'label': 'Decision support only. Nothing is executed. The rules have not been validated against later returns.'}
+
+
+def _allocation(store, trades, holdings, picks, decision, *, include_contribution, reinvest):
+    """Allocate the cash pool at the cutoff. Pounds become dollars at the stored rate,
+    or failing that the rate implied by your last dollar trade; with neither, nothing is bought."""
+    settings = get_settings()
+    pool = ledger(_call(store.cash_movements), trades, until=decision.date())
+    config = _call(store.settings)
+    contribution = config['monthly_contribution'] if include_contribution else 0.0
+    available = max(0.0, pool['balance']) + contribution
+    key = ('fx', decision.isoformat(), _stat(settings.research_database_path))
+    if key not in _MARKET:
+        try: _MARKET[key] = read_gbp_rate(settings.research_database_path, 'USD', decision)
+        except PrototypeError: _MARKET[key] = None
+    fx = _MARKET[key] or implied_gbp_rate(trades, 'USD', until=decision.date())
+    plan = allocate(holdings, picks, available / fx['rate'] if fx else 0.0, reinvest=reinvest, max_holdings=config['max_holdings'])
+    def gbp(usd): return usd * fx['rate'] if fx else None
+    for order in plan['sales'] + plan['buys']: order['amount_gbp'] = gbp(order['amount'])
+    return plan | {'account': {
+        'currency': ACCOUNT_CURRENCY, 'cash_pool': pool['balance'], 'overdrawn': pool['overdrawn'],
+        'uncounted_trades': len(pool['uncounted_trades']), 'deposited_this_month': pool['deposited_this_month'],
+        'monthly_contribution': config['monthly_contribution'], 'contribution_included': contribution,
+        'available': available, 'gbp_per_usd': fx, 'sale_proceeds': gbp(plan['sale_proceeds']),
+        'invested': gbp(plan['invested']), 'left_as_cash': gbp(plan['left_as_cash']) if fx else available}}
 
 
 @router.post('/store/decision-records')
@@ -366,7 +433,7 @@ def create_decision_record(request: RecordRequest):
     store = _store(write=True)
     if request.decision_at.tzinfo is None:
         raise HTTPException(422, detail={'code': 'PROTOTYPE_INVALID_TIMESTAMP'})
-    view = monthly(request.decision_at, request.target_members, request.cash, request.reinvest)
+    view = monthly(request.decision_at, request.target_members, request.include_contribution, request.reinvest)
     record = record_from_monthly(view, report_at(request.decision_at, request.target_members))
     if not record['benchmark_symbols']:
         # Nothing was assessed at this cutoff, so the month could never be scored.

@@ -52,7 +52,10 @@ const MESSAGES: Record<string, string> = {
   PROTOTYPE_RECORD_NO_ASSESSED_COMPANIES: "No company could be assessed for that date, so it could never be scored. Refresh prices or pick a later date.",
   PROTOTYPE_SELL_EXCEEDS_HOLDING: "That sale is more shares than you held on that date.",
   PROTOTYPE_INVALID_SYMBOL: "That ticker doesn't look right. Use letters like AAPL (US) or VOD.LSE.",
-  PROTOTYPE_INVALID_TRADE_DATE: "The trade date can't be in the future.",
+  PROTOTYPE_INVALID_TRADE_DATE: "The date can't be in the future.",
+  PROTOTYPE_INVALID_TRADE: "Amounts must be above zero.",
+  PROTOTYPE_INVALID_SETTINGS: "The contribution can't be negative and the maximum holdings must be a whole number from 1 to 30.",
+  PROTOTYPE_UNKNOWN_CASH_MOVEMENT: "That cash movement no longer exists. Reload the page.",
 };
 
 /** GET JSON; rejects with the server's error code (or a generic one). */

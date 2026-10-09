@@ -1,9 +1,10 @@
 """Separate append-only prototype store: watchlist events, notes, theses,
-snapshots and the operator's own trades.
+snapshots, the operator's own trades, cash movements and portfolio settings.
 
 Nothing here opens the research or production databases for writing. There is
 no update or delete path: watchlist removal is a new event, a note correction is
-a new note, a mistaken trade is voided by a new row, and a snapshot is immutable
+a new note, a mistaken trade or cash movement is voided by a new row, a changed
+setting is a new settings row (the latest wins), and a snapshot is immutable
 once recorded (verified by SHA-256 on every read). Snapshots are never backfilled.
 The one exception is index-fund prices for the scorecard benchmark: market data,
 rewritten on refresh like the research database's prices.
@@ -30,6 +31,14 @@ TRADE_KINDS = ('buy', 'sell')
 CURRENCIES = ('USD', 'GBP', 'EUR', 'CAD', 'CHF', 'JPY', 'AUD')
 MAX_TRADE_VALUE = 1e12
 EARLIEST_TRADE = date(1970, 1, 1)
+# The brokerage account's cash is held in pounds; a trade in another currency
+# records what it actually cost or paid in pounds after the broker's conversion.
+ACCOUNT_CURRENCY = 'GBP'
+CASH_KINDS = ('deposit', 'withdrawal')
+MAX_CONTRIBUTION = 1e6
+MAX_HOLDINGS_LIMIT = 30
+# Defaults until the operator saves their own; the contribution is expected to change.
+DEFAULT_SETTINGS = {'monthly_contribution': 200.0, 'max_holdings': 10}
 # EODHD-style symbol: ticker plus exchange suffix, e.g. AAPL.US or BRK-B.US.
 SYMBOL = re.compile(r'^[A-Z0-9][A-Z0-9.\-]{0,19}\.[A-Z]{2,6}$')
 SCHEMA = """
@@ -65,6 +74,13 @@ CREATE TABLE IF NOT EXISTS portfolio_transactions(
   transaction_id VARCHAR PRIMARY KEY, kind VARCHAR NOT NULL CHECK(kind IN ('buy', 'sell', 'void')),
   qualified_symbol VARCHAR, company_name VARCHAR, shares DOUBLE, price DOUBLE, fees DOUBLE,
   currency VARCHAR, traded_on DATE, note VARCHAR, voids_transaction_id VARCHAR,
+  recorded_at TIMESTAMPTZ NOT NULL);
+ALTER TABLE portfolio_transactions ADD COLUMN IF NOT EXISTS account_amount DOUBLE;
+CREATE TABLE IF NOT EXISTS cash_movements(
+  movement_id VARCHAR PRIMARY KEY, kind VARCHAR NOT NULL CHECK(kind IN ('deposit', 'withdrawal', 'void')),
+  amount DOUBLE, moved_on DATE, note VARCHAR, voids_movement_id VARCHAR, recorded_at TIMESTAMPTZ NOT NULL);
+CREATE TABLE IF NOT EXISTS portfolio_settings(
+  setting_id VARCHAR PRIMARY KEY, monthly_contribution DOUBLE NOT NULL, max_holdings INTEGER NOT NULL,
   recorded_at TIMESTAMPTZ NOT NULL);
 """
 
@@ -227,9 +243,11 @@ class PrototypeStore:
     def transactions(self):
         """Every buy and sell, newest trade first, each marked if later voided."""
         if not self._has_trades_table(): return []
-        return self._rows("""
+        # A store written before cash tracking has no pounds column until its next write.
+        account = 't.account_amount' if self._has_column('portfolio_transactions', 'account_amount') else 'NULL'
+        return self._rows(f"""
             SELECT t.transaction_id, t.kind, t.qualified_symbol, t.company_name, t.shares, t.price, t.fees,
-                   t.currency, CAST(t.traded_on AS VARCHAR) AS traded_on, t.note, t.recorded_at,
+                   t.currency, CAST(t.traded_on AS VARCHAR) AS traded_on, t.note, t.recorded_at, {account} AS account_amount,
                    v.recorded_at AS voided_at, v.note AS void_reason
             FROM portfolio_transactions t
             LEFT JOIN portfolio_transactions v ON v.kind = 'void' AND v.voids_transaction_id = t.transaction_id
@@ -247,8 +265,12 @@ class PrototypeStore:
         except PrototypeError as exc: raise StoreError(exc.code) from None
 
     def record_trade(self, kind, qualified_symbol, shares, price, traded_on, *, fees=0, currency='USD',
-                     company_name=None, note=None, today=None):
-        """Record one buy or sell. A sell may never exceed the shares held on its date."""
+                     company_name=None, note=None, account_amount=None, today=None):
+        """Record one buy or sell. A sell may never exceed the shares held on its date.
+
+        `account_amount` is the pounds that left (buy) or reached (sell) the cash
+        pool, fees and conversion included. A pound trade defaults to its own
+        total; a trade in another currency without it is kept out of the cash pool."""
         if kind not in TRADE_KINDS: raise StoreError('PROTOTYPE_INVALID_TRADE_KIND')
         sym = symbol(qualified_symbol)
         shares, price, fees = _amount(shares), _amount(price), _amount(fees, allow_zero=True)
@@ -260,14 +282,18 @@ class PrototypeStore:
         name = str(company_name or '').strip()[:256] or None
         note = str(note or '').strip() or None
         if note and len(note) > MAX_NOTE_CHARS: raise StoreError('PROTOTYPE_INVALID_NOTE')
+        if account_amount is not None: account_amount = _amount(account_amount)
+        elif currency == ACCOUNT_CURRENCY: account_amount = shares * price + fees if kind == 'buy' else max(0.0, shares * price - fees)
         now = _now()
         row = dict(transaction_id=uuid.uuid4().hex, kind=kind, qualified_symbol=sym, company_name=name, shares=shares,
-                   price=price, fees=fees, currency=currency, traded_on=day.isoformat(), note=note, recorded_at=now.isoformat())
+                   price=price, fees=fees, currency=currency, traded_on=day.isoformat(), note=note, recorded_at=now.isoformat(),
+                   account_amount=account_amount)
         # Older trades can be entered late, so the whole history is re-checked for an oversell.
         self._check(self.trades() + [row])
         with self._connect(True) as db:
-            db.execute('INSERT INTO portfolio_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)',
-                [row['transaction_id'], kind, sym, name, shares, price, fees, currency, day, note, now])
+            db.execute("""INSERT INTO portfolio_transactions (transaction_id, kind, qualified_symbol, company_name, shares, price,
+                fees, currency, traded_on, note, recorded_at, account_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [row['transaction_id'], kind, sym, name, shares, price, fees, currency, day, note, now, account_amount])
         return row['transaction_id']
 
     def void_trade(self, transaction_id, *, reason=None):
@@ -281,6 +307,69 @@ class PrototypeStore:
         with self._connect(True) as db:
             db.execute("INSERT INTO portfolio_transactions (transaction_id, kind, note, voids_transaction_id, recorded_at) VALUES (?, 'void', ?, ?, ?)",
                 [uuid.uuid4().hex, reason, target['transaction_id'], _now()])
+
+    # Cash pool ---------------------------------------------------------------
+    def _has_column(self, table, column):
+        if not self.path.is_file(): return False
+        with duckdb.connect(str(self.path), read_only=True) as db:
+            return bool(db.execute("SELECT count(*) FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
+                                   [table, column]).fetchone()[0])
+
+    def cash_movements(self):
+        """Every deposit and withdrawal (pounds), newest first, each marked if later voided."""
+        if not self._has_table('cash_movements'): return []
+        return self._rows("""
+            SELECT m.movement_id, m.kind, m.amount, CAST(m.moved_on AS VARCHAR) AS moved_on, m.note, m.recorded_at,
+                   v.recorded_at AS voided_at, v.note AS void_reason
+            FROM cash_movements m
+            LEFT JOIN cash_movements v ON v.kind = 'void' AND v.voids_movement_id = m.movement_id
+            WHERE m.kind IN ('deposit', 'withdrawal') ORDER BY m.moved_on DESC, m.recorded_at DESC, m.movement_id DESC""")
+
+    def record_cash(self, kind, amount, moved_on, *, note=None, today=None):
+        """Record money confirmed as arrived in (deposit) or taken out of (withdrawal) the account."""
+        if kind not in CASH_KINDS: raise StoreError('PROTOTYPE_INVALID_CASH_KIND')
+        amount = _amount(amount)
+        try: day = moved_on if isinstance(moved_on, date) else date.fromisoformat(str(moved_on))
+        except ValueError: raise StoreError('PROTOTYPE_INVALID_TRADE_DATE') from None
+        if not EARLIEST_TRADE <= day <= (today or _now().date()): raise StoreError('PROTOTYPE_INVALID_TRADE_DATE')
+        note = str(note or '').strip() or None
+        if note and len(note) > MAX_NOTE_CHARS: raise StoreError('PROTOTYPE_INVALID_NOTE')
+        movement_id = uuid.uuid4().hex
+        with self._connect(True) as db:
+            db.execute('INSERT INTO cash_movements VALUES (?, ?, ?, ?, ?, NULL, ?)', [movement_id, kind, amount, day, note, _now()])
+        return movement_id
+
+    def void_cash(self, movement_id, *, reason=None):
+        """Cancel a mistaken deposit or withdrawal; the original stays visible."""
+        target = next((m for m in self.cash_movements() if m['movement_id'] == str(movement_id)[:64]), None)
+        if target is None: raise StoreError('PROTOTYPE_UNKNOWN_CASH_MOVEMENT')
+        if target['voided_at'] is not None: raise StoreError('PROTOTYPE_TRANSACTION_ALREADY_VOIDED')
+        reason = str(reason or '').strip() or None
+        if reason and len(reason) > MAX_NOTE_CHARS: raise StoreError('PROTOTYPE_INVALID_NOTE')
+        with self._connect(True) as db:
+            db.execute("INSERT INTO cash_movements (movement_id, kind, note, voids_movement_id, recorded_at) VALUES (?, 'void', ?, ?, ?)",
+                       [uuid.uuid4().hex, reason, target['movement_id'], _now()])
+
+    # Portfolio settings ------------------------------------------------------
+    def settings(self):
+        """The latest saved settings, or the defaults (marked `is_default`) before any are saved."""
+        rows = self._rows('SELECT * FROM portfolio_settings ORDER BY recorded_at DESC, setting_id DESC LIMIT 1') \
+            if self._has_table('portfolio_settings') else []
+        if not rows: return DEFAULT_SETTINGS | {'currency': ACCOUNT_CURRENCY, 'is_default': True, 'recorded_at': None}
+        row = rows[0]
+        return {'monthly_contribution': row['monthly_contribution'], 'max_holdings': row['max_holdings'],
+                'currency': ACCOUNT_CURRENCY, 'is_default': False, 'recorded_at': row['recorded_at']}
+
+    def save_settings(self, *, monthly_contribution, max_holdings):
+        """Save new settings as a new row; earlier values stay in the history."""
+        try: contribution, limit = float(monthly_contribution), float(max_holdings)
+        except (TypeError, ValueError): raise StoreError('PROTOTYPE_INVALID_SETTINGS') from None
+        if not (math.isfinite(contribution) and 0 <= contribution <= MAX_CONTRIBUTION) \
+                or not (limit.is_integer() and 1 <= limit <= MAX_HOLDINGS_LIMIT):
+            raise StoreError('PROTOTYPE_INVALID_SETTINGS')
+        with self._connect(True) as db:
+            db.execute('INSERT INTO portfolio_settings VALUES (?, ?, ?, ?)', [uuid.uuid4().hex, contribution, int(limit), _now()])
+        return self.settings()
 
     # Alerts ------------------------------------------------------------------
     def record_alert(self, kind, message, *, delivered, qualified_symbol=None, decision=None, thesis=None, now=None):
