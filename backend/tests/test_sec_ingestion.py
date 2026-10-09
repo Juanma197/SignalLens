@@ -209,3 +209,18 @@ def test_reingesting_a_company_recognises_its_stored_facts(tmp_path):
     assert again["selected"]==1 and again["inserted"]==0 and again["unchanged"]==first["inserted"]
     with duckdb.connect(str(research),read_only=True) as db:
         assert db.execute("SELECT count(*) FROM sec_facts").fetchone()[0]==before
+
+
+def test_ingestion_keeps_the_two_documents_it_downloads(tmp_path):
+    """Submissions (industry code) and companyfacts (cover-page shares) are retained
+    with a verifiable digest, so no second download is needed."""
+    import hashlib
+    research,production=databases(tmp_path)
+    run(research,production)
+    with duckdb.connect(str(research),read_only=True) as db:
+        rows=db.execute("SELECT endpoint_class,cik,payload_sha256,byte_count,payload_json FROM sec_raw_payloads ORDER BY endpoint_class").fetchall()
+    assert [r[0] for r in rows]==["companyfacts","submissions"] and all(len(r[1])==10 for r in rows)
+    assert all(hashlib.sha256(r[4].encode()).hexdigest()==r[2] and len(r[4].encode())==r[3] for r in rows)
+    run(research,production)  # a resumed run keeps one copy
+    with duckdb.connect(str(research),read_only=True) as db:
+        assert db.execute("SELECT count(*) FROM sec_raw_payloads").fetchone()[0]==2

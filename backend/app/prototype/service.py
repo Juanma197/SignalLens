@@ -421,17 +421,29 @@ def _evidence(sec, data, decision):
     return output, missing
 
 
+# Retained SEC documents: the liquidity-evidence store and the SEC fundamentals
+# ingestion (which keeps the two documents it already downloads). Fixed names only.
+PAYLOAD_TABLES = (('sec_liquidity_raw_provenance', 'response_sha256'), ('sec_raw_payloads', 'payload_sha256'))
+
+
+def _payload_sources(db):
+    tables = {r[0] for r in db.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main'").fetchall()}
+    return [(t, d) for t, d in PAYLOAD_TABLES if t in tables]
+
+
 def _industry(db, decision):
     """SIC/entity fields extracted in SQL from retained SEC submissions payloads,
     so payload text is never projected. Visible from their retrieval time."""
-    tables = {r[0] for r in db.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main'").fetchall()}
-    if 'sec_liquidity_raw_provenance' not in tables: return {}, 'table_absent'
-    rows = db.execute("""SELECT security_id, cik, retrieved_at, response_sha256,
+    sources = _payload_sources(db)
+    if not sources: return {}, 'table_absent'
+    rows = []
+    for table, digest_column in sources:
+        rows += db.execute(f"""SELECT security_id, cik, retrieved_at, {digest_column},
             json_extract_string(payload_json, '$.sic') AS sic,
             left(json_extract_string(payload_json, '$.sicDescription'), 200) AS sic_description,
             left(json_extract_string(payload_json, '$.entityType'), 64) AS entity_type,
             left(json_extract_string(payload_json, '$.name'), 200) AS sec_name
-        FROM sec_liquidity_raw_provenance WHERE endpoint_class = 'submissions'""").fetchall()
+        FROM {table} WHERE endpoint_class = 'submissions'""").fetchall()
     found = defaultdict(list)
     for sid, row_cik, retrieved, digest, sic, description, entity_type, name in rows:
         if stamp(retrieved) and stamp(retrieved) <= decision:
@@ -460,17 +472,18 @@ def _share_counts(db, decision):
     """Cover-page share counts from retained SEC companyfacts payloads, one row per
     reported entry (extracted in SQL; payload text is never projected). An entry is
     known from the later of its filing day (end of day, UTC) and payload retrieval."""
-    tables = {r[0] for r in db.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main'").fetchall()}
-    if 'sec_liquidity_raw_provenance' not in tables: return {}
+    sources = _payload_sources(db)
+    if not sources: return {}
     # One payload at a time, parsed in Python: companyfacts documents reach several
     # MB each and exceed the bounded SQL memory limit when parsed in SQL. A payload
     # whose bytes do not match its stored SHA-256 and byte count is not used.
-    keys = [r[0] for r in db.execute("SELECT evidence_key FROM sec_liquidity_raw_provenance WHERE endpoint_class = 'companyfacts' ORDER BY evidence_key").fetchall()]
+    keys = [(table, digest_column, r[0]) for table, digest_column in sources for r in db.execute(
+        f"SELECT evidence_key FROM {table} WHERE endpoint_class = 'companyfacts' ORDER BY evidence_key").fetchall()]
     if len(keys) > MAX_ROSTER * 4: raise PrototypeError('PROTOTYPE_ROW_LIMIT')
     rows = []
-    for key in keys:
-        sid, row_cik, retrieved, digest, byte_count, payload = db.execute("""SELECT security_id, cik, retrieved_at,
-            response_sha256, byte_count, payload_json FROM sec_liquidity_raw_provenance WHERE evidence_key = ?""", [key]).fetchone()
+    for table, digest_column, key in keys:
+        sid, row_cik, retrieved, digest, byte_count, payload = db.execute(f"""SELECT security_id, cik, retrieved_at,
+            {digest_column}, byte_count, payload_json FROM {table} WHERE evidence_key = ?""", [key]).fetchone()
         raw = payload.encode('utf-8')
         if len(raw) != byte_count or hashlib.sha256(raw).hexdigest() != digest: continue
         try:

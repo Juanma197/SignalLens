@@ -62,6 +62,11 @@ CREATE TABLE IF NOT EXISTS sec_checkpoints(
  security_id VARCHAR PRIMARY KEY, qualified_symbol VARCHAR NOT NULL, ticker VARCHAR NOT NULL,
  cik VARCHAR, status VARCHAR NOT NULL, last_run_id VARCHAR, updated_at TIMESTAMPTZ NOT NULL,
  attempts INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS sec_raw_payloads(
+ evidence_key VARCHAR PRIMARY KEY, security_id VARCHAR NOT NULL, cik VARCHAR NOT NULL,
+ endpoint_class VARCHAR NOT NULL CHECK(endpoint_class IN ('submissions','companyfacts')),
+ source_endpoint VARCHAR NOT NULL, retrieved_at TIMESTAMPTZ NOT NULL,
+ payload_sha256 VARCHAR NOT NULL, byte_count BIGINT NOT NULL, payload_json VARCHAR NOT NULL);
 CREATE TABLE IF NOT EXISTS sec_failures(
  failure_id VARCHAR PRIMARY KEY, run_id VARCHAR NOT NULL, security_id VARCHAR,
  qualified_symbol VARCHAR, stage VARCHAR NOT NULL, reason_code VARCHAR NOT NULL,
@@ -332,6 +337,16 @@ def ingest(*, research: Path, production: Path, authorization: str | None, dry_r
                     db.execute("INSERT INTO sec_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         [fact_key,item["security_id"],item["qualified_symbol"],ticker,cik,row["taxonomy"],row["concept"],row["value"],row["unit"],row["currency"],row["period_start"],row["period_end"],row["fiscal_year"],row["fiscal_period"],row.get("frame"),row["form"],row["accession"],row["filed_at"],row["public_at"],row["amendment"],revision,row["source_url"],timestamp])
                     inserted+=1; revisions+=int(revision)
+                # Keep both documents: the industry code (submissions) and cover-page
+                # share counts (companyfacts) are read from them later, without a
+                # second download.
+                for endpoint_class,url,payload in (("submissions",SEC_SUBMISSIONS.format(cik=cik),submissions),
+                                                   ("companyfacts",SEC_FACTS.format(cik=cik),facts)):
+                    encoded=json.dumps(payload,separators=(",",":"),ensure_ascii=True)
+                    digest=hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+                    db.execute("INSERT OR IGNORE INTO sec_raw_payloads VALUES (?,?,?,?,?,?,?,?,?)",
+                        [hashlib.sha256(f"{cik}|{endpoint_class}|{digest}".encode()).hexdigest(),item["security_id"],cik,
+                         endpoint_class,url,timestamp,digest,len(encoded.encode("utf-8")),encoded])
                 for reason in reasons:
                     if reason in {"missing_availability_date","conflicting_units"}: _failure_db(db,run_id,item,reason,False,timestamp)
                 db.execute("INSERT OR REPLACE INTO sec_checkpoints VALUES (?,?,?,?,?,?,?,?)",[item["security_id"],item["qualified_symbol"],ticker,cik,"completed",run_id,timestamp,1])
