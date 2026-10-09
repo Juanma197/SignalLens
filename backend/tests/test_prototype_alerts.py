@@ -96,7 +96,8 @@ def test_run_records_what_was_delivered_and_retries_failures(paths, monkeypatch)
     assert first['messages'] == [] and store.alert_states() == {}  # nothing counted as sent
     up = FakeNotifier()
     alerts.run(notifier=up, update=False, now=DECISION)
-    assert len(up.sent) == 1 and 'alerts are on' in up.sent[0] and 'SYN05.US: REDUCE' in up.sent[0]
+    assert len(up.sent) == 2 and 'alerts are on' in up.sent[0] and 'SYN05.US: REDUCE' in up.sent[0]
+    assert up.sent[1].startswith('SignalLens monthly review: October 2026')  # first run of the month; the failed one is retried
     assert store.alert_states() == {'SYN05.US': ('REDUCE', 'unknown')}
     again = FakeNotifier()
     alerts.run(notifier=again, update=False, now=DECISION)
