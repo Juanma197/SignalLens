@@ -340,3 +340,30 @@ def test_completed_dividend_queries_count_as_coverage_for_non_payers():
     assert _dividend_fetch_coverage(sec, {'eodhd_ingestion_checkpoints': [full, failed]}, decision, wanted, [])[0] == missing
     odd = dict(dividend, action_type='spinoff')
     assert _dividend_fetch_coverage(sec, {'eodhd_ingestion_checkpoints': [full, refresh]}, decision, wanted, [odd])[0] == ['unresolved_corporate_action']
+
+
+def test_identity_matching_equals_the_track_b_rule_beyond_its_roster_bound(monkeypatch):
+    """The prototype's own copy of the exact-ID rule agrees with track_b_gaps._reconcile
+    (bound lifted) on 300 identities, including every conflict it flags."""
+    from datetime import datetime, timezone
+    from app import track_b_gaps
+    from app.prototype.service import _matched
+    at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    decision = datetime(2026, 10, 9, tzinfo=timezone.utc)
+    def classification(sid, kind='us_operating_company', cik_value=None):
+        return {'security_id': sid, 'security_type': kind, 'cik': cik_value, 'public_at': at, 'retrieved_at': at, 'available_at': at, 'is_current': True}
+    data = {k: [] for k in ('security_listings', 'universe_snapshot_members', 'sec_issuers', 'sec_facts', 'canonical_factor_evidence', 'security_classification_evidence')}
+    for i in range(300):
+        sid, value = f'id-{i:03}', str(1000 + i)
+        data['security_classification_evidence'].append(classification(sid, cik_value=value))
+        if i % 10 != 9:  # every tenth has no stored identity outside its classification: unmatched
+            data['security_listings'].append({'security_id': sid, 'cik': None})
+            data['sec_issuers'].append({'security_id': sid, 'cik': value})
+    data['security_classification_evidence'].append(classification('id-001', kind='us_fund'))       # conflicting types
+    data['sec_facts'].append({'security_id': 'id-002', 'cik': '999999'})                              # second CIK
+    data['sec_issuers'].append({'security_id': 'id-004', 'cik': '1003'})                              # shares id-003's CIK
+    data['sec_issuers'].append({'security_id': 'id-005', 'cik': 'abc'})                               # invalid CIK
+    monkeypatch.setattr(track_b_gaps, 'MAX_ROSTER', 10_000)
+    _, expected, _ = track_b_gaps._reconcile(data, decision)
+    assert _matched(data, decision) == expected
+    assert len(expected) == 300 - 30 - 5 and not {'id-001', 'id-002', 'id-003', 'id-004', 'id-005'} & expected

@@ -22,19 +22,21 @@ from ..model_readiness import fingerprint
 from ..price_segments import detect_price_segments
 from ..research_observations import ObservationPolicy
 from ..sec_ingestion import validate_paths
-from ..track_b_gaps import _reconcile
+from ..track_b_gaps import _visible_classification
 from .brief import analyst_brief
 from .events import event_brief, read_events
-from .financials import annual_brief, scenario_ranges, sector_notes, summary_only, valuation, valuation_history
+from .financials import DURATIONS, INSTANTS, REVENUE, annual_brief, scenario_ranges, sector_notes, summary_only, valuation, valuation_history
 from .ranking import value_ranking
 
 CONFIG = json.loads(Path(__file__).with_name('config_v1.json').read_text(encoding='utf-8'))
 NOTICE = 'UNVALIDATED RESEARCH PROTOTYPE — ZERO VALIDATION CREDIT'
-MAX_ROWS = 500_000
-MAX_ROSTER = 256
+# Sized for a US catalogue of a few thousand companies.
+MAX_ROWS = 2_000_000
+MAX_ROSTER = 4_000
+MAX_COMPANY_FACTS = 100_000
 MAX_CELL = 1024
-MAX_OUTPUT = 2_000_000
-MAX_FILE_BYTES = 4_000_000_000
+MAX_OUTPUT = 40_000_000
+MAX_FILE_BYTES = 32_000_000_000
 FACTS = {
     'CashAndCashEquivalentsAtCarryingValue': ('cash_and_cash_equivalents', 'instant'),
     'Assets': ('assets', 'instant'),
@@ -96,21 +98,33 @@ def finite(value):
     except (TypeError, ValueError, OverflowError): return False
 
 
-def _read(db, table, remaining, decision):
+def _columns(db, table):
+    """(projected columns present, actual columns, failure state or None when readable)."""
     base = db.execute("SELECT table_type FROM information_schema.tables WHERE table_catalog=current_database() AND table_schema='main' AND table_name=?", [table]).fetchone()
-    if not base: return [], 'table_absent'
-    if base[0] != 'BASE TABLE': return [], 'unsupported_schema'
+    if not base: return [], set(), 'table_absent'
+    if base[0] != 'BASE TABLE': return [], set(), 'unsupported_schema'
     actual = {r[0] for r in db.execute("SELECT column_name FROM information_schema.columns WHERE table_catalog=current_database() AND table_schema='main' AND table_name=?", [table]).fetchall()}
     columns = [c for c in COLUMNS[table].split() if c in actual]
     # Missing projected fields remain None and are reported by the domain checks.
-    if not columns: return [], 'unsupported_schema'
+    if not columns: return [], actual, 'unsupported_schema'
+    return columns, actual, None
+
+
+def _state(actual, table):
+    return 'supported' if set(COLUMNS[table].split()) <= actual else 'missing_columns'
+
+
+def _read(db, table, remaining, decision):
+    columns, actual, failed = _columns(db, table)
+    if failed: return [], failed
     where, args = '', []
     # Only prices are windowed; corporate actions are read in full so that
     # action_present coverage can be checked against its whole assessed interval.
     if table == 'global_price_observations':
         field = 'trading_date'
         if field not in actual: return [], 'unsupported_schema'
-        where = f' WHERE "{field}" BETWEEN ? AND ?'
+        # Only US rows are ever used (sessions and price checks are US-only).
+        where = f' WHERE "{field}" BETWEEN ? AND ?' + (" AND exchange = 'US'" if 'exchange' in actual else '')
         args = [decision.date() - timedelta(days=450), decision.date()]
     count = db.execute(f'SELECT count(*) FROM "{table}"{where}', args).fetchone()[0]
     if count > remaining: raise PrototypeError('PROTOTYPE_ROW_LIMIT')
@@ -125,7 +139,68 @@ def _read(db, table, remaining, decision):
         if 'conflict_details' in row and isinstance(row['conflict_details'], str):
             try: row['conflict_details'] = json.loads(row['conflict_details'])
             except ValueError: row['conflict_details'] = {'invalid': True}
-    return rows, 'supported' if set(COLUMNS[table].split()) <= actual else 'missing_columns'
+    return rows, _state(actual, table)
+
+
+# Facts are read per company: a few thousand companies hold millions of rows.
+FACT_CONCEPTS = sorted(set(FACTS) | set(REVENUE) | {c for cs in DURATIONS.values() for c in cs} | {c for cs in INSTANTS.values() for c in cs})
+
+
+def _fact_identities(db):
+    """Distinct (security_id, cik, public_at, retrieved_at) for identity matching."""
+    columns, actual, failed = _columns(db, 'sec_facts')
+    if failed: return [], failed
+    if not {'security_id', 'cik', 'public_at', 'retrieved_at'} <= actual: return [], 'missing_columns'
+    rows = db.execute('SELECT DISTINCT security_id, cik, public_at, retrieved_at FROM sec_facts LIMIT ?', [MAX_ROWS + 1]).fetchall()
+    if len(rows) > MAX_ROWS: raise PrototypeError('PROTOTYPE_ROW_LIMIT')
+    return [dict(zip(('security_id', 'cik', 'public_at', 'retrieved_at'), r)) for r in rows], _state(actual, 'sec_facts')
+
+
+def _company_facts(db, security_id):
+    """One company's facts for the concepts the prototype uses."""
+    columns, actual, failed = _columns(db, 'sec_facts')
+    if failed or not {'security_id', 'concept'} <= actual: return []
+    marks = ', '.join('?' for _ in FACT_CONCEPTS)
+    where, args = f'WHERE security_id = ? AND concept IN ({marks})', [security_id, *FACT_CONCEPTS]
+    checks = ' OR '.join(f'length(CAST("{c}" AS VARCHAR))>{MAX_CELL}' for c in columns)
+    if db.execute(f'SELECT count(*) FROM sec_facts {where} AND ({checks})', args).fetchone()[0]:
+        raise PrototypeError('PROTOTYPE_CELL_LIMIT')
+    names = ','.join('"' + c + '"' for c in columns)
+    rows = [dict(zip(columns, r)) for r in db.execute(f'SELECT {names} FROM sec_facts {where} LIMIT {MAX_COMPANY_FACTS + 1}', args).fetchall()]
+    if len(rows) > MAX_COMPANY_FACTS: raise PrototypeError('PROTOTYPE_ROW_LIMIT')
+    return rows
+
+
+def _matched(data, decision):
+    """Durable IDs that match without conflict: the same rule as
+    track_b_gaps._reconcile (exact security_id intersection; CIK only as a
+    consistency check), without its Track B roster bound."""
+    classes = defaultdict(set)
+    for row in data['security_classification_evidence']:
+        if row.get('security_id') and _visible_classification(row, decision):
+            classes[str(row['security_id'])].add(row.get('security_type'))
+    roster = {sid for sid, types in classes.items() if 'us_operating_company' in types}
+    if len(roster) > MAX_ROSTER: raise PrototypeError('PROTOTYPE_ROSTER_LIMIT')
+    stored = {str(r['security_id']) for table in ('security_listings', 'universe_snapshot_members', 'sec_issuers', 'sec_facts')
+              for r in data[table] if r.get('security_id')}
+    ciks, invalid = defaultdict(set), set()
+    for table in ('security_listings', 'sec_issuers', 'sec_facts', 'security_classification_evidence'):
+        for row in data[table]:
+            if not row.get('security_id') or not row.get('cik'): continue
+            sid, value = str(row['security_id']), str(row['cik'])
+            if not value.isascii() or not value.isdigit() or not 1 <= len(value) <= 10 or int(value) == 0: invalid.add(sid)
+            else: ciks[sid].add(value.zfill(10))
+    owners = defaultdict(set)
+    for sid, values in ciks.items():
+        for value in values: owners[value].add(sid)
+    return {sid for sid in roster if sid in stored and len(classes[sid]) == 1 and len(ciks[sid]) <= 1
+            and sid not in invalid and not any(len(owners[value]) > 1 for value in ciks[sid])}
+
+
+def _group(rows, key):
+    out = defaultdict(list)
+    for r in rows: out[key(r)].append(r)
+    return out
 
 
 def _identity(sec, data, decision, matched, window_start):
@@ -464,20 +539,22 @@ def _fiscal_year_prices(db, symbol, ends, decision):
 def _build(db, decision, target):
     data, schema, remaining = {}, {}, MAX_ROWS
     for table in COLUMNS:
+        if table == 'sec_facts': continue  # read per company below
         data[table], schema[table] = _read(db, table, remaining, decision)
         remaining -= len(data[table])
+    data['sec_facts'], schema['sec_facts'] = _fact_identities(db)
     required_catalogue = {'security_master_retrievals', 'security_listings'}
     if any(schema[t] != 'supported' for t in required_catalogue):
         return _report([], [], [], schema, ['active_catalogue_schema_unavailable'], target, decision)
     active = select_active_catalogue(db, as_of=decision.replace(tzinfo=None))
     if active is None: return _report([], [], [], schema, ['completed_active_catalogue_unavailable'], target, decision)
     selected = [r for r in data['security_listings'] if r.get('retrieval_id') == active.retrieval_id and r.get('primary_exchange') == 'US' and r.get('active') is True]
-    # Reuse main's exact-ID reconciliation with cutoff-visible inputs only.
-    reconcile_data = dict(data, canonical_factor_evidence=[],
+    # Exact-ID reconciliation (track_b_gaps rule) with cutoff-visible inputs only.
+    reconcile_data = dict(data,
         security_listings=[r for r in data['security_listings'] if r.get('retrieval_id') == active.retrieval_id],
         sec_issuers=[r for r in data['sec_issuers'] if stamp(r.get('mapped_at')) and stamp(r['mapped_at']) <= decision],
         sec_facts=[r for r in data['sec_facts'] if stamp(r.get('public_at')) and stamp(r.get('retrieved_at')) and max(stamp(r['public_at']), stamp(r['retrieved_at'])) <= decision])
-    _, matched, _ = _reconcile(reconcile_data, decision)
+    matched = _matched(reconcile_data, decision)
     # Keep every ordinary-roster identity, including absent/inactive listings, in
     # review output so identity exclusions are not silently lost.
     roster_ids = {str(r['security_id']) for r in data['security_classification_evidence'] if r.get('security_id') and r.get('security_type') == 'us_operating_company' and visible(r, decision)}
@@ -486,20 +563,30 @@ def _build(db, decision, target):
     industries, schema['sec_liquidity_raw_provenance'] = _industry(db, decision)
     share_counts = _share_counts(db, decision)
     filing_events, schema['sec_event_metadata'] = read_events(db, decision, stamp)
+    # Each company sees only its own rows: grouped once instead of rescanning every table per company.
+    by_sid = {t: _group(data[t], lambda r: str(r.get('security_id'))) for t in
+              ('security_classification_evidence', 'sec_issuers', 'issuer_mapping_candidates', 'corporate_action_coverage_evidence')}
+    by_symbol = {t: _group(data[t], lambda r: r.get('qualified_symbol')) for t in
+                 ('global_price_observations', 'global_corporate_actions', 'eodhd_ingestion_checkpoints')}
+    listings_by_sid = _group(selected, lambda r: str(r.get('security_id')))
+    symbol_counts = Counter(r.get('qualified_symbol') for r in selected)
+    company_facts = {}
     companies = []
     for sid in sorted(roster_ids):
-        listings = [r for r in selected if str(r.get('security_id')) == sid]
+        listings = listings_by_sid.get(sid, [])
         if len(listings) != 1:
             companies.append({'security_id': sid, 'qualified_symbol': None, 'company_name': None, 'eligible': False,
                 'reasons': ['active_listing_missing_or_ambiguous'], 'calculation': None, 'direct_evidence': [], 'missing_data': [], 'risks': ['Identity cannot be resolved.'], 'identity_evidence': None, 'action_coverage': None, 'industry': None, 'size': None}); continue
         sec = dict(listings[0], security_id=sid)
-        prices, calculation, wanted, actions = _price(sec, data, decision, sessions)
-        identity, resolved_cik, mapping = _identity(sec, data, decision, matched, wanted[0] if wanted else decision.date())
+        facts = _company_facts(db, sid)
+        own = {t: rows.get(sid, []) for t, rows in by_sid.items()} | {t: rows.get(sec['qualified_symbol'], []) for t, rows in by_symbol.items()} | {'sec_facts': facts}
+        prices, calculation, wanted, actions = _price(sec, own, decision, sessions)
+        identity, resolved_cik, mapping = _identity(sec, own, decision, matched, wanted[0] if wanted else decision.date())
         sec['cik'] = resolved_cik
         if sec.get('currency') != 'USD' or sec.get('instrument_type') not in ('common_stock', 'ordinary_share'): identity.append('listing_not_ordinary_us_usd_equity')
-        if sum(r.get('qualified_symbol') == sec['qualified_symbol'] for r in selected) != 1: identity.append('qualified_symbol_identity_ambiguous')
-        coverage_reasons, coverage = _actions(sec, data, decision, wanted, actions)
-        evidence, missing = _evidence(sec, data, decision)
+        if symbol_counts[sec['qualified_symbol']] != 1: identity.append('qualified_symbol_identity_ambiguous')
+        coverage_reasons, coverage = _actions(sec, own, decision, wanted, actions)
+        evidence, missing = _evidence(sec, own, decision)
         industry_reasons, industry = _industry_gate(sec, industries.get(sid, []))
         size_reasons, size = _size(sec, share_counts.get(sid, []), decision, calculation)
         reasons = identity + prices + coverage_reasons + industry_reasons + size_reasons
@@ -518,14 +605,15 @@ def _build(db, decision, target):
             'identity_evidence': {k: mapping.get(k) for k in ('candidate_key', 'evidence_source', 'source_identifier', 'effective_from', 'effective_to', 'observed_at')} if mapping else None,
             'action_coverage': coverage, 'industry': industry, 'size': size,
             # Context only: never used for eligibility, membership or ordering.
-            'financials': annual_brief(sec, data['sec_facts'], decision, stamp=stamp, finite=finite)})
+            'financials': annual_brief(sec, facts, decision, stamp=stamp, finite=finite)})
+        if not reasons: company_facts[sid] = facts  # kept for the first-reported history below
     eligible = sorted([c for c in companies if c['eligible']], key=lambda c: (hashlib.sha256((CONFIG['version'] + ':' + c['security_id']).encode()).hexdigest(), c['security_id']))
     for c in companies:
         if c.get('financials') is not None: c['valuation'] = valuation(c.get('size'), c['financials'])
         if c.get('industry'): c['sector_notes'] = sector_notes(c['industry'])
         if c.get('cik'): c['events'] = event_brief(c, filing_events.get(c['security_id'], []), decision, full=c['eligible'])
         if c['eligible'] and c.get('valuation'):
-            first = annual_brief({'security_id': c['security_id'], 'cik': c['cik']}, data['sec_facts'], decision,
+            first = annual_brief({'security_id': c['security_id'], 'cik': c['cik']}, company_facts[c['security_id']], decision,
                                  stamp=stamp, finite=finite, revision='first')
             prices = _fiscal_year_prices(db, c['qualified_symbol'], [y['fiscal_year_end'] for y in first['years']], decision)
             c['valuation']['history'] = valuation_history(first, prices, c['size']['close'])
