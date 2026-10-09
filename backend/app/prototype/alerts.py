@@ -7,9 +7,12 @@ Each run (weekdays before the US open, on the previous close):
    when a new 10-K or 10-Q is listed, re-reads its SEC figures;
 3. recomputes the monthly view at the current time (same rules as the page);
 4. compares every holding's (decision, thesis status) with the last one sent and
-   messages only the changes, plus a short weekly summary on Fridays.
-Messages are about the operator's holdings only: new opportunities stay on the
-This month page, so every message concerns something already owned.
+   messages only the changes, plus a short weekly summary on Fridays;
+5. reassesses the cash pool (see `reassess`).
+Holding messages concern something already owned. The one message about new
+money is the cash reassessment: it is sent only when the cash you actually have
+(no unexecuted sales counted) has a worthwhile use that differs from the last
+suggestion sent, so an unchanged suggestion is never repeated.
 The first run sends one "alerts are on" message with every current decision.
 
 Decision support only: nothing is executed, and the rules are unvalidated.
@@ -84,6 +87,59 @@ def summary_message(monthly, title, link=None):
     if link: lines.append(link)
     lines.append(DISCLAIMER)
     return '\n'.join(lines)
+
+
+TRIGGERS = {'sale': 'after your sale of {symbol}', 'deposit': 'after your deposit', 'daily': 'daily check'}
+
+
+def cash_message(monthly, trigger, *, symbol=None, link=None):
+    """(fingerprint, text) when the cash pool has a worthwhile use, else None.
+
+    `monthly` must be computed without reinvesting suggested sales, so every
+    suggested buy is paid for with money already in the account. The fingerprint
+    is the money available (in steps of 10) and the suggested names, so a new
+    deposit or sale, or a different best use, gives a new message."""
+    plan = monthly.get('allocation') or {}
+    account, buys = plan.get('account') or {}, plan.get('buys') or []
+    if not buys or not account: return None
+    def money(v): return '—' if v is None else f"£{v:,.0f}"
+    available = account['available']
+    fingerprint = json.dumps({'available': int(available // 10) * 10, 'buys': sorted([b['action'], b['qualified_symbol']] for b in buys)})
+    spent = sum(b.get('amount_gbp') or 0 for b in buys)
+    lines = [f"Cash to put to work ({TRIGGERS[trigger].format(symbol=symbol or 'a holding')}): {money(available)} available."]
+    for b in buys:
+        lines.append(f"• {b['action']} {b['qualified_symbol']}: {money(b.get('amount_gbp'))} "
+                     f"({b['shares']:g} shares at ~${b['price']:,.2f}). {b['why']}")
+    lines.append(f"Leaves {money(available - spent)} as cash.")
+    if plan.get('skipped_no_slot'):
+        lines.append(f"No free place for {', '.join(s['qualified_symbol'] for s in plan['skipped_no_slot'])} (holdings at the maximum).")
+    if link: lines.append(link)
+    lines.append(DISCLAIMER)
+    return fingerprint, '\n'.join(lines)
+
+
+def reassess(trigger, *, symbol=None, notifier=None, now=None, dry_run=False, monthly=None):
+    """Re-run the allocation on the cash actually held and message it if it is new.
+
+    Called after a recorded sale or deposit and by the daily run. Returns what happened."""
+    from ..config import get_settings
+    from . import api
+    from .store import PrototypeStore
+    settings = get_settings()
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    store = PrototypeStore(settings.prototype_database_path, protected_paths=(settings.research_database_path, settings.database_path))
+    monthly = monthly or api.monthly(now, 15, False, False)
+    base = os.environ.get('SIGNALLENS_PUBLIC_URL', '').rstrip('/')
+    link = f"{base}/prototype/monthly?decision_at={quote(monthly['decision_at'])}" if base else None
+    planned = cash_message(monthly, trigger, symbol=symbol, link=link)
+    if planned is None: return {'status': 'nothing_worthwhile'}
+    fingerprint, text = planned
+    if fingerprint == store.last_reallocation_fingerprint(): return {'status': 'unchanged'}
+    if dry_run: return {'status': 'would_send', 'message': text}
+    try: notifier.send(text); delivered = True
+    except Exception: delivered = False  # not counted as sent, so the next reassessment tries again
+    store.record_reallocation(trigger, fingerprint, text, delivered=delivered, now=now)
+    return {'status': 'sent' if delivered else 'send_failed', 'message': text}
 
 
 def plan_messages(monthly, previous, *, now, last_summary=None, link=None):
@@ -181,6 +237,8 @@ def run(*, notifier=None, dry_run=False, update=True, now=None):
         store.record_alert(kind, text or f'{symbol}: {decision}', delivered=delivered, qualified_symbol=symbol,
                            decision=decision, thesis=thesis, now=now)
         if text and delivered: sent.append(text)
+    cash = reassess('daily', notifier=notifier, now=now, dry_run=dry_run)
+    if cash.get('status') in ('sent', 'would_send'): sent.append(cash['message'])
     return {'command': 'alerts', 'dry_run': dry_run, 'decision_at': monthly['decision_at'], 'holdings': len(monthly['holdings']),
             'messages': sent, 'steps': steps}
 

@@ -34,6 +34,9 @@ proceeds return to the pool). Your plan, meaning the monthly contribution (£200
 start) and the maximum number of holdings (10), can be changed at any time. The
 monthly allocation spends the cash pool, optionally plus this month's planned
 contribution, and opens new names only while holdings stay within the maximum.
+Recording a sale or deposit reassesses the cash straight away (and the daily alert
+run checks it too): Telegram gets a message only when the cash you actually hold has
+a worthwhile use that differs from the last one sent.
 
 ## Milestone 36: investment-grade research foundation
 
