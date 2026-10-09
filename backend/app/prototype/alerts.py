@@ -8,7 +8,10 @@ Each run (weekdays before the US open, on the previous close):
 3. recomputes the monthly view at the current time (same rules as the page);
 4. compares every holding's (decision, thesis status) with the last one sent and
    messages only the changes, plus a short weekly summary on Fridays;
-5. reassesses the cash pool (see `reassess`).
+5. once a month (see `monthly_cycle`): records the month's picks and decisions
+   for the scorecard, sends a monthly review, and reminds about an unrecorded
+   contribution from the 8th;
+6. reassesses the cash pool (see `reassess`).
 Holding messages concern something already owned. The one message about new
 money is the cash reassessment: it is sent only when the cash you actually have
 (no unexecuted sales counted) has a worthwhile use that differs from the last
@@ -142,6 +145,81 @@ def reassess(trigger, *, symbol=None, notifier=None, now=None, dry_run=False, mo
     return {'status': 'sent' if delivered else 'send_failed', 'message': text}
 
 
+CONTRIBUTION_REMINDER_DAY = 8
+
+
+def _gbp(value):
+    return '—' if value is None else f'£{value:,.0f}'
+
+
+def deposited_in(movements, period):
+    """Pounds deposited (not voided) in calendar month `period` (YYYY-MM)."""
+    return sum(float(m['amount']) for m in movements
+               if m['kind'] == 'deposit' and not m.get('voided_at') and str(m['moved_on'])[:7] == period)
+
+
+def monthly_review_message(monthly, *, now, deposited, contribution, recorded, link=None):
+    lines = [f'SignalLens monthly review: {now:%B %Y}']
+    if monthly['picks']:
+        lines.append('Top picks:')
+        lines += [f"#{p.get('rank')} {p['qualified_symbol']}: upside {_pct(p.get('upside'))} · conviction {p.get('conviction') or '—'} · "
+                  f"risk {p.get('risk') or '—'}{' · already held' if p.get('held') else ''}" for p in monthly['picks']]
+    else:
+        lines.append('No company qualifies this month; keeping cash or your holdings is a valid outcome.')
+    if monthly['holdings']:
+        counts = {}
+        for h in monthly['holdings']: counts[h['decision']] = counts.get(h['decision'], 0) + 1
+        lines.append('Your holdings: ' + ' · '.join(f'{d} {n}' for d, n in counts.items()))
+    else:
+        lines.append('No holdings recorded yet.')
+    account = (monthly.get('allocation') or {}).get('account') or {}
+    status = (f'{_gbp(deposited)} deposited this month' if deposited else
+              f'planned {_gbp(contribution)} not recorded yet' if contribution else 'no contribution planned')
+    lines.append(f"Cash pool {_gbp(account.get('cash_pool'))}; {status}.")
+    if recorded: lines.append("This month's picks and decisions are recorded for the scorecard.")
+    if link: lines.append(link)
+    lines.append(DISCLAIMER)
+    return '\n'.join(lines)
+
+
+def contribution_reminder(*, now, contribution, link=None):
+    lines = [f"Reminder: your {_gbp(contribution)} SignalLens contribution for {now:%B} isn't recorded yet. "
+             'Once it reaches your account, record it on the Portfolio page and the cash will be reassessed. '
+             'If your plans changed, update the contribution there.']
+    if link: lines.append(link)
+    return '\n'.join(lines)
+
+
+def monthly_cycle(store, monthly, *, notifier, now, dry_run=False, link=None, portfolio_link=None):
+    """The once-a-month steps of the daily run; each happens at most once per calendar month."""
+    from . import api
+    from .scorecard import record_from_monthly
+    from .store import StoreError
+    period, result, messages = now.strftime('%Y-%m'), {}, []
+    recorded = any(r['month'] == period for r in store.decision_records())
+    if not recorded and not dry_run:
+        record = record_from_monthly(monthly, api.report_at(now, 15))
+        if record['benchmark_symbols']:
+            try: store.create_decision_record(record, now=now); recorded = True; result['record'] = 'recorded'
+            except StoreError as exc: result['record'] = exc.code
+        else: result['record'] = 'no_assessed_companies'
+    contribution = store.settings()['monthly_contribution']
+    deposited = deposited_in(store.cash_movements(), period)
+    planned = []
+    if not store.cycle_sent('monthly_review', period):
+        planned.append(('monthly_review', monthly_review_message(monthly, now=now, deposited=deposited, contribution=contribution,
+                                                                 recorded=recorded, link=link)))
+    if now.day >= CONTRIBUTION_REMINDER_DAY and contribution > 0 and not deposited and not store.cycle_sent('contribution_reminder', period):
+        planned.append(('contribution_reminder', contribution_reminder(now=now, contribution=contribution, link=portfolio_link)))
+    for kind, text in planned:
+        if dry_run: messages.append(text); continue
+        try: notifier.send(text); delivered = True
+        except Exception: delivered = False  # retried on the next run
+        store.record_cycle_event(kind, period, text, delivered=delivered, now=now)
+        if delivered: messages.append(text)
+    return result | {'messages': messages}
+
+
 def plan_messages(monthly, previous, *, now, last_summary=None, link=None):
     """[(kind, symbol, decision, thesis, text)] to send, given the last states sent."""
     out = []
@@ -237,6 +315,10 @@ def run(*, notifier=None, dry_run=False, update=True, now=None):
         store.record_alert(kind, text or f'{symbol}: {decision}', delivered=delivered, qualified_symbol=symbol,
                            decision=decision, thesis=thesis, now=now)
         if text and delivered: sent.append(text)
+    cycle = monthly_cycle(store, monthly, notifier=notifier, now=now, dry_run=dry_run, link=link,
+                          portfolio_link=f'{base}/prototype/portfolio' if base else None)
+    sent += cycle.pop('messages')
+    if cycle: steps['monthly_cycle'] = cycle
     cash = reassess('daily', notifier=notifier, now=now, dry_run=dry_run)
     if cash.get('status') in ('sent', 'would_send'): sent.append(cash['message'])
     return {'command': 'alerts', 'dry_run': dry_run, 'decision_at': monthly['decision_at'], 'holdings': len(monthly['holdings']),

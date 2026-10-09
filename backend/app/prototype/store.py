@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS portfolio_settings(
   setting_id VARCHAR PRIMARY KEY, monthly_contribution DOUBLE NOT NULL, max_holdings INTEGER NOT NULL,
   recorded_at TIMESTAMPTZ NOT NULL);
 ALTER TABLE portfolio_settings ADD COLUMN IF NOT EXISTS fractional_shares BOOLEAN;
+CREATE TABLE IF NOT EXISTS cycle_events(
+  event_id VARCHAR PRIMARY KEY, sent_at TIMESTAMPTZ NOT NULL, kind VARCHAR NOT NULL, period VARCHAR NOT NULL,
+  message VARCHAR NOT NULL, delivered BOOLEAN NOT NULL);
 CREATE TABLE IF NOT EXISTS reallocation_events(
   event_id VARCHAR PRIMARY KEY, sent_at TIMESTAMPTZ NOT NULL, trigger VARCHAR NOT NULL, fingerprint VARCHAR NOT NULL,
   message VARCHAR NOT NULL, delivered BOOLEAN NOT NULL);
@@ -403,6 +406,17 @@ class PrototypeStore:
     def alert_events(self, limit=50):
         if not self._has_table('alert_events'): return []
         return self._rows('SELECT * FROM alert_events ORDER BY sent_at DESC, event_id DESC LIMIT ?', [int(limit)])
+
+    # Monthly cycle messages --------------------------------------------------
+    def record_cycle_event(self, kind, period, message, *, delivered, now=None):
+        with self._connect(True) as db:
+            db.execute('INSERT INTO cycle_events VALUES (?, ?, ?, ?, ?, ?)',
+                       [uuid.uuid4().hex, now or _now(), str(kind)[:64], str(period)[:16], str(message)[:8000], bool(delivered)])
+
+    def cycle_sent(self, kind, period):
+        """Whether a `kind` message for `period` (YYYY-MM) was delivered."""
+        if not self._has_table('cycle_events'): return False
+        return bool(self._rows('SELECT 1 FROM cycle_events WHERE delivered AND kind = ? AND period = ? LIMIT 1', [kind, period]))
 
     # Cash reassessment messages ---------------------------------------------
     def record_reallocation(self, trigger, fingerprint, message, *, delivered, now=None):

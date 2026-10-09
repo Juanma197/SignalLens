@@ -36,7 +36,10 @@ monthly allocation spends the cash pool, optionally plus this month's planned
 contribution, and opens new names only while holdings stay within the maximum.
 Recording a sale or deposit reassesses the cash straight away (and the daily alert
 run checks it too): Telegram gets a message only when the cash you actually hold has
-a worthwhile use that differs from the last one sent.
+a worthwhile use that differs from the last one sent. Once a month the daily run also
+records the picks and decisions for the scorecard, sends a monthly review (Top 3,
+holding decisions, cash pool, contribution status) and, from the 8th, one reminder
+if the contribution has not been recorded.
 
 ## Milestone 36: investment-grade research foundation
 
