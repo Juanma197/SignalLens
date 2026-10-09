@@ -401,16 +401,23 @@ def bulk_insert(connection, table: str, rows: list[list], conflict: str | None =
 
     Row-by-row inserts cost milliseconds each (executemany far more) once a table
     holds millions of keyed rows; scanning a DataFrame is about a thousand times
-    faster. Values follow the table's column order. Decimals travel as text and
-    are cast back to the column's exact type."""
+    faster. Each row's values fill the table's leading columns in order, as a
+    positional VALUES list would; columns added later by other code (optional,
+    after these) are left NULL. Decimals travel as text and are cast back to the
+    column's exact type."""
     if not rows: return
     if conflict not in (None, "REPLACE", "IGNORE"): raise ValueError("conflict must be REPLACE, IGNORE or None")
+    width = len(rows[0])
+    if any(len(row) != width for row in rows): raise ValueError("rows must all have the same number of values")
     columns = connection.execute(
-        "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ? ORDER BY ordinal_position", [table]).fetchall()
-    names = [f"c{i}" for i in range(len(columns))]
+        "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'main' AND table_name = ? ORDER BY ordinal_position",
+        [table]).fetchall()[:width]
+    if len(columns) != width: raise ValueError(f"{table} has fewer columns than the values supplied")
+    names = [f"c{i}" for i in range(width)]
     frame = pd.DataFrame([[str(v) if isinstance(v, Decimal) else v for v in row] for row in rows], columns=names, dtype=object)
     select = ", ".join(f'CAST("{n}" AS {kind})' for n, (_, kind) in zip(names, columns))
+    target = ", ".join(f'"{name}"' for name, _ in columns)
     verb = f"INSERT OR {conflict}" if conflict else "INSERT"
     connection.register("replacement_rows", frame)
-    try: connection.execute(f"{verb} INTO {table} SELECT {select} FROM replacement_rows")
+    try: connection.execute(f"{verb} INTO {table} ({target}) SELECT {select} FROM replacement_rows")
     finally: connection.unregister("replacement_rows")
