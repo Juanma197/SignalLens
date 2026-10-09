@@ -6,15 +6,18 @@ import Link from "next/link";
 import {CompanyView,Detail,PrototypeNotice} from "../../view";
 import {ThesisPanel, WatchAndNotes} from "../../store-view";
 import {ThesisChecksPanel} from "../../checks-view";
+import {cutoffFor, friendlyError} from "../../when";
 
 function CompanyDetail() {
   const {securityId}=useParams<{securityId:string}>(); const query=useSearchParams();
-  const cutoff=query.get("decision_at"), target=query.get("target_members")??"15";
+  // Without a date in the link, show the latest data (fixed for this visit).
+  const [fallback]=useState(()=>cutoffFor({mode:"latest"}));
+  const cutoff=query.get("decision_at")||fallback, target=query.get("target_members")??"15";
   const key=`${securityId}:${cutoff}:${target}`;
   const [loaded,setLoaded]=useState<{key:string;detail:Detail}|null>(null);
   const [failure,setFailure]=useState<{key:string;error:string}|null>(null);
   const detail=loaded?.key===key?loaded.detail:null;
-  const error=!cutoff?"Evidence cutoff is required.":failure?.key===key?failure.error:"";
+  const error=failure?.key===key?friendlyError(failure.error):"";
   useEffect(()=>{
     const controller=new AbortController();
     if(!cutoff)return ()=>controller.abort();

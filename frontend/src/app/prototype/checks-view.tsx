@@ -3,6 +3,7 @@ import Link from "next/link";
 import {FormEvent, useCallback, useEffect, useState} from "react";
 import {call} from "./store-view";
 import {detailHref} from "./view";
+import {describeCutoff} from "./when";
 
 export type Metric = {metric: string; label: string; unit: "fraction"|"ratio"|"usd"|"usd_per_share"; source: string};
 export type Check = {metric: string; comparator: "at_least"|"at_most"; threshold: number; note: string|null};
@@ -81,7 +82,7 @@ export function ChecksOverview({report, target}: {report: ChecksReport; target: 
   const counts = (o: Overall) => report.companies.filter(c => c.overall === o).length;
   return <div className="brief-stack">
     {report.synthetic_fixture && <p className="notice warning">SYNTHETIC FIXTURE — invented companies and evidence.</p>}
-    <section className="panel prototype-panel"><h2>Thesis health at {report.decision_at}</h2>
+    <section className="panel prototype-panel"><h2>Thesis health as of {describeCutoff(report.decision_at)}</h2>
       <p>{counts("broken")} broken · {counts("warning")} warning · {counts("unknown")} not fully checkable · {counts("intact")} intact. {report.method}</p>
       {report.uncovered_holdings.length > 0 && <p className="notice warning">Held but outside SignalLens data, so not checked: {report.uncovered_holdings.join(", ")}.</p>}
       {report.companies.length === 0 && <p>Nothing to check yet. Holdings, watchlist companies and companies with conditions appear here.</p>}</section>

@@ -246,3 +246,8 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; }
 .prototype-inline-check { display:flex !important; flex:0 0 auto !important; align-items:center; gap:8px; white-space:nowrap; }
 .prototype-muted { color:var(--muted); }
 .prototype-check-holds { color:var(--green) !important; }
+.prototype-when { border:0; padding:0; margin:0; display:flex; flex-wrap:wrap; gap:8px 18px; align-items:center; flex:1; color:var(--muted); font-size:13px; }
+.prototype-when legend { float:left; margin-right:6px; padding:0; color:var(--muted); font-size:12px; }
+.prototype-when input[type=date] { background:#09100d; color:var(--ink); border:1px solid var(--line); padding:9px; border-radius:8px; color-scheme:dark; font:inherit; }
+.prototype-when small { flex-basis:100%; }
+.prototype-as-of { color:var(--muted); font-size:13px; margin:-8px 0 16px; }

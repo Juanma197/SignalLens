@@ -13,6 +13,7 @@ import {ChecksOverview, type ChecksReport} from "./checks-view";
 import {MonthlyView, type Monthly} from "./monthly-view";
 import {AllocationView, type Allocation} from "./monthly-view";
 import {ScorecardView, type Scorecard} from "./scorecard-view";
+import {WhenPicker, cutoffFor, describeCutoff, friendlyError, todayUtc, whenFromQuery} from "./when";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
 // No provider, browser download, credentials or operator database is used.
@@ -322,4 +323,20 @@ test("scorecard shows hit rates, pending checkpoints and the empty state",()=>{
   assert.match(html,/REVIEW · not scored/);
   assert.match(html,/~1 month/);
   assert.match(renderToStaticMarkup(<ScorecardView card={{...card,months:[]}}/>),/No recorded months yet/);
+});
+
+test("dates are chosen as Latest or a past day, never typed as timestamps",()=>{
+  assert.deepEqual(whenFromQuery(null),{mode:"latest"});
+  assert.deepEqual(whenFromQuery("not a date"),{mode:"latest"});
+  assert.deepEqual(whenFromQuery("2026-09-15T13:00:00Z"),{mode:"date",date:"2026-09-15"});
+  assert.deepEqual(whenFromQuery(new Date().toISOString()),{mode:"latest"});
+  assert.equal(cutoffFor({mode:"date",date:"2026-09-15"}),"2026-09-15T23:59:59Z");  // after that day's US close
+  const now=Date.now(), latest=new Date(cutoffFor({mode:"latest"})).getTime();
+  assert.ok(Math.abs(latest-now)<5000 && /Z$/.test(cutoffFor({mode:"latest"})));
+  assert.equal(new Date(cutoffFor({mode:"date",date:todayUtc()})).toISOString().slice(0,10),todayUtc());  // today means now
+  assert.equal(describeCutoff("2026-10-09T12:05:00Z"),"9 Oct 2026, 12:05 UTC");
+  assert.match(friendlyError("research_maintenance"),/being updated/);
+  assert.equal(friendlyError("SOMETHING_NEW"),"SOMETHING_NEW");
+  const html=renderToStaticMarkup(<WhenPicker when={{mode:"date",date:"2026-09-15"}} onChange={()=>{}}/>);
+  assert.match(html,/Show data as of/); assert.match(html,/type="date"/); assert.doesNotMatch(html,/ISO timestamp/);
 });
