@@ -1,14 +1,17 @@
-"""Separate append-only prototype store: watchlist events, notes and snapshots.
+"""Separate append-only prototype store: watchlist events, notes, theses,
+snapshots and the operator's own trades.
 
 Nothing here opens the research or production databases for writing. There is
 no update or delete path: watchlist removal is a new event, a note correction is
-a new note, and a snapshot is immutable once recorded (verified by SHA-256 on
-every read). Snapshots are never backfilled.
+a new note, a mistaken trade is voided by a new row, and a snapshot is immutable
+once recorded (verified by SHA-256 on every read). Snapshots are never backfilled.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import math
 from pathlib import Path
+import re
 import uuid
 
 import duckdb
@@ -21,6 +24,12 @@ SNAPSHOT_MAX_LAG_DAYS = 14
 THESIS_SECTIONS = ('business', 'financial_health', 'why_cheap', 'catalysts', 'downside',
                    'invalidation', 'assumptions')
 THESIS_STATUSES = ('researching', 'active', 'rejected')
+TRADE_KINDS = ('buy', 'sell')
+CURRENCIES = ('USD', 'GBP', 'EUR', 'CAD', 'CHF', 'JPY', 'AUD')
+MAX_TRADE_VALUE = 1e12
+EARLIEST_TRADE = date(1970, 1, 1)
+# EODHD-style symbol: ticker plus exchange suffix, e.g. AAPL.US or BRK-B.US.
+SYMBOL = re.compile(r'^[A-Z0-9][A-Z0-9.\-]{0,19}\.[A-Z]{2,6}$')
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS prototype_schema(version INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE IF NOT EXISTS watchlist_events(
@@ -38,6 +47,11 @@ CREATE TABLE IF NOT EXISTS monthly_snapshots(
   snapshot_id VARCHAR PRIMARY KEY, month VARCHAR NOT NULL UNIQUE, decision_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL, version VARCHAR NOT NULL, configuration_hash VARCHAR NOT NULL,
   synthetic_fixture BOOLEAN NOT NULL, report_sha256 VARCHAR NOT NULL, report_json VARCHAR NOT NULL);
+CREATE TABLE IF NOT EXISTS portfolio_transactions(
+  transaction_id VARCHAR PRIMARY KEY, kind VARCHAR NOT NULL CHECK(kind IN ('buy', 'sell', 'void')),
+  qualified_symbol VARCHAR, company_name VARCHAR, shares DOUBLE, price DOUBLE, fees DOUBLE,
+  currency VARCHAR, traded_on DATE, note VARCHAR, voids_transaction_id VARCHAR,
+  recorded_at TIMESTAMPTZ NOT NULL);
 """
 
 
@@ -53,6 +67,22 @@ def _now():
 
 def _utc(value):
     return value.astimezone(timezone.utc).isoformat() if isinstance(value, datetime) else value
+
+
+def symbol(value):
+    """Normalise a typed ticker; a bare US ticker gets the .US suffix."""
+    value = str(value or '').strip().upper()
+    if value and not re.search(r'\.[A-Z]{2,6}$', value): value += '.US'
+    if not SYMBOL.match(value): raise StoreError('PROTOTYPE_INVALID_SYMBOL')
+    return value
+
+
+def _amount(value, *, allow_zero=False):
+    try: value = float(value)
+    except (TypeError, ValueError): raise StoreError('PROTOTYPE_INVALID_TRADE') from None
+    if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero) or value > MAX_TRADE_VALUE:
+        raise StoreError('PROTOTYPE_INVALID_TRADE')
+    return value
 
 
 def _security_id(value):
@@ -142,6 +172,70 @@ class PrototypeStore:
             return self._rows('SELECT * FROM research_theses ORDER BY recorded_at DESC, thesis_id DESC')
         return self._rows('SELECT * FROM research_theses WHERE security_id = ? ORDER BY recorded_at DESC, thesis_id DESC',
                           [_security_id(security_id)])
+
+    # Trades ------------------------------------------------------------------
+    def _has_trades_table(self):
+        if not self.path.is_file(): return False
+        with duckdb.connect(str(self.path), read_only=True) as db:
+            return bool(db.execute("SELECT count(*) FROM information_schema.tables WHERE table_name='portfolio_transactions'").fetchone()[0])
+
+    def transactions(self):
+        """Every buy and sell, newest trade first, each marked if later voided."""
+        if not self._has_trades_table(): return []
+        return self._rows("""
+            SELECT t.transaction_id, t.kind, t.qualified_symbol, t.company_name, t.shares, t.price, t.fees,
+                   t.currency, CAST(t.traded_on AS VARCHAR) AS traded_on, t.note, t.recorded_at,
+                   v.recorded_at AS voided_at, v.note AS void_reason
+            FROM portfolio_transactions t
+            LEFT JOIN portfolio_transactions v ON v.kind = 'void' AND v.voids_transaction_id = t.transaction_id
+            WHERE t.kind IN ('buy', 'sell') ORDER BY t.traded_on DESC, t.recorded_at DESC, t.transaction_id DESC""")
+
+    def trades(self):
+        """Buys and sells that have not been voided."""
+        return [t for t in self.transactions() if t['voided_at'] is None]
+
+    @staticmethod
+    def _check(trades):
+        from .portfolio import positions_from
+        from .service import PrototypeError
+        try: positions_from(trades)
+        except PrototypeError as exc: raise StoreError(exc.code) from None
+
+    def record_trade(self, kind, qualified_symbol, shares, price, traded_on, *, fees=0, currency='USD',
+                     company_name=None, note=None, today=None):
+        """Record one buy or sell. A sell may never exceed the shares held on its date."""
+        if kind not in TRADE_KINDS: raise StoreError('PROTOTYPE_INVALID_TRADE_KIND')
+        sym = symbol(qualified_symbol)
+        shares, price, fees = _amount(shares), _amount(price), _amount(fees, allow_zero=True)
+        if shares * price > MAX_TRADE_VALUE: raise StoreError('PROTOTYPE_INVALID_TRADE')
+        if currency not in CURRENCIES: raise StoreError('PROTOTYPE_INVALID_CURRENCY')
+        try: day = traded_on if isinstance(traded_on, date) else date.fromisoformat(str(traded_on))
+        except ValueError: raise StoreError('PROTOTYPE_INVALID_TRADE_DATE') from None
+        if not EARLIEST_TRADE <= day <= (today or _now().date()): raise StoreError('PROTOTYPE_INVALID_TRADE_DATE')
+        name = str(company_name or '').strip()[:256] or None
+        note = str(note or '').strip() or None
+        if note and len(note) > MAX_NOTE_CHARS: raise StoreError('PROTOTYPE_INVALID_NOTE')
+        now = _now()
+        row = dict(transaction_id=uuid.uuid4().hex, kind=kind, qualified_symbol=sym, company_name=name, shares=shares,
+                   price=price, fees=fees, currency=currency, traded_on=day.isoformat(), note=note, recorded_at=now.isoformat())
+        # Older trades can be entered late, so the whole history is re-checked for an oversell.
+        self._check(self.trades() + [row])
+        with self._connect(True) as db:
+            db.execute('INSERT INTO portfolio_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)',
+                [row['transaction_id'], kind, sym, name, shares, price, fees, currency, day, note, now])
+        return row['transaction_id']
+
+    def void_trade(self, transaction_id, *, reason=None):
+        """Cancel a mistaken trade by recording a void row; the original stays visible."""
+        target = next((t for t in self.transactions() if t['transaction_id'] == str(transaction_id)[:64]), None)
+        if target is None: raise StoreError('PROTOTYPE_UNKNOWN_TRANSACTION')
+        if target['voided_at'] is not None: raise StoreError('PROTOTYPE_TRANSACTION_ALREADY_VOIDED')
+        reason = str(reason or '').strip() or None
+        if reason and len(reason) > MAX_NOTE_CHARS: raise StoreError('PROTOTYPE_INVALID_NOTE')
+        self._check([t for t in self.trades() if t['transaction_id'] != target['transaction_id']])
+        with self._connect(True) as db:
+            db.execute("INSERT INTO portfolio_transactions (transaction_id, kind, note, voids_transaction_id, recorded_at) VALUES (?, 'void', ?, ?, ?)",
+                [uuid.uuid4().hex, reason, target['transaction_id'], _now()])
 
     # Snapshots -------------------------------------------------------------
     def create_snapshot(self, report, *, now=None):

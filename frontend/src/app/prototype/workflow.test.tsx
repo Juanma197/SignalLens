@@ -8,6 +8,7 @@ import {renderToStaticMarkup} from "react-dom/server";
 import {AnalystBriefView,CompanyView,EventsView,FinancialHealthView,PrototypeNotice,RosterView,ScenarioView,ValuationView,detailHref, type Detail, type Report} from "./view";
 import {SnapshotView, ThesisHistory} from "./store-view";
 import {ValueRankingView, type ValueRanking} from "./value-view";
+import {PortfolioView, type Portfolio} from "./portfolio-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
 // No provider, browser download, credentials or operator database is used.
@@ -208,4 +209,27 @@ test("value ranking shows picks with reasons and never forces empty places",()=>
   assert.match(html,/Only 1 company qualifies/);
   assert.match(html,/Only 3 companies could be assessed/);
   assert.doesNotMatch(html,/<b>A<\/b>/);
+});
+
+test("portfolio shows priced and unpriced holdings honestly and keeps voided trades visible",()=>{
+  const base={currency:"USD",realised_profit:0,fees:0,first_traded_on:"2026-09-01",last_traded_on:"2026-09-01",trades:1};
+  const portfolio:Portfolio={as_of:"2026-10-09T12:00:00+00:00",method:"average cost",currencies:["USD"],
+    positions:[{...base,qualified_symbol:"SYN01.US",company_name:null,listed_name:"Synthetic company 01",security_id:"synthetic-01",shares:10,cost_basis:1000,average_cost:100,
+      price:{close:120,trading_date:"2026-09-30"},market_value:1200,unrealised_profit:200,unrealised_return:0.2,weight:1},
+      {...base,qualified_symbol:"NOPE.US",company_name:"<img src=x onerror=alert(1)>",security_id:null,shares:3,cost_basis:60,average_cost:20,price:null,market_value:null,unrealised_profit:null,unrealised_return:null,weight:null}],
+    closed_positions:[],
+    totals:[{currency:"USD",positions:2,priced_positions:1,cost_basis:1060,priced_cost_basis:1000,market_value:1200,unrealised_profit:200,unrealised_return:0.2,realised_profit:0}],
+    transactions:[{transaction_id:"a",kind:"buy",qualified_symbol:"SYN01.US",company_name:null,shares:10,price:100,fees:0,currency:"USD",traded_on:"2026-09-01",note:null,recorded_at:"",voided_at:null,void_reason:null},
+      {transaction_id:"b",kind:"buy",qualified_symbol:"SYN01.US",company_name:null,shares:10,price:100,fees:0,currency:"USD",traded_on:"2026-09-01",note:null,recorded_at:"",voided_at:"2026-10-09T00:00:00+00:00",void_reason:"Entered twice."}]};
+  const html=renderToStaticMarkup(<PortfolioView portfolio={portfolio} cutoff="2026-10-02T12:00:00Z" today="2026-10-09" busy={false} onTrade={async()=>true} onVoid={()=>{}}/>);
+  assert.match(html,/\$1,200\.00/);
+  assert.match(html,/1 of 2 holdings priced; unpriced holdings are excluded, not estimated/);
+  assert.match(html,/no stored price/);
+  assert.match(html,/not covered by SignalLens data/);
+  assert.match(html,/20\.00%/);
+  assert.match(html,/voided: Entered twice\./);
+  assert.equal((html.match(/>Void</g)??[]).length,1);
+  assert.ok(html.includes(detailHref("synthetic-01","2026-10-02T12:00:00Z").replaceAll("&","&amp;")));
+  assert.doesNotMatch(html,/<img/);
+  assert.match(html,/SignalLens never places orders/);
 });
