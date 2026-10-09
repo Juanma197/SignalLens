@@ -30,6 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--per-region", type=int, default=100)
     parser.add_argument("--total", type=int, default=500)
     parser.add_argument("--daily-request-budget", type=int, default=700)
+    parser.add_argument("--us-securities", type=int, default=0,
+        help="wide US catalogue: up to this many pre-screened US listings in the size band (needs app.us_size_prescreen first)")
+    parser.add_argument("--us-band-min", type=float, default=300_000_000)
+    parser.add_argument("--us-band-max", type=float, default=10_000_000_000)
     parser.add_argument("--requests-per-minute", type=int, default=20)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--timeout-seconds", type=float, default=15)
@@ -122,7 +126,8 @@ def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = 
         raise ValueError("--authorize-permanent-failures requires retry-failures")
     limits = EODHDLimits(args.per_region, args.total, args.daily_request_budget,
         args.requests_per_minute, args.retries, args.timeout_seconds,
-        args.max_response_bytes, args.maximum_runtime_seconds)
+        args.max_response_bytes, args.maximum_runtime_seconds,
+        us_securities=args.us_securities, us_band_usd=(args.us_band_min, args.us_band_max))
     # A dummy value is sufficient for read-only local commands and never leaves the process.
     token = os.environ.get("SIGNALLENS_EODHD_API_TOKEN", "")
     if args.command not in {"plan", "diagnose-catalogue", "audit", "plan-refresh", "status", "coverage"} and not token and not args.dry_run:
