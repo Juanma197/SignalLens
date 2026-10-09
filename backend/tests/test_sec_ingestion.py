@@ -221,6 +221,10 @@ def test_ingestion_keeps_the_two_documents_it_downloads(tmp_path):
         rows=db.execute("SELECT endpoint_class,cik,payload_sha256,byte_count,payload_json FROM sec_raw_payloads ORDER BY endpoint_class").fetchall()
     assert [r[0] for r in rows]==["companyfacts","submissions"] and all(len(r[1])==10 for r in rows)
     assert all(hashlib.sha256(r[4].encode()).hexdigest()==r[2] and len(r[4].encode())==r[3] for r in rows)
+    # Only the fields read later are kept: no filing lists, no financial statements.
+    import json
+    kept={r[0]:json.loads(r[4]) for r in rows}
+    assert "filings" not in kept["submissions"] and set(kept["companyfacts"]["facts"])<={"dei"}
     run(research,production)  # a resumed run keeps one copy
     with duckdb.connect(str(research),read_only=True) as db:
         assert db.execute("SELECT count(*) FROM sec_raw_payloads").fetchone()[0]==2
