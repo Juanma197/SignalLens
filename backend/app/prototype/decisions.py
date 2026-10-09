@@ -28,7 +28,7 @@ def decide(position, assessment, checks):
     upside = (assessment or {}).get('upside')
     evidence = {'upside': upside, 'weight': weight, 'thesis': (checks or {}).get('overall', 'not_covered'),
                 'value_status': (assessment or {}).get('status'), 'conviction': (assessment or {}).get('conviction'),
-                'risk': (assessment or {}).get('risk')}
+                'risk': (assessment or {}).get('risk'), 'score': (assessment or {}).get('score')}
     def result(decision, *reasons):
         return {'decision': decision, 'reasons': [r for r in reasons if r], 'evidence': evidence}
     if checks is None or checks['overall'] == 'not_covered':

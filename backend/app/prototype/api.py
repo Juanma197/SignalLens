@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..config import get_settings
+from .allocation import allocate
 from .checks import catalogue, evaluate
 from .decisions import DECISIONS, RULES as DECISION_RULES, decide
 from .portfolio import positions_from, read_market, valuation
@@ -299,8 +300,10 @@ def thesis_checks(decision_at: datetime = Query(...), target_members: int = Quer
 
 
 @router.get('/monthly')
-def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, ge=10, le=20)):
-    """The monthly view: Top 3 picks plus a decision for every holding, all at one cutoff."""
+def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, ge=10, le=20),
+            cash: float = Query(0, ge=0, le=1e9), reinvest: bool = Query(True)):
+    """The monthly view: Top 3 picks, a decision for every holding and a suggested
+    allocation of `cash` new USD (plus sale proceeds when `reinvest`), all at one cutoff."""
     if decision_at.tzinfo is None:
         raise HTTPException(422, detail={'code': 'PROTOTYPE_INVALID_TIMESTAMP'})
     settings = get_settings()
@@ -342,6 +345,7 @@ def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, 
             'target_members': report['target_members'], 'population': ranking['population'], 'picks': picks,
             'holdings': holdings, 'totals': book['totals'], 'rules': DECISION_RULES,
             'counts': {d: sum(h['decision'] == d for h in holdings) for d in DECISIONS},
+            'allocation': allocate(holdings, picks, cash, reinvest=reinvest),
             'method': 'Holdings are built from your trades up to the cutoff and valued at the last stored close on or before it. '
                       'Each decision follows fixed rules in order: no evidence, broken thesis, overvaluation, position size, then room to add.',
             'label': 'Decision support only. Nothing is executed. The rules have not been validated against later returns.'}

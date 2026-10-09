@@ -33,7 +33,7 @@ def test_rule_order_and_reasons():
     assert decide({'weight': 0.40}, value(), checks())['decision'] == 'REDUCE'
     buy = decide(position, value(), checks())
     assert buy['decision'] == 'BUY MORE' and buy['evidence'] == {'upside': 0.4, 'weight': 0.1, 'thesis': 'intact',
-                                                               'value_status': 'candidate', 'conviction': 'medium', 'risk': 'low'}
+                                                               'value_status': 'candidate', 'conviction': 'medium', 'risk': 'low', 'score': None}
 
 
 def test_hold_band_and_blockers_prevent_churn():

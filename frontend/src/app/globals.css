@@ -243,3 +243,4 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; }
 .prototype-reasons { margin:0; padding-left:16px; }
 .prototype-reasons li { padding:2px 0; }
 .prototype-holdings-table td:nth-child(4),.prototype-holdings-table td:nth-child(5) { white-space:nowrap; }
+.prototype-inline-check { display:flex !important; flex:0 0 auto !important; align-items:center; gap:8px; white-space:nowrap; }

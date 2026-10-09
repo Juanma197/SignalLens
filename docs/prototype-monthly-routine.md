@@ -68,6 +68,12 @@ above it, or a position over 35%), REVIEW (no SignalLens evidence), BUY MORE
 Every decision lists its reasons. Nothing is executed: you place any trade with
 your broker, then record it on **Portfolio**.
 
+Enter any **new money to invest** to get a suggested allocation: sales first
+(SELL sells all; REDUCE sells half when overvalued, or trims to 25% when too
+large), then money split by ranking score between BUY MORE holdings and new
+picks, with no position above 25% and whole shares only. Whatever does not fit
+stays as cash.
+
 ## Things to know
 
 - Recorded snapshots are safe from later refreshes. Recomputing an old cutoff

@@ -11,6 +11,7 @@ import {ValueRankingView, type ValueRanking} from "./value-view";
 import {PortfolioView, type Portfolio} from "./portfolio-view";
 import {ChecksOverview, type ChecksReport} from "./checks-view";
 import {MonthlyView, type Monthly} from "./monthly-view";
+import {AllocationView, type Allocation} from "./monthly-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
 // No provider, browser download, credentials or operator database is used.
@@ -275,4 +276,20 @@ test("monthly view lists picks, held flags and a reasoned decision per holding",
   assert.match(html,/no stored price/);
   assert.match(html,/Nothing is executed/);
   assert.match(html,/SELL when the thesis breaks or the price is 20\.00% above/);
+});
+
+test("allocation lists sales then buys, the cash left and never executes",()=>{
+  const allocation:Allocation={new_cash:1000,reinvest_sales:true,sale_proceeds:800,available:1800,invested:1500,left_as_cash:300,portfolio_after:9000,
+    rules:{position_limit:0.25,minimum_purchase_usd:50},method:"Sales first.",label:"Nothing is executed.",
+    sales:[{action:"SELL",qualified_symbol:"EGY.US",security_id:"e",company_name:"Vaalco",shares:200,price:4,amount:800,why:"Sell the whole position."}],
+    buys:[{action:"NEW BUY",qualified_symbol:"GPI.US",security_id:"g",company_name:"Group 1",shares:6,price:236.61,amount:1419.66,weight_after:0.158,why:"Open: one of this month's top picks."}]};
+  const html=renderToStaticMarkup(<AllocationView allocation={allocation} decision="2026-10-09T00:00:00Z" target={15}/>);
+  assert.match(html,/\$1,000\.00.{0,20}new money/);
+  assert.match(html,/\$1,800\.00/);
+  assert.match(html,/\$300\.00/);
+  assert.ok(html.indexOf("EGY.US")<html.indexOf("GPI.US"));
+  assert.match(html,/15\.80%/);
+  assert.match(html,/Nothing is executed/);
+  const none=renderToStaticMarkup(<AllocationView allocation={{...allocation,sales:[],buys:[]}} decision="2026-10-09T00:00:00Z" target={15}/>);
+  assert.match(none,/Holding cash is a valid outcome/);
 });
