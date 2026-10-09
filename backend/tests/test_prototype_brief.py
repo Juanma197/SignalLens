@@ -46,9 +46,12 @@ def test_no_triggered_counterargument_says_so():
 
 
 def test_scenarios_appear_in_valuation_and_an_expensive_middle_case_is_challenged():
-    scenarios = {'available': True, 'measure': 'free cash flow', 'multiple_name': 'P/FCF', 'price': 100.0,
+    scenarios = {'available': True, 'measure': 'free cash flow', 'multiple_name': 'P/FCF', 'price': 100.0, 'years_used': 5,
+                 'latest_profit': 5.0, 'median_profit': 8.0, 'volatility_note': 'Free cash flow varied a lot; treat this range as unreliable.',
                  'cases': [{'case': 'cautious', 'value_per_share': 40.0, 'vs_price': -0.6}, {'case': 'middle', 'value_per_share': 80.0, 'vs_price': -0.2},
                            {'case': 'optimistic', 'value_per_share': None, 'vs_price': None}]}
     b = analyst_brief(company(0.1, 0.1, 5e6, scenarios=scenarios), DECISION, result=False)
     assert any('cautious $40.00 (-60%), middle $80.00 (-20%), optimistic n/a vs price $100.00' in p for p in b['sections'][3]['points'])
     assert any('20% below today' in c for c in b['counterarguments'])
+    assert any('assumes a recovery that has not happened yet' in c for c in b['counterarguments'])
+    assert 'Free cash flow varied a lot; treat this range as unreliable.' in b['counterarguments']

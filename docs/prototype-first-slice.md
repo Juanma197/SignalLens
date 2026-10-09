@@ -356,12 +356,19 @@ membership (hash) order and are never sorted by these columns.
 Eligible companies with a valuation history get a "Scenario range": cautious,
 middle and optimistic value per share, built only from the company's own past.
 
-- **Measure**: annual free cash flow when at least three years and three
-  historical P/FCF values exist; otherwise net income with P/E.
-- **Cases**: cautious = worst year x lowest own multiple; middle = median year x
-  median multiple; optimistic = best year x median multiple (deliberately not the
-  highest). Divided by the current cover-page share count and compared with the
-  decision-session close. A zero or negative year gives no value for that case.
+- **Measure**: annual free cash flow or net income, whichever has three or more
+  years and three or more usable own multiples (0-100x; a near-zero profit year
+  makes a larger multiple meaningless) and is steadier: fewer zero or negative
+  years, then the lower coefficient of variation. On operator data this picks
+  earnings for auto dealers, lumber and payroll firms, whose cash flows swing.
+- **Cases**: only the profit level varies: worst, median and best year, all at
+  the median own multiple, so pessimism and optimism are not compounded. Divided
+  by the current cover-page share count and compared with the decision-session
+  close. A zero or negative year gives no value for that case. The lowest and
+  highest own multiples are shown separately as a sensitivity on the middle case.
+- **Warnings**: a coefficient of variation of 0.5 or more marks the range as
+  unreliable; the brief also notes when the latest year is below the median
+  (the middle case then assumes a recovery).
 - **Reference**: book value per share at the latest fiscal year end.
 - **Caveats on the page**: arithmetic, not a price target or forecast; assumes
   the past range is representative; ignores debt, cyclicality and structural

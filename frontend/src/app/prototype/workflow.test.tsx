@@ -178,4 +178,10 @@ test("scenario range renders each case, its assumption and the caveats",()=>{
   assert.match(html,/no earnings-based value/);
   assert.match(html,/book value \$50\.00 per share/);
   assert.match(html,/Ignores debt, cyclicality and structural change/);
+  const volatile=renderToStaticMarkup(<ScenarioView scenarios={{available:true,measure:"net income",multiple_name:"P/E",years_used:5,multiples_used:5,price:100,book_value_per_share:null,
+    volatility_note:"Net income varied a lot from year to year (coefficient of variation 0.56); treat this range as unreliable.",
+    multiple_sensitivity:{low_multiple:3,high_multiple:21,low_value_per_share:39,high_value_per_share:257},
+    cases:[{case:"middle",assumption:"median net income x median own P/E",profit:1e8,multiple:10,value_per_share:142,vs_price:0.42}]}}/>);
+  assert.match(volatile,/treat this range as unreliable/);
+  assert.match(volatile,/at its lowest own P\/E \(3\.0\) the middle case would be \$39\.00/);
 });

@@ -82,6 +82,11 @@ def analyst_brief(c, decision, *, result):
     middle = next((x for x in (val.get('scenarios') or {}).get('cases', []) if x['case'] == 'middle'), None)
     if middle and middle['vs_price'] is not None and middle['vs_price'] < 0:
         counter.append(f"The middle scenario values the shares {-middle['vs_price']:.0%} below today's price: on its own history the price already assumes better-than-typical results.")
+    scen = val.get('scenarios') or {}
+    if scen.get('available') and scen.get('median_profit') and scen['latest_profit'] < scen['median_profit']:
+        counter.append(f"The latest year's {scen['measure']} is below its {scen['years_used']}-year median, so the middle scenario assumes a recovery that has not happened yet.")
+    if scen.get('volatility_note'):
+        counter.append(scen['volatility_note'])
     if momentum is not None and momentum < -0.15 and below:
         counter.append(f'The price has fallen {-momentum:.0%} over 126 sessions; cheap shares can keep getting cheaper.')
     if any(o['area'] == 'dilution' and o['kind'] == 'weakness' for o in observations):
