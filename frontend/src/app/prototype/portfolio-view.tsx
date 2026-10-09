@@ -14,7 +14,7 @@ export type CashEntry = {on: string; kind: "deposit"|"withdrawal"|"buy"|"sell"; 
   qualified_symbol?: string; note?: string|null};
 export type CashPool = {currency: string; balance: number; overdrawn: boolean; deposited: number; withdrawn: number; spent_on_buys: number; received_from_sales: number;
   deposited_this_month: number; uncounted_trades: {transaction_id: string; qualified_symbol: string; traded_on: string}[]; entries: CashEntry[]; method: string};
-export type PortfolioSettings = {monthly_contribution: number; max_holdings: number; currency: string; is_default: boolean; recorded_at: string|null};
+export type PortfolioSettings = {monthly_contribution: number; max_holdings: number; fractional_shares: boolean; currency: string; is_default: boolean; recorded_at: string|null};
 export type Portfolio = {as_of: string; method: string; positions: Position[]; closed_positions: Position[]; totals: Total[]; transactions: Transaction[]; currencies: string[];
   account_currency: string; cash: CashPool; settings: PortfolioSettings};
 
@@ -143,16 +143,18 @@ export function CashPanel({cash, settings, holdings, today, busy, onCash, onVoid
   </section>;
 }
 
-export type SettingsDraft = {monthly_contribution: string; max_holdings: string};
+export type SettingsDraft = {monthly_contribution: string; max_holdings: string; fractional_shares: boolean};
 
 export function SettingsPanel({settings, busy, onSave}: {settings: PortfolioSettings; busy: boolean; onSave: (draft: SettingsDraft) => Promise<boolean>}) {
-  const [draft, setDraft] = useState<SettingsDraft>({monthly_contribution: String(settings.monthly_contribution), max_holdings: String(settings.max_holdings)});
+  const [draft, setDraft] = useState<SettingsDraft>({monthly_contribution: String(settings.monthly_contribution), max_holdings: String(settings.max_holdings),
+    fractional_shares: settings.fractional_shares});
   const set = (key: keyof SettingsDraft) => (e: {target: {value: string}}) => setDraft(d => ({...d, [key]: e.target.value}));
   return <section className="panel prototype-panel"><h2>Your plan</h2>
     <p>Change these whenever your plans change; earlier values are kept.{settings.is_default ? " These are the starting defaults." : ""}</p>
     <form onSubmit={e => {e.preventDefault(); onSave(draft);}} className="prototype-trade-form">
       <label>Monthly contribution ({settings.currency})<input required type="number" min="0" step="any" value={draft.monthly_contribution} onChange={set("monthly_contribution")}/></label>
       <label>Maximum holdings<input required type="number" min="1" max="30" step="1" value={draft.max_holdings} onChange={set("max_holdings")}/></label>
+      <label className="prototype-inline-check"><input type="checkbox" checked={draft.fractional_shares} onChange={e => setDraft(d => ({...d, fractional_shares: e.target.checked}))}/> My broker lets me buy part of a share (Trading 212 does)</label>
       <button disabled={busy}>{busy ? "Saving…" : "Save plan"}</button>
     </form></section>;
 }

@@ -44,7 +44,7 @@ export function AllocationView({allocation, decision, target}: {allocation: Allo
       <div className="prototype-table-wrap"><table className="prototype-holdings-table"><thead><tr><th>Order</th><th>Stock</th><th>Shares</th><th>Approx. amount</th><th>Weight after</th><th>Why</th></tr></thead><tbody>
         {orders.map(o => <tr key={o.action + o.qualified_symbol}><td><span className={`prototype-decision prototype-decision-${o.action === "SELL" || o.action === "TRIM" ? (o.action === "SELL" ? "sell" : "reduce") : "buy-more"}`}>{o.action}</span></td>
           <td>{o.security_id ? <Link href={detailHref(o.security_id, decision, target)}>{o.qualified_symbol}</Link> : o.qualified_symbol}<small>{o.company_name}</small></td>
-          <td>{o.shares.toLocaleString("en-US")}<small>at ~{usd(o.price)}</small></td><td>{account ? pounds(o.amount_gbp) : usd(o.amount)}{account && <small>{usd(o.amount)}</small>}</td>
+          <td>{o.shares.toLocaleString("en-US", {maximumFractionDigits: 4})}<small>at ~{usd(o.price)}</small></td><td>{account ? pounds(o.amount_gbp) : usd(o.amount)}{account && <small>{usd(o.amount)}</small>}</td>
           <td>{o.weight_after == null ? "—" : percent(o.weight_after)}</td><td>{o.why}</td></tr>)}
       </tbody></table></div>}
     {allocation.max_holdings != null && <p>Holdings after these orders: {allocation.holdings_after} of at most {allocation.max_holdings}.

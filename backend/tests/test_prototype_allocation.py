@@ -65,6 +65,23 @@ def test_nothing_forced_and_non_usd_ignored():
     assert allocate([], [pick('A', 0.5)], 100)['buys'] == []  # 25 USD is below the minimum purchase
 
 
+def test_fractional_shares_buy_expensive_picks_and_halve_exactly():
+    # 25% of 1000 is 250: a 2,000-dollar share cannot be bought whole, but 0.125 of one can.
+    assert allocate([], [pick('A', 0.5, price=2000)], 1000)['buys'] == []
+    plan = allocate([], [pick('A', 0.5, price=2000)], 1000, fractional=True)
+    (buy,) = plan['buys']
+    assert buy['shares'] == 0.125 and buy['amount'] == 250 and plan['fractional'] and 'fractional shares' in plan['method']
+    # Rounded down to four decimals, never up: 250 / 3000 = 0.08333... -> 0.0833.
+    (buy,) = allocate([], [pick('A', 0.5, price=3000)], 1000, fractional=True)['buys']
+    assert buy['shares'] == 0.0833 and buy['amount'] == pytest.approx(249.9)
+    holdings = [holding('O', 'REDUCE', 30, 100, upside=-0.05), holding('Z', 'REDUCE', 45, 100, upside=0.4)]
+    whole = {s['qualified_symbol']: s['shares'] for s in allocate(holdings, [], 0)['sales']}
+    part = {s['qualified_symbol']: s['shares'] for s in allocate(holdings, [], 0, fractional=True)['sales']}
+    assert whole['O'] == 1 and part['O'] == 1.5       # half of 3 shares
+    # Z holds 4.5 shares worth 45; trimming to 25% of 100 sells 20 / 10 = 2 shares either way.
+    assert whole['Z'] == 2 and part['Z'] == 2
+
+
 def test_new_names_only_while_holdings_stay_within_the_maximum():
     holdings = [holding(f'H{i}', 'HOLD', 1000, 9000, score=None) for i in range(8)] + [holding('S', 'SELL', 1000, 9000)]
     picks = [pick('A', 0.2), pick('B', 0.5), pick('C', 0.3)]

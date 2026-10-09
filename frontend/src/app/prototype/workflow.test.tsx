@@ -226,7 +226,7 @@ test("portfolio shows priced and unpriced holdings honestly and keeps voided tra
     totals:[{currency:"USD",positions:2,priced_positions:1,cost_basis:1060,priced_cost_basis:1000,market_value:1200,unrealised_profit:200,unrealised_return:0.2,realised_profit:0}],
     transactions:[{transaction_id:"a",kind:"buy",qualified_symbol:"SYN01.US",company_name:null,shares:10,price:100,fees:0,currency:"USD",traded_on:"2026-09-01",note:null,recorded_at:"",voided_at:null,void_reason:null},
       {transaction_id:"b",kind:"buy",qualified_symbol:"SYN01.US",company_name:null,shares:10,price:100,fees:0,currency:"USD",traded_on:"2026-09-01",note:null,recorded_at:"",voided_at:"2026-10-09T00:00:00+00:00",void_reason:"Entered twice."}],
-    account_currency:"GBP",settings:{monthly_contribution:250,max_holdings:10,currency:"GBP",is_default:false,recorded_at:"2026-10-01T00:00:00+00:00"},
+    account_currency:"GBP",settings:{monthly_contribution:250,max_holdings:10,fractional_shares:true,currency:"GBP",is_default:false,recorded_at:"2026-10-01T00:00:00+00:00"},
     cash:{currency:"GBP",balance:195,overdrawn:false,deposited:235,withdrawn:0,spent_on_buys:150,received_from_sales:110,deposited_this_month:0,
       uncounted_trades:[{transaction_id:"a",qualified_symbol:"SYN01.US",traded_on:"2026-09-01"}],method:"Confirmed deposits.",
       entries:[{on:"2026-09-15",kind:"sell",amount:110,balance:195,transaction_id:"s",qualified_symbol:"OLD.US"},{on:"2026-09-04",kind:"buy",amount:-150,balance:85,transaction_id:"x",qualified_symbol:"NEW.US"},
@@ -249,6 +249,7 @@ test("portfolio shows priced and unpriced holdings honestly and keeps voided tra
   assert.match(html,/1 earlier trade has no GBP total/);
   assert.match(html,/value="250"/);
   assert.match(html,/Total paid in GBP/);
+  assert.match(html,/buy part of a share \(Trading 212 does\)/);
   assert.ok(html.includes(detailHref("synthetic-01","2026-10-02T12:00:00Z").replaceAll("&","&amp;")));
   assert.doesNotMatch(html,/<img/);
   assert.match(html,/SignalLens never places orders/);
@@ -311,10 +312,11 @@ test("allocation lists sales then buys, the cash left and never executes",()=>{
   assert.match(none,/Holding cash is a valid outcome/);
   const pooled=renderToStaticMarkup(<AllocationView decision="2026-10-09T00:00:00Z" target={15} allocation={{...allocation,max_holdings:10,holdings_after:10,
     skipped_no_slot:[{qualified_symbol:"WAIT.US",security_id:"w",company_name:"Waiting"}],
-    buys:[{...allocation.buys[0],amount_gbp:1135.73}],
+    buys:[{...allocation.buys[0],shares:0.1234,amount_gbp:1135.73}],
     account:{currency:"GBP",cash_pool:640,overdrawn:false,uncounted_trades:0,deposited_this_month:0,monthly_contribution:200,contribution_included:0,available:640,
       gbp_per_usd:{rate:0.8,observed_on:"2026-10-08",source:"stored"},sale_proceeds:640,invested:1200,left_as_cash:80}}}/>);
   assert.match(pooled,/£640\.00 in the cash pool/);
+  assert.match(pooled,/>0\.1234</);
   assert.match(pooled,/£1,135\.73/);
   assert.match(pooled,/£80\.00<\/b> stays as cash for later/);
   assert.match(pooled,/contribution isn&#x27;t recorded yet/);

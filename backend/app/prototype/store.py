@@ -38,7 +38,7 @@ CASH_KINDS = ('deposit', 'withdrawal')
 MAX_CONTRIBUTION = 1e6
 MAX_HOLDINGS_LIMIT = 30
 # Defaults until the operator saves their own; the contribution is expected to change.
-DEFAULT_SETTINGS = {'monthly_contribution': 200.0, 'max_holdings': 10}
+DEFAULT_SETTINGS = {'monthly_contribution': 200.0, 'max_holdings': 10, 'fractional_shares': True}
 # EODHD-style symbol: ticker plus exchange suffix, e.g. AAPL.US or BRK-B.US.
 SYMBOL = re.compile(r'^[A-Z0-9][A-Z0-9.\-]{0,19}\.[A-Z]{2,6}$')
 SCHEMA = """
@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS cash_movements(
 CREATE TABLE IF NOT EXISTS portfolio_settings(
   setting_id VARCHAR PRIMARY KEY, monthly_contribution DOUBLE NOT NULL, max_holdings INTEGER NOT NULL,
   recorded_at TIMESTAMPTZ NOT NULL);
+ALTER TABLE portfolio_settings ADD COLUMN IF NOT EXISTS fractional_shares BOOLEAN;
 """
 
 
@@ -357,10 +358,13 @@ class PrototypeStore:
             if self._has_table('portfolio_settings') else []
         if not rows: return DEFAULT_SETTINGS | {'currency': ACCOUNT_CURRENCY, 'is_default': True, 'recorded_at': None}
         row = rows[0]
+        # Rows saved before the fractional choice existed keep the default.
+        fractional = row.get('fractional_shares')
         return {'monthly_contribution': row['monthly_contribution'], 'max_holdings': row['max_holdings'],
+                'fractional_shares': DEFAULT_SETTINGS['fractional_shares'] if fractional is None else bool(fractional),
                 'currency': ACCOUNT_CURRENCY, 'is_default': False, 'recorded_at': row['recorded_at']}
 
-    def save_settings(self, *, monthly_contribution, max_holdings):
+    def save_settings(self, *, monthly_contribution, max_holdings, fractional_shares=True):
         """Save new settings as a new row; earlier values stay in the history."""
         try: contribution, limit = float(monthly_contribution), float(max_holdings)
         except (TypeError, ValueError): raise StoreError('PROTOTYPE_INVALID_SETTINGS') from None
@@ -368,7 +372,8 @@ class PrototypeStore:
                 or not (limit.is_integer() and 1 <= limit <= MAX_HOLDINGS_LIMIT):
             raise StoreError('PROTOTYPE_INVALID_SETTINGS')
         with self._connect(True) as db:
-            db.execute('INSERT INTO portfolio_settings VALUES (?, ?, ?, ?)', [uuid.uuid4().hex, contribution, int(limit), _now()])
+            db.execute('INSERT INTO portfolio_settings (setting_id, monthly_contribution, max_holdings, recorded_at, fractional_shares) '
+                       'VALUES (?, ?, ?, ?, ?)', [uuid.uuid4().hex, contribution, int(limit), _now(), bool(fractional_shares)])
         return self.settings()
 
     # Alerts ------------------------------------------------------------------
