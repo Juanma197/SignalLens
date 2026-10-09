@@ -125,6 +125,7 @@ class CashVoidRequest(BaseModel):
 class SettingsRequest(BaseModel):
     monthly_contribution: float = Field(ge=0, le=1e6)
     max_holdings: int = Field(ge=1, le=MAX_HOLDINGS_LIMIT)
+    fractional_shares: bool = True
 
 
 class CheckSetRequest(BaseModel):
@@ -297,7 +298,8 @@ def void_cash(request: CashVoidRequest):
 @router.post('/store/portfolio/settings')
 def save_settings(request: SettingsRequest):
     """Change the monthly contribution or the maximum number of holdings; earlier values are kept."""
-    _call(_store(write=True).save_settings, monthly_contribution=request.monthly_contribution, max_holdings=request.max_holdings)
+    _call(_store(write=True).save_settings, monthly_contribution=request.monthly_contribution, max_holdings=request.max_holdings,
+          fractional_shares=request.fractional_shares)
     return portfolio()
 
 
@@ -416,7 +418,8 @@ def _allocation(store, trades, holdings, picks, decision, *, include_contributio
         try: _MARKET[key] = read_gbp_rate(settings.research_database_path, 'USD', decision)
         except PrototypeError: _MARKET[key] = None
     fx = _MARKET[key] or implied_gbp_rate(trades, 'USD', until=decision.date())
-    plan = allocate(holdings, picks, available / fx['rate'] if fx else 0.0, reinvest=reinvest, max_holdings=config['max_holdings'])
+    plan = allocate(holdings, picks, available / fx['rate'] if fx else 0.0, reinvest=reinvest, max_holdings=config['max_holdings'],
+                    fractional=config['fractional_shares'])
     def gbp(usd): return usd * fx['rate'] if fx else None
     for order in plan['sales'] + plan['buys']: order['amount_gbp'] = gbp(order['amount'])
     return plan | {'account': {

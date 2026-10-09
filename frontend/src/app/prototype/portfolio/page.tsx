@@ -27,7 +27,7 @@ function PortfolioPage() {
     fees: Number(d.fees || 0), currency: d.currency, traded_on: d.traded_on, company_name: d.company_name || null, note: d.note || null,
     account_amount: d.currency === portfolio?.account_currency || !d.account_amount ? null : Number(d.account_amount)});
   const cash = (d: CashDraft) => run("portfolio/cash", {kind: d.kind, amount: Number(d.amount), moved_on: d.moved_on, note: d.note || null});
-  const settings = (d: SettingsDraft) => run("portfolio/settings", {monthly_contribution: Number(d.monthly_contribution), max_holdings: Number(d.max_holdings)});
+  const settings = (d: SettingsDraft) => run("portfolio/settings", {monthly_contribution: Number(d.monthly_contribution), max_holdings: Number(d.max_holdings), fractional_shares: d.fractional_shares});
   function voidCash(id: string) {
     const reason = window.prompt("Void this cash movement? It stays in the history marked as voided. Reason (optional):");
     if (reason !== null) run("portfolio/cash/voids", {movement_id: id, reason: reason || null});

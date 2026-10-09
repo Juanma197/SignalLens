@@ -7,7 +7,9 @@ ranking score, without any position ending above the buying limit of the
 portfolio after the trades. Money that has nowhere to go stays as cash rather
 than being forced into weaker names. New names are only opened while the
 portfolio stays within its maximum number of holdings (a cap, not a target):
-when slots are short, the highest-scoring picks get them. Whole shares only; USD positions only,
+when slots are short, the highest-scoring picks get them. Shares are whole, or
+fractional to four decimals when the broker allows it (Trading 212 does), so a
+small monthly amount can still buy a high-priced stock. USD positions only,
 because the picks are US-listed. Suggestions only: nothing is executed.
 """
 import math
@@ -18,10 +20,18 @@ RULES = {
     'position_limit': DECISION_RULES['maximum_position_weight_for_buying'],
     'reduce_overvalued_fraction': 0.5,
     'minimum_purchase_usd': 50.0,
+    'fraction_decimals': 4,
 }
 
 
-def _sales(holdings):
+def _round(shares, fractional, rounding):
+    """Shares rounded with `rounding` (math.floor or math.ceil) to a whole share or to the fraction step."""
+    step = 10 ** RULES['fraction_decimals'] if fractional else 1
+    nudge = -1e-9 if rounding is math.ceil else 1e-9  # keep float noise from crossing a step
+    return rounding(shares * step + nudge) / step
+
+
+def _sales(holdings, fractional):
     sales = []
     for h in holdings:
         if h['currency'] != 'USD' or not h.get('price') or h['decision'] not in ('SELL', 'REDUCE'): continue
@@ -29,11 +39,11 @@ def _sales(holdings):
         if h['decision'] == 'SELL':
             sell, why = shares, 'Sell the whole position.'
         elif (h['evidence'].get('upside') or 0) < DECISION_RULES['reduce_below_upside']:
-            sell, why = math.floor(shares * RULES['reduce_overvalued_fraction']), 'Sell half: the price is above the middle-case value.'
+            sell, why = _round(shares * RULES['reduce_overvalued_fraction'], fractional, math.floor), 'Sell half: the price is above the middle-case value.'
         else:
             total = h['market_value'] / h['weight']
             excess = h['market_value'] - RULES['position_limit'] * total
-            sell, why = math.ceil(excess / close), f'Trim back to {RULES["position_limit"]:.0%} of the portfolio.'
+            sell, why = _round(excess / close, fractional, math.ceil), f'Trim back to {RULES["position_limit"]:.0%} of the portfolio.'
         sell = min(shares, max(0, sell))
         if sell > 0:
             sales.append({'action': 'SELL' if sell == shares else 'TRIM', 'qualified_symbol': h['qualified_symbol'], 'security_id': h['security_id'],
@@ -41,10 +51,10 @@ def _sales(holdings):
     return sales
 
 
-def allocate(holdings, picks, cash, *, reinvest=True, max_holdings=None):
+def allocate(holdings, picks, cash, *, reinvest=True, max_holdings=None, fractional=False):
     """`holdings` and `picks` as produced for the monthly view; `cash` in USD."""
     cash = max(0.0, float(cash or 0))
-    sales = _sales(holdings)
+    sales = _sales(holdings, fractional)
     proceeds = sum(s['amount'] for s in sales)
     available = cash + (proceeds if reinvest else 0.0)
     value = {h['security_id'] or h['qualified_symbol']: h['market_value'] for h in holdings
@@ -90,7 +100,7 @@ def allocate(holdings, picks, cash, *, reinvest=True, max_holdings=None):
         active = [t for t in active if t not in capped]
     buys = []
     for t in targets:
-        shares = math.floor(planned[t['security_id']] / t['price'])
+        shares = _round(planned[t['security_id']] / t['price'], fractional, math.floor)
         amount = shares * t['price']
         if amount < RULES['minimum_purchase_usd']: continue
         buys.append({k: t[k] for k in ('action', 'security_id', 'qualified_symbol', 'company_name', 'price', 'score')}
@@ -101,7 +111,7 @@ def allocate(holdings, picks, cash, *, reinvest=True, max_holdings=None):
             'skipped_no_slot': [{k: t[k] for k in ('qualified_symbol', 'security_id', 'company_name')} for t in no_slot],
             'new_cash': cash, 'reinvest_sales': reinvest, 'sale_proceeds': proceeds, 'available': available,
             'sales': sales, 'buys': buys, 'invested': spent, 'left_as_cash': available - spent if reinvest else cash - spent + proceeds,
-            'portfolio_after': total, 'rules': RULES,
-            'method': 'Sales first; then money split by ranking score, no position above the limit after the trades; whole shares; '
-                      'the rest stays as cash. USD positions only.',
+            'portfolio_after': total, 'rules': RULES, 'fractional': fractional,
+            'method': 'Sales first; then money split by ranking score, no position above the limit after the trades; '
+                      + ('fractional shares; ' if fractional else 'whole shares; ') + 'the rest stays as cash. USD positions only.',
             'label': 'Suggested orders for you to review and place yourself. Nothing is executed.'}

@@ -56,7 +56,8 @@ def test_implied_rate_comes_from_the_latest_trade_with_pounds():
 
 def test_store_cash_movements_trade_pounds_and_settings(paths):
     store = PrototypeStore(paths[2], protected_paths=paths[:2])
-    assert store.settings() == {'monthly_contribution': 200.0, 'max_holdings': 10, 'currency': 'GBP', 'is_default': True, 'recorded_at': None}
+    assert store.settings() == {'monthly_contribution': 200.0, 'max_holdings': 10, 'fractional_shares': True, 'currency': 'GBP',
+                                'is_default': True, 'recorded_at': None}
     assert store.cash_movements() == [] and not paths[2].exists()
     deposit = store.record_cash('deposit', 200, '2026-10-01', today=TODAY)
     store.record_cash('withdrawal', 20, '2026-10-02', note='Fees', today=TODAY)
@@ -76,14 +77,26 @@ def test_store_cash_movements_trade_pounds_and_settings(paths):
     amounts = {t['qualified_symbol']: t['account_amount'] for t in store.trades()}
     assert amounts == {'VOD.LSE': pytest.approx(8), 'SYN01.US': 160.5, 'SYN02.US': None}
     saved = store.save_settings(monthly_contribution=150, max_holdings=8)
-    assert saved['monthly_contribution'] == 150 and saved['max_holdings'] == 8 and not saved['is_default']
+    assert saved['monthly_contribution'] == 150 and saved['max_holdings'] == 8 and not saved['is_default'] and saved['fractional_shares']
+    assert not store.save_settings(monthly_contribution=150, max_holdings=8, fractional_shares=False)['fractional_shares']
     for bad in [dict(monthly_contribution=-1), dict(monthly_contribution=float('inf')), dict(max_holdings=0), dict(max_holdings=2.5)]:
         with pytest.raises(StoreError, match='PROTOTYPE_INVALID_SETTINGS'):
             store.save_settings(**({'monthly_contribution': 200, 'max_holdings': 10} | bad))
     store.save_settings(monthly_contribution=0, max_holdings=10)  # skipping contributions is allowed
     assert store.settings()['monthly_contribution'] == 0
     with duckdb.connect(str(paths[2]), read_only=True) as db:
-        assert db.execute('SELECT count(*) FROM portfolio_settings').fetchone()[0] == 2  # history kept
+        assert db.execute('SELECT count(*) FROM portfolio_settings').fetchone()[0] == 3  # history kept
+
+
+def test_settings_saved_before_the_fractional_choice_default_to_fractional(paths):
+    paths[2].parent.mkdir(parents=True)
+    with duckdb.connect(str(paths[2])) as db:
+        db.execute("""CREATE TABLE portfolio_settings(setting_id VARCHAR PRIMARY KEY, monthly_contribution DOUBLE NOT NULL,
+                      max_holdings INTEGER NOT NULL, recorded_at TIMESTAMPTZ NOT NULL)""")
+        db.execute("INSERT INTO portfolio_settings VALUES ('old', 250, 8, now())")
+    store = PrototypeStore(paths[2], protected_paths=paths[:2])
+    assert store.settings()['fractional_shares'] is True and store.settings()['max_holdings'] == 8
+    assert store.save_settings(monthly_contribution=250, max_holdings=8, fractional_shares=False)['fractional_shares'] is False
 
 
 def test_a_store_from_before_cash_tracking_still_reads(paths):
@@ -122,6 +135,7 @@ def test_portfolio_api_cash_and_settings(paths, monkeypatch):
         assert client.post(f'{root}/cash/voids', headers=headers, json={'movement_id': movement_id}).json()['cash']['balance'] == -79
         assert client.post(f'{root}/cash/voids', headers=headers, json={'movement_id': 'nope'}).status_code == 404
         assert client.post(f'{root}/cash', headers=headers, json={'kind': 'gift', 'amount': 1, 'moved_on': '2026-09-01'}).status_code == 422
-        body = client.post(f'{root}/settings', headers=headers, json={'monthly_contribution': 300, 'max_holdings': 6}).json()
+        body = client.post(f'{root}/settings', headers=headers, json={'monthly_contribution': 300, 'max_holdings': 6, 'fractional_shares': False}).json()
         assert body['settings']['monthly_contribution'] == 300 and body['settings']['max_holdings'] == 6
+        assert body['settings']['fractional_shares'] is False
         assert client.post(f'{root}/settings', headers=headers, json={'monthly_contribution': 300, 'max_holdings': 0}).status_code == 422
