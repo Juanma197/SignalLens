@@ -9,6 +9,7 @@ THURSDAY_EVENING = datetime(2026, 10, 8, 22, 45, tzinfo=timezone.utc)
 
 
 def job(tmp_path, runner=None, **settings):
+    settings.setdefault('alerts_utc_time', '22:30')
     s = Settings(persistent_volume_path=tmp_path, research_database_path=tmp_path / 'research' / 'r.duckdb',
                  database_path=tmp_path / 'p.duckdb', alerts_enabled=True, **settings)
     return DailyAlertJob(s, runner=runner, notifier_factory=lambda: 'notifier', quiescence_seconds=0)

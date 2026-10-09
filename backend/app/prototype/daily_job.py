@@ -1,7 +1,8 @@
 """Runs the holding alerts once each weekday inside the backend process.
 
 Off unless SIGNALLENS_ALERTS_ENABLED=true. At SIGNALLENS_ALERTS_UTC_TIME (default
-22:30, after the US close) on weekdays, the job takes the research maintenance
+12:00, before the US open, so a message can be acted on that day; it uses the
+previous close and filings published overnight) on weekdays, the job takes the research maintenance
 lock: API requests that would read the databases get "temporarily unavailable"
 (503, retry in seconds) for the few minutes the update writes, because DuckDB
 allows one writer and no simultaneous readers. If another maintenance operation

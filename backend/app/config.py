@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     staging_mode: bool = False
     # Daily holding alerts (app.prototype.daily_job): off unless enabled; weekdays at this UTC time.
     alerts_enabled: bool = False
-    alerts_utc_time: str = "22:30"
+    alerts_utc_time: str = "12:00"  # before the US open (13:30 UTC summer, 14:30 winter)
     operations_history_limit: int = 20
 
     model_config = SettingsConfigDict(

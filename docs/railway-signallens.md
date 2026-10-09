@@ -28,7 +28,7 @@ Larger volumes may need a paid Railway plan; check the price shown there.
 Non-secret (can be set from the CLI):
 
 ```powershell
-railway variables --service SignalLens --set "SIGNALLENS_PROTOTYPE_DATABASE_PATH=/data/prototype/signallens-prototype.duckdb" --set "SIGNALLENS_PROTOTYPE_WRITES_ENABLED=true" --set "SIGNALLENS_ALERTS_ENABLED=true" --set "SIGNALLENS_ALERTS_UTC_TIME=22:30" --set "SIGNALLENS_PUBLIC_URL=https://worthy-patience-production-2030.up.railway.app"
+railway variables --service SignalLens --set "SIGNALLENS_PROTOTYPE_DATABASE_PATH=/data/prototype/signallens-prototype.duckdb" --set "SIGNALLENS_PROTOTYPE_WRITES_ENABLED=true" --set "SIGNALLENS_ALERTS_ENABLED=true" --set "SIGNALLENS_ALERTS_UTC_TIME=12:00" --set "SIGNALLENS_PUBLIC_URL=https://worthy-patience-production-2030.up.railway.app"
 ```
 
 Secrets: set them in the dashboard (service `SignalLens` → Variables) so they never
@@ -65,8 +65,10 @@ After the widening has finished locally and the prototype is stopped:
 - Afterwards: a message only when a holding's decision or thesis status changes,
   and a short Friday summary.
 
-During the daily run (a few minutes after 22:30 UTC on weekdays) the website shows
-"temporarily unavailable" for research pages; reload after a minute.
+The daily run is at 12:00 UTC on weekdays: before the US open (13:30 UTC in
+summer, 14:30 in winter), so a message can be acted on the same day. It uses the
+previous close and filings published overnight. During the few minutes it runs the
+website shows "temporarily unavailable" for research pages; reload after a minute.
 
 ## Monthly
 
