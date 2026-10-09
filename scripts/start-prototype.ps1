@@ -119,7 +119,7 @@ try {
     Write-Host "Open:     http://127.0.0.1:3015/prototype?decision_at=$Cutoff"
     if ($LoginSource) { Write-Host "Login:    your configured dashboard username and password (from $LoginSource)" }
     else { Write-Host "Login:    $Username / $Password  (one-time; set SIGNALLENS_DASHBOARD_USERNAME/PASSWORD to use your own)" }
-    Write-Host "Store:    $PrototypeDb (watchlist, notes, snapshots)"
+    Write-Host "Store:    $PrototypeDb (watchlist, notes, theses, snapshots, trades)"
     Write-Host "Cutoff:   $Cutoff  (paste it into the form; each new cutoff takes ~10 s on operator data)"
     [void](Read-Host "Press Enter to stop the two services started by this script")
 } finally {

@@ -10,6 +10,10 @@ review is required before any freeze. Track A/B are unchanged and validation cre
 runbook](docs/prototype-first-slice.md). Watchlist/snapshot persistence and subsequent
 performance tracking are deferred to a separate prototype database.
 
+`/prototype/portfolio` records your own trades (append-only, voidable) and shows
+holdings at average cost, valued at the latest stored close. It is the first step
+towards monthly BUY MORE / HOLD / REDUCE / SELL decisions per holding.
+
 ## Milestone 36: investment-grade research foundation
 
 SignalLens now provides strictly read-only investment coverage, repair-planning,
