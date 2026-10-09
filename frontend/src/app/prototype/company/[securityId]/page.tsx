@@ -5,6 +5,7 @@ import {Suspense} from "react";
 import Link from "next/link";
 import {CompanyView,Detail,PrototypeNotice} from "../../view";
 import {ThesisPanel, WatchAndNotes} from "../../store-view";
+import {ThesisChecksPanel} from "../../checks-view";
 
 function CompanyDetail() {
   const {securityId}=useParams<{securityId:string}>(); const query=useSearchParams();
@@ -22,6 +23,6 @@ function CompanyDetail() {
     }).catch(e=>{if(!controller.signal.aborted)setFailure({key,error:e instanceof Error?e.message:"PROTOTYPE_SERVICE_UNAVAILABLE"});});
     return ()=>controller.abort();
   },[securityId,cutoff,target,key]);
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Prototype company detail</strong><Link href={cutoff?`/prototype?decision_at=${encodeURIComponent(cutoff)}`:"/prototype"}>Back to shortlist</Link></nav><PrototypeNotice/>{error?<p role="alert" className="notice warning">{error}</p>:detail?<><CompanyView detail={detail}/><ThesisPanel securityId={detail.company.security_id}/><WatchAndNotes securityId={detail.company.security_id} symbol={detail.company.qualified_symbol} name={detail.company.company_name}/></>:<p role="status">Reading stored evidence…</p>}</main>;
+  return <main className="research-page"><nav><span className="mark">SL</span><strong>Prototype company detail</strong><Link href={cutoff?`/prototype?decision_at=${encodeURIComponent(cutoff)}`:"/prototype"}>Back to shortlist</Link></nav><PrototypeNotice/>{error?<p role="alert" className="notice warning">{error}</p>:detail?<><CompanyView detail={detail}/><ThesisPanel securityId={detail.company.security_id}/><ThesisChecksPanel securityId={detail.company.security_id} cutoff={cutoff!} target={target}/><WatchAndNotes securityId={detail.company.security_id} symbol={detail.company.qualified_symbol} name={detail.company.company_name}/></>:<p role="status">Reading stored evidence…</p>}</main>;
 }
 export default function Page(){return <Suspense fallback={<p>Loading company detail…</p>}><CompanyDetail/></Suspense>;}

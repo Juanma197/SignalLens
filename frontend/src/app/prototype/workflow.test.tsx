@@ -9,6 +9,7 @@ import {AnalystBriefView,CompanyView,EventsView,FinancialHealthView,PrototypeNot
 import {SnapshotView, ThesisHistory} from "./store-view";
 import {ValueRankingView, type ValueRanking} from "./value-view";
 import {PortfolioView, type Portfolio} from "./portfolio-view";
+import {ChecksOverview, type ChecksReport} from "./checks-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
 // No provider, browser download, credentials or operator database is used.
@@ -232,4 +233,23 @@ test("portfolio shows priced and unpriced holdings honestly and keeps voided tra
   assert.ok(html.includes(detailHref("synthetic-01","2026-10-02T12:00:00Z").replaceAll("&","&amp;")));
   assert.doesNotMatch(html,/<img/);
   assert.match(html,/SignalLens never places orders/);
+});
+
+test("thesis checks show broken conditions first, automatic signs and uncovered holdings",()=>{
+  const report:ChecksReport={decision_at:"2026-10-09T00:00:00+00:00",method:"Re-evaluated.",synthetic_fixture:false,metrics:[],uncovered_holdings:["MSFT.US"],companies:[
+    {security_id:"a",qualified_symbol:"AAA.US",company_name:"<i>A</i>",overall:"broken",interest:["held"],fiscal_year_end:"2025-12-31",has_own_checks:true,
+      checks:[{metric:"operating_margin",comparator:"at_least",threshold:0.1,note:"Pricing power.",label:"Operating margin",unit:"fraction",value:0.072,status:"broken",reason:null,fiscal_year_end:"2025-12-31"},
+        {metric:"free_cash_flow",comparator:"at_least",threshold:0,note:null,label:"Free cash flow",unit:"usd",value:null,status:"unknown",reason:"No visible value at this cutoff.",fiscal_year_end:null}],
+      automatic:[{kind:"filing_risk",severity:"warning",text:"Auditor change."}]},
+    {security_id:"b",qualified_symbol:"BBB.US",company_name:null,overall:"intact",interest:["watched"],has_own_checks:false,checks:[],automatic:[]}]};
+  const html=renderToStaticMarkup(<ChecksOverview report={report} target="15"/>);
+  assert.match(html,/1 broken · 0 warning · 0 not fully checkable · 1 intact/);
+  assert.match(html,/Thesis broken/);
+  assert.match(html,/Operating margin at least 10%: now <b>7\.2%<\/b>/);
+  assert.match(html,/Pricing power\./);
+  assert.match(html,/No visible value at this cutoff\./);
+  assert.match(html,/Auditor change\..*Automatic check/);
+  assert.match(html,/Held but outside SignalLens data, so not checked: MSFT\.US/);
+  assert.match(html,/no conditions of your own yet/);
+  assert.doesNotMatch(html,/<i>A<\/i>/);
 });

@@ -213,8 +213,9 @@ def _observations(years):
 
 def summary_only(brief):
     """Observations without the yearly tables, for companies outside the eligible
-    roster, keeping the report bounded."""
+    roster, keeping the report bounded. The latest year alone is kept for thesis checks."""
     return {'years': [], 'fiscal_years_available': len(brief['years']), 'observations': brief['observations'],
+            'latest_year': brief['years'][-1] if brief['years'] else None,
             'method': brief['method'], 'rules': brief['rules'], 'not_available': brief['not_available'],
             'tables_omitted': 'Yearly tables are shown for eligible companies only.'}
 

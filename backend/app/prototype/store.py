@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS monthly_snapshots(
   snapshot_id VARCHAR PRIMARY KEY, month VARCHAR NOT NULL UNIQUE, decision_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL, version VARCHAR NOT NULL, configuration_hash VARCHAR NOT NULL,
   synthetic_fixture BOOLEAN NOT NULL, report_sha256 VARCHAR NOT NULL, report_json VARCHAR NOT NULL);
+CREATE TABLE IF NOT EXISTS thesis_check_sets(
+  set_id VARCHAR PRIMARY KEY, security_id VARCHAR NOT NULL, checks_json VARCHAR NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE IF NOT EXISTS portfolio_transactions(
   transaction_id VARCHAR PRIMARY KEY, kind VARCHAR NOT NULL CHECK(kind IN ('buy', 'sell', 'void')),
   qualified_symbol VARCHAR, company_name VARCHAR, shares DOUBLE, price DOUBLE, fees DOUBLE,
@@ -172,6 +175,37 @@ class PrototypeStore:
             return self._rows('SELECT * FROM research_theses ORDER BY recorded_at DESC, thesis_id DESC')
         return self._rows('SELECT * FROM research_theses WHERE security_id = ? ORDER BY recorded_at DESC, thesis_id DESC',
                           [_security_id(security_id)])
+
+    # Thesis checks -----------------------------------------------------------
+    def _has_table(self, name):
+        if not self.path.is_file(): return False
+        with duckdb.connect(str(self.path), read_only=True) as db:
+            return bool(db.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [name]).fetchone()[0])
+
+    def add_check_set(self, security_id, checks):
+        """Record the full set of conditions as a new version (an empty set clears them)."""
+        from .checks import CheckError, validate
+        sid = _security_id(security_id)
+        try: checks = validate(checks)
+        except CheckError as exc: raise StoreError(exc.code) from None
+        with self._connect(True) as db:
+            db.execute('INSERT INTO thesis_check_sets VALUES (?, ?, ?, ?)',
+                       [uuid.uuid4().hex, sid, json.dumps(checks, sort_keys=True), _now()])
+        return self.check_sets(sid)
+
+    def check_sets(self, security_id=None):
+        """Check-set versions, newest first, with the checks decoded."""
+        if not self._has_table('thesis_check_sets'): return []
+        where, args = ('WHERE security_id = ?', [_security_id(security_id)]) if security_id is not None else ('', [])
+        rows = self._rows(f'SELECT * FROM thesis_check_sets {where} ORDER BY recorded_at DESC, set_id DESC', args)
+        for row in rows: row['checks'] = json.loads(row.pop('checks_json'))
+        return rows
+
+    def current_checks(self):
+        """Latest check set per company."""
+        latest = {}
+        for row in self.check_sets(): latest.setdefault(row['security_id'], row['checks'])
+        return latest
 
     # Trades ------------------------------------------------------------------
     def _has_trades_table(self):
