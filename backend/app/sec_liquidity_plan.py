@@ -18,6 +18,7 @@ from .sec_liquidity_contract import operation_identity
 
 CONCEPTS = tuple(STANDARD_CONCEPTS)
 DEFAULT_REQUEST_BUDGET = 205
+MAX_REQUEST_BUDGET = 6_000  # about 2,500 issuers at two requests each
 PLAN_LIFETIME = timedelta(minutes=15)
 SAMPLE_LIMIT = 10
 ARTIFACT_TABLES = ("sec_companyfacts_payloads", "sec_provider_payloads")
@@ -99,8 +100,8 @@ def _bounded(values: list[str]) -> dict[str, Any]:
 def plan_sec_liquidity_evidence_ingestion(*, research_db: Path, production_db: Path,
         decision_at: Any, max_request_budget: int=DEFAULT_REQUEST_BUDGET,
         generated_at: datetime | None=None) -> dict[str, Any]:
-    if not 0 <= max_request_budget <= DEFAULT_REQUEST_BUDGET:
-        raise ValueError("maximum request budget must be between 0 and 205")
+    if not 0 <= max_request_budget <= MAX_REQUEST_BUDGET:
+        raise ValueError(f"maximum request budget must be between 0 and {MAX_REQUEST_BUDGET}")
     decision,population,raw,canonical,issuers,sources,immutability=_load(
         research_db,production_db,decision_at)
     security_ids={sid for sid,_ in population}; symbols=dict(population)

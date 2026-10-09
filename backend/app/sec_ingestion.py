@@ -70,6 +70,12 @@ CREATE TABLE IF NOT EXISTS sec_failures(
 """
 
 
+# Run ceilings: about 2,500 companies at two requests each, within SEC's
+# 10 requests/second at the default pacing.
+MAX_REQUESTS = 6_000
+MAX_RUNTIME_SECONDS = 14_400
+
+
 @dataclass(frozen=True)
 class IngestionLimits:
     max_requests: int = 205
@@ -80,8 +86,8 @@ class IngestionLimits:
     max_response_bytes: int = 5_000_000
 
     def __post_init__(self) -> None:
-        if not 1 <= self.max_requests <= 205: raise ValueError("max_requests out of range")
-        if not 1 <= self.runtime_seconds <= 3600: raise ValueError("runtime_seconds out of range")
+        if not 1 <= self.max_requests <= MAX_REQUESTS: raise ValueError("max_requests out of range")
+        if not 1 <= self.runtime_seconds <= MAX_RUNTIME_SECONDS: raise ValueError("runtime_seconds out of range")
         if not 1 <= self.max_attempts <= 3: raise ValueError("max_attempts out of range")
         if not .1 <= self.pacing_seconds <= 2: raise ValueError("pacing_seconds out of range")
         if not 1 <= self.timeout_seconds <= 60: raise ValueError("timeout_seconds out of range")
@@ -308,13 +314,17 @@ def ingest(*, research: Path, production: Path, authorization: str | None, dry_r
             with duckdb.connect(str(research)) as db:
                 db.begin()
                 db.execute("INSERT OR IGNORE INTO sec_issuers VALUES (?,?,?,?,?,?,?)",[item["security_id"],item["qualified_symbol"],ticker,cik,None,SEC_TICKERS,timestamp])
+                # The company's stored facts, read once (per-row lookups rescan the whole table).
+                stored=db.execute("""SELECT taxonomy,concept,unit,period_start,period_end,accession_number,value
+                    FROM sec_facts WHERE security_id=?""",[item["security_id"]]).fetchall()
+                # Dates compare as ISO text: stored rows hold DATE values, parsed rows strings.
+                text=lambda v: None if v is None else str(v)
+                exact={(t,c,u,text(a),text(b),acc,float(v)) for t,c,u,a,b,acc,v in stored}; periods={k[:5] for k in exact}
                 for row in rows:
-                    existing=db.execute("""SELECT count(*) FROM sec_facts WHERE security_id=? AND taxonomy=? AND concept=? AND unit=?
-                        AND period_start IS NOT DISTINCT FROM ? AND period_end=? AND accession_number=? AND value=?""",
-                        [item["security_id"],row["taxonomy"],row["concept"],row["unit"],row["period_start"],row["period_end"],row["accession"],row["value"]]).fetchone()[0]
-                    if existing: unchanged+=1; continue
-                    revision=bool(db.execute("""SELECT count(*) FROM sec_facts WHERE security_id=? AND taxonomy=? AND concept=? AND unit=?
-                        AND period_start IS NOT DISTINCT FROM ? AND period_end=?""",[item["security_id"],row["taxonomy"],row["concept"],row["unit"],row["period_start"],row["period_end"]]).fetchone()[0])
+                    period=(row["taxonomy"],row["concept"],row["unit"],text(row["period_start"]),text(row["period_end"]))
+                    if period+(row["accession"],float(row["value"])) in exact: unchanged+=1; continue
+                    revision=period in periods
+                    exact.add(period+(row["accession"],float(row["value"]))); periods.add(period)
                     db.execute("INSERT OR IGNORE INTO sec_filings VALUES (?,?,?,?,?,?,?,?)",[cik,row["accession"],row["form"],row["filed_at"],row["public_at"],row["amendment"],SEC_SUBMISSIONS.format(cik=cik),timestamp])
                     key_parts=[item["security_id"],row["taxonomy"],row["concept"],row["unit"],
                         row["period_start"],row["period_end"],row["accession"],row["value"]]

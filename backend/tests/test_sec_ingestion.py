@@ -195,3 +195,17 @@ def test_duckdb_scalar_and_mixed_aggregate_values_are_json_safe():
         "(null)": 2, "USD": 3, "complete": 1,
     }
     assert _json_value(datetime(2026, 1, 2, tzinfo=timezone.utc)) == "2026-01-02T00:00:00+00:00"
+
+
+def test_reingesting_a_company_recognises_its_stored_facts(tmp_path):
+    """Stored DATE periods and parsed ISO-text periods must compare equal, so a
+    re-run (e.g. after its checkpoint is cleared) inserts nothing new."""
+    research,production=databases(tmp_path)
+    first=run(research,production)
+    with duckdb.connect(str(research)) as db:
+        before=db.execute("SELECT count(*) FROM sec_facts").fetchone()[0]
+        db.execute("DELETE FROM sec_checkpoints")
+    again=run(research,production)
+    assert again["selected"]==1 and again["inserted"]==0 and again["unchanged"]==first["inserted"]
+    with duckdb.connect(str(research),read_only=True) as db:
+        assert db.execute("SELECT count(*) FROM sec_facts").fetchone()[0]==before
