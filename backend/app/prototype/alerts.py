@@ -187,8 +187,11 @@ def run(*, notifier=None, dry_run=False, update=True, now=None):
 
 def telegram_chat_id(token, transport=None):
     """Chat ids that have messaged the bot (send it any message first)."""
-    response = httpx.get(f'https://api.telegram.org/bot{token}/getUpdates', timeout=20, transport=transport)
-    updates = response.json().get('result', []) if response.status_code == 200 else []
+    if not token: raise ValueError('SIGNALLENS_TELEGRAM_BOT_TOKEN is required')
+    with httpx.Client(timeout=20, transport=transport) as client:
+        response = client.get(f'https://api.telegram.org/bot{token}/getUpdates')
+    if response.status_code != 200: raise RuntimeError(f'telegram_get_updates_failed_{response.status_code}')
+    updates = response.json().get('result', [])
     return sorted({(u.get('message') or {}).get('chat', {}).get('id') for u in updates if (u.get('message') or {}).get('chat')})
 
 

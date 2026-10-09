@@ -131,3 +131,14 @@ def test_daily_prices_fill_every_missing_weekday_then_mark_coverage(paths):
         assert covered_through(db, symbols) == date(2026, 10, 6)
     # Nothing new before the next close: no requests.
     assert update(research=research, production=production, client=client, now=datetime(2026, 10, 7, 12, tzinfo=timezone.utc))['days'] == []
+
+
+def test_telegram_chat_id_lists_who_messaged_the_bot():
+    from app.prototype.alerts import telegram_chat_id
+    def transport(request):
+        assert request.url.path == '/bot123:abc/getUpdates'
+        return httpx.Response(200, json={'ok': True, 'result': [{'message': {'chat': {'id': 42}}}, {'message': {'chat': {'id': 42}}}, {'edited_message': {}}]})
+    assert telegram_chat_id('123:abc', transport=httpx.MockTransport(transport)) == [42]
+    with pytest.raises(RuntimeError):
+        telegram_chat_id('123:abc', transport=httpx.MockTransport(lambda r: httpx.Response(401, json={'ok': False})))
+    with pytest.raises(ValueError): telegram_chat_id('')
