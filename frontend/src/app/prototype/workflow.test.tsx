@@ -12,6 +12,7 @@ import {PortfolioView, type Portfolio} from "./portfolio-view";
 import {ChecksOverview, type ChecksReport} from "./checks-view";
 import {MonthlyView, type Monthly} from "./monthly-view";
 import {AllocationView, type Allocation} from "./monthly-view";
+import {ScorecardView, type Scorecard} from "./scorecard-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
 // No provider, browser download, credentials or operator database is used.
@@ -292,4 +293,24 @@ test("allocation lists sales then buys, the cash left and never executes",()=>{
   assert.match(html,/Nothing is executed/);
   const none=renderToStaticMarkup(<AllocationView allocation={{...allocation,sales:[],buys:[]}} decision="2026-10-09T00:00:00Z" target={15}/>);
   assert.match(none,/Holding cash is a valid outcome/);
+});
+
+test("scorecard shows hit rates, pending checkpoints and the empty state",()=>{
+  type Point=Scorecard["months"][number]["items"][number]["checkpoints"][number];
+  const point=(s:number,extra:Omit<Point,"sessions">):Point=>({sessions:s,...extra});
+  const card:Scorecard={checkpoints:[21,63],groups:{pick:"Top picks",sell_or_reduce:"Sell or reduce"},benchmark:"Equal-weight.",rule:"Beat it.",label:"Not validation.",latest_stored_session:"2026-11-02",
+    summary:[{group:"pick",sessions:21,scored:2,right:1,hit_rate:0.5,mean_excess:0.03},{group:"pick",sessions:63,scored:0,right:0,hit_rate:null,mean_excess:null},
+      {group:"sell_or_reduce",sessions:21,scored:1,right:1,hit_rate:1,mean_excess:-0.05},{group:"sell_or_reduce",sessions:63,scored:0,right:0,hit_rate:null,mean_excess:null}],
+    months:[{record_id:"r",month:"2026-10",decision_at:"2026-10-09T00:00:00Z",base_session:"2026-10-08",benchmark:[{sessions:21,return:0.02,available:7,of:7},{sessions:63,return:null,available:0,of:7}],
+      items:[{kind:"pick",qualified_symbol:"LKQ.US",decision:null,recommendation:"buy",rank:1,group:"pick",checkpoints:[point(21,{status:"available",return:0.08,excess:0.06,right:true}),point(63,{status:"pending",sessions_elapsed:21})]},
+        {kind:"holding",qualified_symbol:"MSFT.US",decision:"REVIEW",group:null,checkpoints:[point(21,{status:"missing_price"}),point(63,{status:"pending",sessions_elapsed:21})]}]}]};
+  const html=renderToStaticMarkup(<ScorecardView card={card}/>);
+  assert.match(html,/1 of 2 right \(50\.00%\)/);
+  assert.match(html,/none scored yet/);
+  assert.match(html,/Pick #1 · Buy/);
+  assert.match(html,/✓ \+6\.00% vs benchmark/);
+  assert.match(html,/pending \(21\/63\)/);
+  assert.match(html,/REVIEW · not scored/);
+  assert.match(html,/~1 month/);
+  assert.match(renderToStaticMarkup(<ScorecardView card={{...card,months:[]}}/>),/No recorded months yet/);
 });

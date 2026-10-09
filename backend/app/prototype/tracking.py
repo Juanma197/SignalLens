@@ -20,12 +20,12 @@ CHECKPOINTS = (21, 63, 126, 252)
 READ_CALENDAR_DAYS = 400
 
 
-def _read(path, start, now):
+def _read(path, start, now, end=None):
     with duckdb.connect(str(path), read_only=True, config={'memory_limit': '256MB', 'threads': 1, 'enable_external_access': False}) as db:
         if not db.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema='main' AND table_name='global_price_observations'").fetchone()[0]:
             raise PrototypeError('PROTOTYPE_PRICE_TABLE_ABSENT')
         where = "WHERE exchange = 'US' AND trading_date BETWEEN ? AND ?"
-        args = [start, start + timedelta(days=READ_CALENDAR_DAYS)]
+        args = [start, end or start + timedelta(days=READ_CALENDAR_DAYS)]
         if db.execute(f'SELECT count(*) FROM global_price_observations {where}', args).fetchone()[0] > MAX_ROWS:
             raise PrototypeError('PROTOTYPE_ROW_LIMIT')
         cursor = db.execute(f'SELECT qualified_symbol, trading_date, exchange, adjusted_close, retrieved_at FROM global_price_observations {where}', args)
