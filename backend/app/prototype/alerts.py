@@ -161,7 +161,7 @@ def run(*, notifier=None, dry_run=False, update=True, now=None):
         if agent:
             steps['filings'] = held_filing_refresh(research=settings.research_database_path, production=settings.database_path,
                                                    store=store, user_agent=agent, now=now)
-    monthly = api.monthly(now, 15, 0, True)
+    monthly = api.monthly(now, 15, False, True)
     base = os.environ.get('SIGNALLENS_PUBLIC_URL', '').rstrip('/')
     link = f"{base}/prototype/monthly?decision_at={quote(monthly['decision_at'])}" if base else None
     last_summary = store.last_alert_at('summary')

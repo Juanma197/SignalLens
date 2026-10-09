@@ -12,7 +12,7 @@ equity). At most three picks, never forced; every reason is shown. Rules live in
 thesis conditions and automatic warning signs, so a broken thesis shows up even
 when the price has not fallen. `/prototype/monthly` brings it together: the Top 3
 plus BUY MORE / HOLD / REDUCE / SELL / REVIEW for every holding, with reasons, and a
-suggested allocation of new money within a 25% position limit. Recording a month
+suggested allocation of your cash pool within a 25% position limit. Recording a month
 freezes its calls; `/prototype/scorecard` later shows whether each was right.
 
 To widen the US catalogue from a 100-company sample to every listing near the size
@@ -27,8 +27,13 @@ runbook](docs/prototype-first-slice.md). Watchlist/snapshot persistence and subs
 performance tracking are deferred to a separate prototype database.
 
 `/prototype/portfolio` records your own trades (append-only, voidable) and shows
-holdings at average cost, valued at the latest stored close. It is the first step
-towards monthly BUY MORE / HOLD / REDUCE / SELL decisions per holding.
+holdings at average cost, valued at the latest stored close. It also keeps the
+**cash pool**: uninvested pounds that carry over each month, built only from
+deposits you confirm and the pound total your broker reports for each trade (sale
+proceeds return to the pool). Your plan, meaning the monthly contribution (£200 to
+start) and the maximum number of holdings (10), can be changed at any time. The
+monthly allocation spends the cash pool, optionally plus this month's planned
+contribution, and opens new names only while holdings stay within the maximum.
 
 ## Milestone 36: investment-grade research foundation
 

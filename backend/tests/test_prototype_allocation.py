@@ -2,6 +2,7 @@
 from datetime import timedelta
 from pathlib import Path
 
+import duckdb
 from fastapi.testclient import TestClient
 import pytest
 
@@ -64,6 +65,20 @@ def test_nothing_forced_and_non_usd_ignored():
     assert allocate([], [pick('A', 0.5)], 100)['buys'] == []  # 25 USD is below the minimum purchase
 
 
+def test_new_names_only_while_holdings_stay_within_the_maximum():
+    holdings = [holding(f'H{i}', 'HOLD', 1000, 9000, score=None) for i in range(8)] + [holding('S', 'SELL', 1000, 9000)]
+    picks = [pick('A', 0.2), pick('B', 0.5), pick('C', 0.3)]
+    plan = allocate(holdings, picks, 3000, max_holdings=10)
+    # Selling S leaves 8 holdings, so two slots: the two best picks get them, A waits.
+    assert sorted(b['qualified_symbol'] for b in plan['buys']) == ['B', 'C']
+    assert [s['qualified_symbol'] for s in plan['skipped_no_slot']] == ['A'] and plan['holdings_after'] == 10
+    full = allocate(holdings[:8] + [holding('K', 'BUY MORE', 1000, 9000, score=0.4)] + [holding('H9', 'HOLD', 1000, 9000, score=None)],
+                    picks, 3000, max_holdings=10)
+    # Ten holdings already: no new names, but adding to an existing holding is still allowed.
+    assert [b['action'] for b in full['buys']] == ['BUY MORE'] and len(full['skipped_no_slot']) == 3
+    assert len(allocate(holdings, picks, 3000)['buys']) == 3  # no maximum given
+
+
 @pytest.fixture
 def paths(prototype_fixture, tmp_path):
     research, production = (Path(p) for p in prototype_fixture)
@@ -80,14 +95,28 @@ def test_monthly_api_returns_an_allocation(paths, monkeypatch):
     monkeypatch.setattr(main, 'settings', settings); monkeypatch.setattr(api, 'get_settings', lambda: settings)
     api._CACHE.clear(); api._MARKET.clear()
     headers = {'Authorization': 'Bearer test-token'}
+    with duckdb.connect(str(paths[0])) as db:
+        # 0.8 pounds per dollar, known before the cutoff.
+        db.execute("INSERT INTO global_fx_observations VALUES ('USD', 'GBP', ?, 0.8, 'test', ?, ?)",
+                   [DECISION.date() - timedelta(days=1), DECISION.replace(tzinfo=None) - timedelta(hours=5), DECISION.replace(tzinfo=None) - timedelta(hours=5)])
     with TestClient(main.app) as client:
         client.post('/api/v1/research/prototype/store/portfolio/trades', headers=headers,
-                    json={'kind': 'buy', 'qualified_symbol': 'SYN05', 'shares': 10, 'price': 1, 'traded_on': '2026-09-01'})
+                    json={'kind': 'buy', 'qualified_symbol': 'SYN05', 'shares': 10, 'price': 1, 'traded_on': '2026-09-01', 'account_amount': 8})
+        client.post('/api/v1/research/prototype/store/portfolio/cash', headers=headers,
+                    json={'kind': 'deposit', 'amount': 300, 'moved_on': '2026-09-01'})
+        client.post('/api/v1/research/prototype/store/portfolio/settings', headers=headers,
+                    json={'monthly_contribution': 250, 'max_holdings': 10})
         body = client.get('/api/v1/research/prototype/monthly', headers=headers,
-                          params={'decision_at': DECISION.isoformat(), 'cash': 500}).json()
-        plan = body['allocation']
+                          params={'decision_at': DECISION.isoformat(), 'include_contribution': True}).json()
+        plan, account = body['allocation'], body['allocation']['account']
+        # Cash pool 300 - 8 = 292 pounds, plus the planned 250 = 542 pounds = 677.50 dollars at 0.8.
+        assert account['cash_pool'] == pytest.approx(292) and account['contribution_included'] == 250
+        assert account['available'] == pytest.approx(542) and account['gbp_per_usd']['source'] == 'stored'
+        assert plan['new_cash'] == pytest.approx(677.5)
         # The only holding is 100% of the portfolio: REDUCE for size, trimmed to 25%; no picks in the fixture.
-        assert plan['new_cash'] == 500 and plan['sales'][0]['action'] == 'TRIM' and plan['buys'] == []
-        assert plan['left_as_cash'] == pytest.approx(500 + plan['sale_proceeds'])
-        assert client.get('/api/v1/research/prototype/monthly', headers=headers,
-                          params={'decision_at': DECISION.isoformat(), 'cash': -1}).status_code == 422
+        assert plan['sales'][0]['action'] == 'TRIM' and plan['buys'] == []
+        assert plan['sales'][0]['amount_gbp'] == pytest.approx(plan['sales'][0]['amount'] * 0.8)
+        assert account['left_as_cash'] == pytest.approx(542 + plan['sale_proceeds'] * 0.8)
+        without = client.get('/api/v1/research/prototype/monthly', headers=headers,
+                             params={'decision_at': DECISION.isoformat()}).json()['allocation']['account']
+        assert without['contribution_included'] == 0 and without['available'] == pytest.approx(292)
