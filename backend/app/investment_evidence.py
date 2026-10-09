@@ -114,6 +114,16 @@ def _rows(db, table):
     cur=db.execute(f'SELECT * FROM "{table}"'); names=[x[0] for x in cur.description]
     return [dict(zip(names,row)) for row in cur.fetchall()]
 
+def _rows_where(db, table, column, values):
+    """Rows whose `column`, as text, is one of `values`: the same rows as filtering
+    _rows() with str(row[column]) in values, without reading the whole table for
+    every security."""
+    values=[str(v) for v in values]
+    if table not in _tables(db) or not values: return []
+    marks=",".join("?" for _ in values)
+    cur=db.execute(f'SELECT * FROM "{table}" WHERE CAST("{column}" AS VARCHAR) IN ({marks})',values); names=[x[0] for x in cur.description]
+    return [dict(zip(names,row)) for row in cur.fetchall()]
+
 def _aware(value: Any) -> datetime | None:
     if value is None: return None
     if isinstance(value,str): value=datetime.fromisoformat(value.replace("Z","+00:00"))
@@ -150,19 +160,19 @@ def _classification_candidates(db, security, decision):
     sid=security["security_id"]; out=[]
     # Explicit reviewed evidence has the highest semantic authority, while conflicts
     # are still refused rather than precedence-picked.
-    for r in _rows(db,"reviewed_security_classifications"):
+    for r in _rows_where(db,"reviewed_security_classifications","security_id",[sid]):
         if str(r.get("security_id"))==sid:
             out.append((str(r.get("security_type")),"explicit_review",str(r.get("review_id") or _key(r)),r))
-    issuers=[r for r in _rows(db,"sec_issuers") if str(r.get("security_id"))==sid]
+    issuers=[r for r in _rows_where(db,"sec_issuers","security_id",[sid]) if str(r.get("security_id"))==sid]
     ciks={str(r.get("cik")) for r in issuers}
-    for r in _rows(db,"sec_entity_metadata"):
+    for r in _rows_where(db,"sec_entity_metadata","cik",ciks):
         if str(r.get("cik")) not in ciks: continue
         kind=r.get("security_type") or r.get("classification")
         if kind: out.append((str(kind),"sec_entity_metadata",str(r.get("source_identifier") or r.get("cik")),r))
-    forms={str(r.get("form","")) for r in _rows(db,"sec_filings") if str(r.get("cik")) in ciks and _aware(r.get("public_at")) and availability(r.get("public_at"),r.get("retrieved_at"))<=decision}
+    forms={str(r.get("form","")) for r in _rows_where(db,"sec_filings","cik",ciks) if str(r.get("cik")) in ciks and _aware(r.get("public_at")) and availability(r.get("public_at"),r.get("retrieved_at"))<=decision}
     if forms & {"20-F","40-F","6-K"}: out.append(("foreign_issuer_or_adr","sec_filing_regime",",".join(sorted(forms)),issuers[-1] if issuers else {}))
     elif forms & {"10-K","10-Q"}: out.append(("us_operating_company","sec_filing_regime",",".join(sorted(forms)),issuers[-1] if issuers else {}))
-    for r in _rows(db,"security_listings"):
+    for r in _rows_where(db,"security_listings","security_id",[sid]):
         if str(r.get("security_id"))!=sid: continue
         raw=str(r.get("instrument_type") or r.get("security_type") or "").lower()
         mapping={"common stock":"us_operating_company","common_stock":"us_operating_company",
@@ -193,7 +203,7 @@ def _aliases():
     return result
 
 def _canonical_rows(db, security, decision, now):
-    sid=security["security_id"]; aliases=_aliases(); facts=[r for r in _rows(db,"sec_facts") if str(r.get("security_id"))==sid]
+    sid=security["security_id"]; aliases=_aliases(); facts=[r for r in _rows_where(db,"sec_facts","security_id",[sid]) if str(r.get("security_id"))==sid]
     candidates=[]
     for field,concepts in aliases.items():
         for r in facts:
@@ -368,7 +378,7 @@ def canonical_unit_repair_status(*,research_db:Path,production_db:Path,decision_
 def _market_and_action_rows(db, security, decision, now):
     """Normalize price and explicit action coverage without treating absence as proof."""
     symbol=security["qualified_symbol"]; sid=security["security_id"]; factors=[]
-    prices=[r for r in _rows(db,"global_price_observations") if r.get("qualified_symbol")==symbol
+    prices=[r for r in _rows_where(db,"global_price_observations","qualified_symbol",[symbol]) if r.get("qualified_symbol")==symbol
             and r.get("status")=="available" and _aware(r.get("retrieved_at"))<=decision
             and r.get("trading_date")<=decision.date()]
     if prices:
@@ -377,8 +387,8 @@ def _market_and_action_rows(db, security, decision, now):
         factors.append({"evidence_key":key,"security_id":sid,"qualified_symbol":symbol,"canonical_field":"decision_price",
           "value":float(value) if value is not None else None,"unit":str(p.get("currency")),"currency":p.get("currency"),"period_start":None,"period_end":None,"instant_date":p["trading_date"],"fiscal_period":None,"form":None,
           "source":f"{p.get('source')}:{p['trading_date']}","public_at":avail,"retrieved_at":avail,"available_at":avail,"materialized_at":now,"concept":"adjusted_close","sign":"positive_price","reliability":"usable" if value is not None else "withheld","withholding":None if value is not None else "no_model_ready_price","source_fact_key":None,"period_nature":"instant"})
-    actions=[r for r in _rows(db,"global_corporate_actions") if r.get("qualified_symbol")==symbol and r.get("ex_date")<=decision.date() and _aware(r.get("retrieved_at"))<=decision]
-    checkpoints=[r for r in _rows(db,"eodhd_ingestion_checkpoints") if r.get("qualified_symbol")==symbol and r.get("stage") in {"corporate_actions","actions"} and r.get("status")=="completed" and _aware(r.get("updated_at"))<=decision]
+    actions=[r for r in _rows_where(db,"global_corporate_actions","qualified_symbol",[symbol]) if r.get("qualified_symbol")==symbol and r.get("ex_date")<=decision.date() and _aware(r.get("retrieved_at"))<=decision]
+    checkpoints=[r for r in _rows_where(db,"eodhd_ingestion_checkpoints","qualified_symbol",[symbol]) if r.get("qualified_symbol")==symbol and r.get("stage") in {"corporate_actions","actions"} and r.get("status")=="completed" and _aware(r.get("updated_at"))<=decision]
     if actions: state="action_present"; source=",".join(sorted({_iso(x.get("source")) for x in actions})); retrieved=max(_aware(x["retrieved_at"]) for x in actions); start=min(x["ex_date"] for x in actions)
     elif checkpoints: state="verified_no_action"; source="eodhd_ingestion_checkpoint"; retrieved=max(_aware(x["updated_at"]) for x in checkpoints); start=min((_aware(x["updated_at"]).date() for x in checkpoints),default=decision.date())
     else: state="coverage_missing"; source="none"; retrieved=decision; start=decision.date()
