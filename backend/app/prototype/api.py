@@ -10,7 +10,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..config import get_settings
-from .portfolio import read_market, valuation
+from .checks import catalogue, evaluate
+from .portfolio import positions_from, read_market, valuation
 from .service import PrototypeError, assess
 from .store import CURRENCIES, THESIS_SECTIONS, PrototypeStore, StoreError
 from .tracking import track
@@ -100,6 +101,11 @@ class TradeRequest(BaseModel):
 class VoidRequest(BaseModel):
     transaction_id: str = Field(min_length=1, max_length=64)
     reason: str | None = Field(None, max_length=4000)
+
+
+class CheckSetRequest(BaseModel):
+    security_id: str = Field(min_length=1, max_length=128)
+    checks: list[dict] = Field(max_length=20)
 
 
 class SnapshotRequest(BaseModel):
@@ -241,3 +247,52 @@ def record_trade(request: TradeRequest):
 def void_trade(request: VoidRequest):
     _call(_store(write=True).void_trade, request.transaction_id, reason=request.reason)
     return portfolio()
+
+
+@router.get('/store/checks/{security_id}')
+def check_sets(security_id: str):
+    return {'metrics': catalogue(), 'versions': _call(_store().check_sets, security_id)}
+
+
+@router.post('/store/checks')
+def add_check_set(request: CheckSetRequest):
+    return {'metrics': catalogue(), 'versions': _call(_store(write=True).add_check_set, request.security_id, request.checks)}
+
+
+@router.get('/thesis-checks')
+def thesis_checks(decision_at: datetime = Query(...), target_members: int = Query(15, ge=10, le=20),
+                  security_id: str | None = Query(None, min_length=1, max_length=128)):
+    """Checks for one company, or for every company held, watched or with checks."""
+    if decision_at.tzinfo is None:
+        raise HTTPException(422, detail={'code': 'PROTOTYPE_INVALID_TIMESTAMP'})
+    store = _store()
+    current = _call(store.current_checks)
+    report = report_at(decision_at, target_members)
+    by_id = {c['security_id']: c for c in report['companies']}
+    by_symbol = {c['qualified_symbol']: c['security_id'] for c in report['companies'] if c.get('qualified_symbol')}
+    try:
+        held, _ = positions_from(_call(store.trades))
+    except PrototypeError as exc:
+        raise HTTPException(409, detail={'code': exc.code}) from None
+    held_ids = {by_symbol[p['qualified_symbol']] for p in held if p['qualified_symbol'] in by_symbol}
+    watched = {i['security_id'] for i in _call(store.watchlist)}
+    if security_id is not None:
+        wanted = [security_id]
+    else:
+        wanted = sorted(held_ids | watched | {k for k, v in current.items() if v})
+    day = datetime.fromisoformat(str(report['decision_at']).replace('Z', '+00:00')).date()
+    companies = []
+    for sid in wanted:
+        reasons = [r for r, member in (('held', sid in held_ids), ('watched', sid in watched)) if member]
+        if sid not in by_id:
+            companies.append({'security_id': sid, 'overall': 'not_covered', 'interest': reasons, 'checks': [], 'automatic': [],
+                              'has_own_checks': bool(current.get(sid))}); continue
+        companies.append(evaluate(by_id[sid], current.get(sid, []), day) | {'interest': reasons})
+    order = {'broken': 0, 'warning': 1, 'unknown': 2, 'not_covered': 3, 'intact': 4}
+    companies.sort(key=lambda c: (order[c['overall']], c.get('qualified_symbol') or c['security_id']))
+    return {'decision_at': report['decision_at'], 'notice': report['notice'], 'synthetic_fixture': report['synthetic_fixture'],
+            'metrics': catalogue(), 'companies': companies,
+            'uncovered_holdings': sorted(p['qualified_symbol'] for p in held if p['qualified_symbol'] not in by_symbol),
+            'method': 'Your conditions and automatic warning signs are re-evaluated against stored evidence at this cutoff. '
+                      'The price you paid is never used. Missing evidence is unknown, not a pass.'}
+

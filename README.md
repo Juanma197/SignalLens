@@ -8,6 +8,10 @@ exclusions (losses, negative free cash flow, materially falling revenue, negativ
 equity). At most three picks, never forced; every reason is shown. Rules live in
 `backend/app/prototype/ranking.py`. Unvalidated arithmetic, not advice.
 
+`/prototype/checks` re-checks every holding and watched company against your own
+thesis conditions and automatic warning signs, so a broken thesis shows up even
+when the price has not fallen.
+
 The separate `/prototype` view proposes a deterministic, unfrozen membership and
 zero-to-three positive 126-session momentum results from stored evidence only.
 Company details show calculations, citations, risks and exact missing-data states.

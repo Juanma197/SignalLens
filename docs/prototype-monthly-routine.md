@@ -49,6 +49,15 @@ places orders. Holdings use the average-cost method and are valued at the latest
 stored close; a ticker outside SignalLens data shows its cost but no value. Trades
 cannot be edited or deleted: void a mistake and record the correct trade.
 
+## 5. Check every thesis
+
+On each held or watched company page, add **Thesis checks**: conditions such as
+"operating margin at least 10%" or "liabilities / assets at most 60%". Then open
+**Thesis checks** with this month's cutoff. Broken theses come first, including
+automatic value-trap signs (losses, negative free cash flow, falling revenue,
+negative equity) even where you set no conditions. Missing figures show as
+unknown, never as a pass.
+
 ## Things to know
 
 - Recorded snapshots are safe from later refreshes. Recomputing an old cutoff
