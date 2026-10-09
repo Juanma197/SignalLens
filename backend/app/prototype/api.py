@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from .checks import catalogue, evaluate
+from .decisions import DECISIONS, RULES as DECISION_RULES, decide
 from .portfolio import positions_from, read_market, valuation
 from .service import PrototypeError, assess
 from .store import CURRENCIES, THESIS_SECTIONS, PrototypeStore, StoreError
@@ -295,4 +296,53 @@ def thesis_checks(decision_at: datetime = Query(...), target_members: int = Quer
             'uncovered_holdings': sorted(p['qualified_symbol'] for p in held if p['qualified_symbol'] not in by_symbol),
             'method': 'Your conditions and automatic warning signs are re-evaluated against stored evidence at this cutoff. '
                       'The price you paid is never used. Missing evidence is unknown, not a pass.'}
+
+
+@router.get('/monthly')
+def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, ge=10, le=20)):
+    """The monthly view: Top 3 picks plus a decision for every holding, all at one cutoff."""
+    if decision_at.tzinfo is None:
+        raise HTTPException(422, detail={'code': 'PROTOTYPE_INVALID_TIMESTAMP'})
+    settings = get_settings()
+    store = _store()
+    report = report_at(decision_at, target_members)
+    decision = datetime.fromisoformat(str(report['decision_at']).replace('Z', '+00:00'))
+    # Trades after the cutoff did not exist yet at that point.
+    trades = [t for t in _call(store.trades) if str(t['traded_on']) <= decision.date().isoformat()]
+    symbols = tuple(sorted({t['qualified_symbol'] for t in trades}))
+    key = (symbols, decision.isoformat(), _stat(settings.research_database_path))
+    if key not in _MARKET:
+        try:
+            market = read_market(settings.research_database_path, symbols, decision)
+        except PrototypeError as exc:
+            raise HTTPException(409, detail={'code': exc.code, 'message': 'Stored prices could not safely be read.'}) from None
+        if len(_MARKET) >= 8: _MARKET.clear()
+        _MARKET[key] = market
+    try:
+        book = valuation(trades, _MARKET[key], as_of=decision)
+    except PrototypeError as exc:
+        raise HTTPException(409, detail={'code': exc.code}) from None
+    by_id = {c['security_id']: c for c in report['companies']}
+    by_symbol = {c['qualified_symbol']: c['security_id'] for c in report['companies'] if c.get('qualified_symbol')}
+    ranking = report.get('value_ranking') or {'picks': [], 'companies': [], 'population': 0}
+    assessments = {a['security_id']: a for a in ranking['companies']}
+    current = _call(store.current_checks)
+    holdings = []
+    for p in book['positions']:
+        sid = by_symbol.get(p['qualified_symbol'])
+        checks = evaluate(by_id[sid], current.get(sid, []), decision.date()) if sid else None
+        holdings.append({k: p.get(k) for k in ('qualified_symbol', 'currency', 'shares', 'average_cost', 'cost_basis', 'price',
+                                               'market_value', 'unrealised_return', 'weight')}
+                        | {'security_id': sid, 'company_name': p.get('listed_name') or p.get('company_name'),
+                           'checks': checks} | decide(p, assessments.get(sid), checks))
+    holdings.sort(key=lambda h: (DECISIONS.index(h['decision']), h['qualified_symbol']))
+    held = {h['security_id'] for h in holdings if h['security_id']}
+    picks = [assessments[sid] | {'held': sid in held} for sid in ranking['picks']]
+    return {'decision_at': report['decision_at'], 'notice': report['notice'], 'synthetic_fixture': report['synthetic_fixture'],
+            'target_members': report['target_members'], 'population': ranking['population'], 'picks': picks,
+            'holdings': holdings, 'totals': book['totals'], 'rules': DECISION_RULES,
+            'counts': {d: sum(h['decision'] == d for h in holdings) for d in DECISIONS},
+            'method': 'Holdings are built from your trades up to the cutoff and valued at the last stored close on or before it. '
+                      'Each decision follows fixed rules in order: no evidence, broken thesis, overvaluation, position size, then room to add.',
+            'label': 'Decision support only. Nothing is executed. The rules have not been validated against later returns.'}
 

@@ -27,7 +27,7 @@ function PortfolioPage() {
     const reason = window.prompt("Void this trade? It stays in the history marked as voided. Reason (optional):");
     if (reason !== null) run("portfolio/voids", {transaction_id: id, reason: reason || null});
   }
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Portfolio</strong><Link href="/prototype">Shortlist</Link><Link href="/prototype/checks">Thesis checks</Link><Link href="/prototype/watchlist">Watchlist</Link><Link href="/prototype/snapshots">Snapshots</Link></nav>
+  return <main className="research-page"><nav><span className="mark">SL</span><strong>Portfolio</strong><Link href="/prototype/monthly">This month</Link><Link href="/prototype">Shortlist</Link><Link href="/prototype/checks">Thesis checks</Link><Link href="/prototype/watchlist">Watchlist</Link><Link href="/prototype/snapshots">Snapshots</Link></nav>
     <section className="hero compact"><p className="eyebrow">YOUR HOLDINGS · YOUR TRADES · STORED PRICES</p><h1>What you own.<br/><span>What it is worth.</span></h1>
       <p className="lede">Holdings are built only from trades you record here. Market values use the latest stored close; holdings outside SignalLens data are shown at cost and never estimated.</p></section>
     <PrototypeNotice/>

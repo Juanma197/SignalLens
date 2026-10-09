@@ -10,6 +10,7 @@ import {SnapshotView, ThesisHistory} from "./store-view";
 import {ValueRankingView, type ValueRanking} from "./value-view";
 import {PortfolioView, type Portfolio} from "./portfolio-view";
 import {ChecksOverview, type ChecksReport} from "./checks-view";
+import {MonthlyView, type Monthly} from "./monthly-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
 // No provider, browser download, credentials or operator database is used.
@@ -252,4 +253,26 @@ test("thesis checks show broken conditions first, automatic signs and uncovered 
   assert.match(html,/Held but outside SignalLens data, so not checked: MSFT\.US/);
   assert.match(html,/no conditions of your own yet/);
   assert.doesNotMatch(html,/<i>A<\/i>/);
+});
+
+test("monthly view lists picks, held flags and a reasoned decision per holding",()=>{
+  const evidence={upside:null,weight:null,thesis:"not_covered",value_status:null,conviction:null,risk:null};
+  const monthly:Monthly={decision_at:"2026-10-09T00:00:00+00:00",notice:"",synthetic_fixture:false,target_members:15,population:7,
+    picks:[{security_id:"l",qualified_symbol:"LKQ.US",company_name:"LKQ Corporation",status:"candidate",reasons:[],rank:1,recommendation:"buy",upside:1.3,conviction:"medium",risk:"low",held:true}],
+    holdings:[{qualified_symbol:"EGY.US",security_id:"e",company_name:"Vaalco",currency:"USD",shares:200,average_cost:6,cost_basis:1200,price:{close:4,trading_date:"2026-10-08"},market_value:800,unrealised_return:-0.33,weight:0.4,
+        checks:null,decision:"SELL",reasons:["The thesis is broken:","Net loss in the latest fiscal year."],evidence:{...evidence,upside:-0.36,weight:0.4,thesis:"broken"}},
+      {qualified_symbol:"MSFT.US",security_id:null,company_name:"Microsoft",currency:"USD",shares:5,average_cost:410,cost_basis:2050,price:null,market_value:null,unrealised_return:null,weight:null,
+        checks:null,decision:"REVIEW",reasons:["SignalLens has no evidence for this holding; decide from your own research."],evidence}],
+    totals:[],counts:{"SELL":1,"REDUCE":0,"REVIEW":1,"BUY MORE":0,"HOLD":0},method:"Fixed rules.",label:"Decision support only. Nothing is executed.",
+    rules:{buy_more_minimum_upside:0.15,maximum_position_weight_for_buying:0.25,reduce_above_position_weight:0.35,sell_below_upside:-0.2,reduce_below_upside:0}};
+  const html=renderToStaticMarkup(<MonthlyView monthly={monthly}/>);
+  assert.match(html,/SELL 1/);
+  assert.match(html,/BUY MORE 0/);
+  assert.match(html,/LKQ Corporation · already held/);
+  assert.match(html,/\+130\.00%/);
+  assert.match(html,/Net loss in the latest fiscal year\./);
+  assert.match(html,/decide from your own research/);
+  assert.match(html,/no stored price/);
+  assert.match(html,/Nothing is executed/);
+  assert.match(html,/SELL when the thesis breaks or the price is 20\.00% above/);
 });
