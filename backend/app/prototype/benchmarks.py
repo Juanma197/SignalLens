@@ -1,8 +1,9 @@
 """Index-fund prices for the scorecard's market benchmark.
 
-Three ETFs stand in for "the market": SPY (S&P 500) is the headline comparison;
+Four ETFs stand in for "the market": SPY (S&P 500) is the headline comparison;
 IJH (S&P MidCap 400) and IJR (S&P SmallCap 600) match the prototype's
-300M-10B USD size band more closely. Prices go to the separate prototype store,
+300M-10B USD size band more closely; VT (global stocks) stands in for VALL, the
+backtest's pass/fail benchmark. Prices go to the separate prototype store,
 never the research database. One EODHD request per fund: ten years on the first
 run, then the last few weeks (rewritten, as the provider may revise them).
 
@@ -17,7 +18,8 @@ from pathlib import Path
 
 from ..eodhd_ingestion import EODHDClient, EODHDLimits
 
-FUNDS = {'SPY.US': 'S&P 500 (SPY)', 'IJH.US': 'S&P MidCap 400 (IJH)', 'IJR.US': 'S&P SmallCap 600 (IJR)'}
+FUNDS = {'SPY.US': 'S&P 500 (SPY)', 'IJH.US': 'S&P MidCap 400 (IJH)', 'IJR.US': 'S&P SmallCap 600 (IJR)',
+         'VT.US': 'Global stocks (VT, stands in for VALL)'}
 MARKET = 'SPY.US'
 HISTORY_DAYS = 3653
 OVERLAP_DAYS = 31

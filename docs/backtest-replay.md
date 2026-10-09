@@ -55,9 +55,47 @@ update is writing. Results go only to the replay database.
 version, configuration hash, research database SHA-256, status).
 `replay_months`: one row per month with the SHA-256 of the full report and a
 compact JSON:
-- eligible companies, with close, market cap, automatic thesis signs and warnings;
+- eligible companies, with close, market cap and automatic thesis signs;
 - every value-ranking assessment (status, upside, conviction, risk, score);
 - the picks;
 - reasons companies were withheld.
 
 Phase 2 measures returns from this. Nothing here is a result yet.
+
+## Phase 2: measuring a run
+
+```powershell
+# Index funds, including VT (global stocks, standing in for VALL): one EODHD request each.
+& $Py -m app.prototype.benchmarks --prototype-db data\prototype\signallens-prototype.duckdb
+
+# Measure the latest completed run (or --run-id ID); the result is also stored in replay_reports.
+& $Py -m app.prototype.measure --replay-db data\research\backtest\replay.duckdb
+```
+
+All returns are in pounds and include dividends: adjusted closes converted at
+each session's stored GBP/USD rate, entering and leaving at the first session
+after each month's cutoff. The report has:
+
+- **picks**, for 1, 3, 6 and 12 months:
+  - the Top 3's average return against the eligible average, which is what
+    random picks earn on average;
+  - the skill interval, from a block bootstrap over months;
+  - where the picks fall among 1,000 random-pick strategies;
+  - the hit rate, and the share of months beating VT and SPY;
+- **ranking buckets**: excess return by ranking status (candidate, watch, not
+  undervalued, value trap), which shows whether the value-trap filter avoided
+  losers;
+- **policy**: the live rules run on simulated money:
+  - £200 a month into the cash pool, at most 10 holdings, the 25% limit and
+    fractional shares;
+  - costs of 0.15% currency conversion plus a 0.1% spread on every trade,
+    executed at the next session;
+  - results reported as money-weighted and time-weighted returns, drawdown,
+    trades, costs and the average cash share;
+- **global_index / sp500**: the same deposits into VT (bought in pounds, no
+  conversion fee) and SPY;
+- **criteria**: the pre-registered verdict. It is never decisive before the
+  holdout *and* phase 3.
+
+Simplification: positions are held in adjusted-close units, so dividends are
+reinvested in the same company rather than paid into the cash pool.
