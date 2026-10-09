@@ -8,6 +8,8 @@ Each run (weekdays after the US close):
 3. recomputes the monthly view at the current time (same rules as the page);
 4. compares every holding's (decision, thesis status) with the last one sent and
    messages only the changes, plus a short weekly summary on Fridays.
+Messages are about the operator's holdings only: new opportunities stay on the
+This month page, so every message concerns something already owned.
 The first run sends one "alerts are on" message with every current decision.
 
 Decision support only: nothing is executed, and the rules are unvalidated.
@@ -78,12 +80,7 @@ def summary_message(monthly, title, link=None):
     lines = [title]
     for h in monthly['holdings']:
         lines.append(f"{h['qualified_symbol']}: {h['decision']} (upside {_pct(h['evidence'].get('upside'))}, thesis {_thesis(h).replace('_', ' ')})")
-    if not monthly['holdings']: lines.append('No holdings recorded yet.')
-    if monthly['picks']:
-        lines.append('Top picks: ' + ', '.join(f"#{p['rank']} {p['qualified_symbol']} {_pct(p.get('upside'))}{' (held)' if p.get('held') else ''}"
-                                               for p in monthly['picks']))
-    else:
-        lines.append('No new company qualifies this week.')
+    if not monthly['holdings']: lines.append('No holdings recorded yet: add them on the Portfolio page.')
     if link: lines.append(link)
     lines.append(DISCLAIMER)
     return '\n'.join(lines)

@@ -28,7 +28,9 @@ def test_first_run_sends_one_baseline_then_only_changes():
     view = monthly(holding('AAA.US', 'HOLD'), holding('BBB.US', 'BUY MORE'),
                    picks=[{'rank': 1, 'qualified_symbol': 'LKQ.US', 'upside': 1.3, 'held': False}])
     first = plan_messages(view, {}, now=FRIDAY)
-    assert [m[0] for m in first] == ['baseline'] * 3 and 'alerts are on' in first[0][4] and '#1 LKQ.US +130%' in first[0][4]
+    assert [m[0] for m in first] == ['baseline'] * 3 and 'alerts are on' in first[0][4]
+    # Only holdings are messaged; new opportunities stay on the page.
+    assert 'LKQ' not in first[0][4] and 'AAA.US: HOLD' in first[0][4] and 'BBB.US: BUY MORE' in first[0][4]
     states = {'AAA.US': ('HOLD', 'intact'), 'BBB.US': ('BUY MORE', 'intact')}
     assert plan_messages(view, states, now=FRIDAY - timedelta(days=1)) == []  # Thursday, nothing changed
     changed = plan_messages(monthly(holding('AAA.US', 'SELL', thesis='broken', reasons=('The thesis is broken:', 'Net loss.')),
