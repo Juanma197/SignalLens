@@ -3,6 +3,7 @@ import {FormEvent, Suspense, useRef, useState} from "react";
 import {useSearchParams} from "next/navigation";
 import Link from "next/link";
 import {PrototypeNotice, Report, RosterView} from "./view";
+import {ValueRankingView} from "./value-view";
 
 function PrototypePage() {
   const query=useSearchParams();
@@ -24,9 +25,9 @@ function PrototypePage() {
     } catch (e) {if(number===requestNumber.current)setError(e instanceof Error?e.message:"PROTOTYPE_SERVICE_UNAVAILABLE");}
     finally {if(number===requestNumber.current)setLoading(false);}
   }
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Research prototype</strong><Link href="/prototype/portfolio">Portfolio</Link><Link href="/prototype/watchlist">Watchlist</Link><Link href="/prototype/snapshots">Snapshots</Link><Link href="/research">Company research</Link></nav><section className="hero compact"><p className="eyebrow">15 COMPANIES · STORED EVIDENCE · READ ONLY</p><h1>Inspect the shortlist.<br/><span>See the evidence.</span></h1><p className="lede">A fixed 126-session momentum baseline with explicit missing data. Review the actual roster before freezing membership.</p></section><PrototypeNotice/>
+  return <main className="research-page"><nav><span className="mark">SL</span><strong>Research prototype</strong><Link href="/prototype/portfolio">Portfolio</Link><Link href="/prototype/watchlist">Watchlist</Link><Link href="/prototype/snapshots">Snapshots</Link><Link href="/research">Company research</Link></nav><section className="hero compact"><p className="eyebrow">MONTHLY REVIEW · STORED EVIDENCE · READ ONLY</p><h1>Find what is undervalued.<br/><span>See the evidence.</span></h1><p className="lede">Up to three undervalued candidates, with value traps excluded and every reason shown. Below them: the 126-session momentum baseline and the roster review.</p></section><PrototypeNotice/>
     <form onSubmit={load} className="panel research-form"><label>Evidence cutoff (ISO timestamp with timezone)<input type="text" required placeholder="2026-10-01T00:00:00Z" value={cutoff} onChange={e=>setCutoff(e.target.value)}/></label><button disabled={loading}>{loading?"Reading stored evidence…":"Review roster and shortlist"}</button></form>
-    {error&&<p role="alert" className="notice warning">{error}. No evidence or result has been substituted.</p>}{report&&<RosterView report={report}/>}</main>;
+    {error&&<p role="alert" className="notice warning">{error}. No evidence or result has been substituted.</p>}{report&&<>{report.value_ranking&&<ValueRankingView ranking={report.value_ranking} decision={report.decision_at} target={report.target_members}/>}<RosterView report={report}/></>}</main>;
 }
 
 export default function Page(){return <Suspense fallback={<p>Loading prototype…</p>}><PrototypePage/></Suspense>;}

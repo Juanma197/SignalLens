@@ -7,6 +7,7 @@ import test from "node:test";
 import {renderToStaticMarkup} from "react-dom/server";
 import {AnalystBriefView,CompanyView,EventsView,FinancialHealthView,PrototypeNotice,RosterView,ScenarioView,ValuationView,detailHref, type Detail, type Report} from "./view";
 import {SnapshotView, ThesisHistory} from "./store-view";
+import {ValueRankingView, type ValueRanking} from "./value-view";
 import {PortfolioView, type Portfolio} from "./portfolio-view";
 
 // Actual backend fixture -> CLI/service contract -> shortlist link -> detail view.
@@ -185,6 +186,29 @@ test("scenario range renders each case, its assumption and the caveats",()=>{
     cases:[{case:"middle",assumption:"median net income x median own P/E",profit:1e8,multiple:10,value_per_share:142,vs_price:0.42}]}}/>);
   assert.match(volatile,/treat this range as unreliable/);
   assert.match(volatile,/at its lowest own P\/E \(3\.0\) the middle case would be \$39\.00/);
+});
+
+test("value ranking shows picks with reasons and never forces empty places",()=>{
+  // The synthetic fixture has no annual figures, so nothing is assessable and nothing is picked.
+  assert.ok(ready.value_ranking);
+  const none=renderToStaticMarkup(<ValueRankingView ranking={ready.value_ranking!} decision={ready.decision_at} target={ready.target_members}/>);
+  assert.match(none,/No company passes the filters this month/);
+  assert.match(none,/Not assessable/);
+  const pick={security_id:"a",qualified_symbol:"AAA.US",company_name:"<b>A</b>",status:"candidate" as const,reasons:[],rank:1,recommendation:"strong_buy" as const,upside:0.5,
+    cautious_vs_price:0.05,optimistic_vs_price:0.9,measure:"net income",price:10,price_session:"2026-10-08",conviction:"high" as const,conviction_points:5,
+    conviction_for:["Even the cautious case is at or above the price (margin of safety)."],conviction_against:[],risk:"low" as const,risks:[],score:0.5};
+  const ranking:ValueRanking={population:3,picks:["a"],method:"m.",label:"Unvalidated.",rules:{minimum_upside:0.15,strong_upside:0.3,maximum_picks:3},
+    companies:[pick,{security_id:"t",qualified_symbol:"TRAP.US",company_name:null,status:"value_trap",reasons:["Net loss in the latest fiscal year."],rank:null,upside:2}]};
+  const html=renderToStaticMarkup(<ValueRankingView ranking={ranking} decision="2026-10-09T00:00:00Z" target={15}/>);
+  assert.match(html,/#1 · top opportunity/);
+  assert.match(html,/Strong Buy/);
+  assert.match(html,/\+50\.00%/);
+  assert.match(html,/margin of safety/);
+  assert.match(html,/Value trap — excluded/);
+  assert.match(html,/Net loss in the latest fiscal year/);
+  assert.match(html,/Only 1 company qualifies/);
+  assert.match(html,/Only 3 companies could be assessed/);
+  assert.doesNotMatch(html,/<b>A<\/b>/);
 });
 
 test("portfolio shows priced and unpriced holdings honestly and keeps voided trades visible",()=>{

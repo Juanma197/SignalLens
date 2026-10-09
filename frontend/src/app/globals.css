@@ -203,6 +203,13 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; }
 .prototype-fin h3 { font-size:17px; margin:20px 0 6px; }
 .prototype-fin th small { display:block; font-weight:400; color:var(--muted); font-size:11px; }
 .prototype-brief { border-color:var(--green); }
+.prototype-picks { margin:16px 0 24px; }
+.prototype-pick ul { list-style:none; padding:0; margin:12px 0 0; font-size:13px; }
+.prototype-pick li { padding:3px 0; }
+.prototype-pick-line { color:var(--ink) !important; }
+.prototype-pick-first { outline:1px solid var(--green); outline-offset:-1px; }
+.prototype-panel > h3 { font-size:20px; margin:28px 0 8px; }
+.prototype-value-table th,.prototype-value-table td:nth-child(4),.prototype-value-table td:nth-child(6) { white-space:nowrap; }
 .prototype-trade-form { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:12px; align-items:end; }
 .prototype-trade-form label { display:grid; gap:6px; font-size:13px; color:var(--muted); }
 .prototype-trade-form input,.prototype-trade-form select,.prototype-trade-form textarea { width:100%; font:inherit; background:#09100d; color:var(--ink); border:1px solid var(--line); padding:11px; border-radius:8px; color-scheme:dark; }
