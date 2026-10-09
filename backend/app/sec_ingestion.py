@@ -23,6 +23,7 @@ import duckdb
 import httpx
 
 from .active_catalogue import eodhd_ticker, select_active_catalogue
+from .global_market_data import bulk_insert
 from .sec_capability import (CONCEPTS, SEC_FACTS, SEC_SUBMISSIONS, SEC_TICKERS,
                              accession_availability, fingerprint, normalize_facts,
                              ticker_ciks, valid_user_agent)
@@ -345,18 +346,23 @@ def ingest(*, research: Path, production: Path, authorization: str | None, dry_r
                 # Dates compare as ISO text: stored rows hold DATE values, parsed rows strings.
                 text=lambda v: None if v is None else str(v)
                 exact={(t,c,u,text(a),text(b),acc,float(v)) for t,c,u,a,b,acc,v in stored}; periods={k[:5] for k in exact}
+                # New rows are collected and written in two set-based statements: thousands of
+                # single-row inserts into tables of millions of keyed rows took about a minute per company.
+                filings,new_facts={},[]
                 for row in rows:
                     period=(row["taxonomy"],row["concept"],row["unit"],text(row["period_start"]),text(row["period_end"]))
                     if period+(row["accession"],float(row["value"])) in exact: unchanged+=1; continue
                     revision=period in periods
                     exact.add(period+(row["accession"],float(row["value"]))); periods.add(period)
-                    db.execute("INSERT OR IGNORE INTO sec_filings VALUES (?,?,?,?,?,?,?,?)",[cik,row["accession"],row["form"],row["filed_at"],row["public_at"],row["amendment"],SEC_SUBMISSIONS.format(cik=cik),timestamp])
+                    filings.setdefault((cik,row["accession"]),[cik,row["accession"],row["form"],row["filed_at"],row["public_at"],row["amendment"],SEC_SUBMISSIONS.format(cik=cik),timestamp])
                     key_parts=[item["security_id"],row["taxonomy"],row["concept"],row["unit"],
                         row["period_start"],row["period_end"],row["accession"],row["value"]]
                     fact_key=hashlib.sha256(json.dumps(key_parts,default=str,separators=(",",":"),ensure_ascii=True).encode()).hexdigest()
-                    db.execute("INSERT INTO sec_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    new_facts.append(
                         [fact_key,item["security_id"],item["qualified_symbol"],ticker,cik,row["taxonomy"],row["concept"],row["value"],row["unit"],row["currency"],row["period_start"],row["period_end"],row["fiscal_year"],row["fiscal_period"],row.get("frame"),row["form"],row["accession"],row["filed_at"],row["public_at"],row["amendment"],revision,row["source_url"],timestamp])
                     inserted+=1; revisions+=int(revision)
+                bulk_insert(db,"sec_filings",list(filings.values()),conflict="IGNORE")
+                bulk_insert(db,"sec_facts",new_facts)
                 # Keep the parts of both documents read later, without a second download:
                 # the industry code (submissions) and cover-page share counts (companyfacts).
                 for endpoint_class,url,payload in (("submissions",SEC_SUBMISSIONS.format(cik=cik),submissions),
