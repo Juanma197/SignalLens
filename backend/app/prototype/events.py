@@ -36,7 +36,7 @@ ACCESSION = re.compile(r'^\d{10}-\d{2}-\d{6}$')
 DOCUMENT = re.compile(r'^[A-Za-z0-9._-]{1,120}$')
 
 
-def read_events(db, decision, stamp):
+def read_events(db, decision, stamp, *, known=None):
     """Visible events from the last WINDOW_DAYS, grouped by security_id."""
     tables = {r[0] for r in db.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main'").fetchall()}
     if 'sec_event_metadata' not in tables: return {}, 'table_absent'
@@ -46,7 +46,7 @@ def read_events(db, decision, stamp):
         [decision.date() - timedelta(days=WINDOW_DAYS), decision.date()]).fetchall()
     found = {}
     for sid, cik, accession, form, filed, public, retrieved, items, document, category, confidence, amendment in rows:
-        if not (stamp(public) and stamp(retrieved) and max(stamp(public), stamp(retrieved)) <= decision): continue
+        if not (stamp(public) and stamp(retrieved) and stamp(public) <= decision and stamp(retrieved) <= (known or decision)): continue
         try: codes = [str(c) for c in json.loads(items)] if items else []
         except ValueError: codes = []
         found.setdefault(str(sid), []).append({'cik': cik, 'accession': accession, 'form': form, 'filing_date': filed,
