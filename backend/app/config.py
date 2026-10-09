@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = False
     scheduler_instance_id: str = ""
     staging_mode: bool = False
+    # Daily holding alerts (app.prototype.daily_job): off unless enabled; weekdays at this UTC time.
+    alerts_enabled: bool = False
+    alerts_utc_time: str = "22:30"
     operations_history_limit: int = 20
 
     model_config = SettingsConfigDict(

@@ -4,6 +4,7 @@ Assessment and tracking are read-only. The only writes go to the separate
 prototype store, and only when SIGNALLENS_PROTOTYPE_WRITES_ENABLED is true.
 """
 from datetime import date, datetime, timezone
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -398,4 +399,17 @@ def scorecard():
         if len(_SCORECARD) >= 8: _SCORECARD.clear()
         _SCORECARD[key] = result
     return _SCORECARD[key] | {'label': 'Description of recorded calls, not validation. Small samples are noisy.'}
+
+
+@router.get('/alerts/status')
+def alerts_status():
+    """Whether daily alerts are on, when they last ran and what they sent."""
+    from .daily_job import DailyAlertJob
+    settings = get_settings()
+    job = DailyAlertJob(settings)
+    return {'enabled': settings.alerts_enabled, 'utc_time': settings.alerts_utc_time,
+            'telegram_configured': bool(os.environ.get('SIGNALLENS_TELEGRAM_BOT_TOKEN') and os.environ.get('SIGNALLENS_TELEGRAM_CHAT_ID')),
+            'next_run': job.next_run(datetime.now(timezone.utc)) if settings.alerts_enabled else None,
+            'state': job.state(), 'recent': [{k: e[k] for k in ('sent_at', 'kind', 'qualified_symbol', 'decision', 'thesis', 'delivered', 'message')}
+                                             for e in _call(_store().alert_events, 10)]}
 
