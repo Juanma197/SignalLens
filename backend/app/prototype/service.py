@@ -224,6 +224,34 @@ def _price(sec, data, decision, sessions):
     return sorted(set(reasons)), calculation, wanted, actions
 
 
+DIVIDEND_FETCH_SOURCE = 'eodhd_ingestion_checkpoints: completed prices (10-year) or refresh run; the dividends endpoint was queried'
+
+
+def _dividend_fetch_coverage(sec, data, decision, wanted, actions):
+    """Coverage from the dividend queries themselves, for companies with no stored
+    coverage record (in practice: companies that never paid a dividend, for which
+    nothing is stored). A completed 10-year 'prices' run queried the dividends
+    endpoint from at least ten years before it finished, and each completed
+    'refresh' re-queried it; both must bracket the price window. An empty answer is
+    then evidence of no dividend, not a gap. Splits are not fetched by this
+    provider path for any company; the price-discontinuity rule covers them."""
+    symbol = sec['qualified_symbol']
+    done = [c for c in data['eodhd_ingestion_checkpoints'] if c.get('qualified_symbol') == symbol and c.get('status') == 'completed'
+            and c.get('stage') in ('prices', 'refresh') and stamp(c.get('updated_at')) and stamp(c['updated_at']) <= decision]
+    full = [stamp(c['updated_at']) for c in done if c['stage'] == 'prices']
+    if not full or min(full).date() - timedelta(days=CONFIG['dividend_fetch_history_days']) > wanted[0]:
+        return ['corporate_action_coverage_missing_or_incomplete'], None
+    latest = max(stamp(c['updated_at']) for c in done)
+    if latest < datetime.combine(wanted[-1], time(22), timezone.utc):
+        return ['corporate_action_coverage_missing_or_incomplete'], None
+    events = [r for r in actions if wanted[0] <= day(r.get('ex_date')) <= wanted[-1]]
+    if any(r.get('action_type') not in CONFIG['corporate_action_types_accepted'] or not finite(r.get('value')) or float(r['value']) <= 0 or not r.get('source') for r in events):
+        return ['unresolved_corporate_action'], None
+    return [], {'evidence_key': f'dividend-fetch:{symbol}:{latest.isoformat()}', 'coverage_state': 'action_present' if events else 'verified_no_action',
+                'assessed_from': wanted[0], 'assessed_to': wanted[-1], 'source_identifier': DIVIDEND_FETCH_SOURCE,
+                'available_at': latest, 'extension': None}
+
+
 def _actions(sec, data, decision, wanted, actions):
     """Coverage over the whole price window: a stored coverage record, optionally
     extended past its end by a completed EODHD dividend refresh recorded after the
@@ -232,7 +260,7 @@ def _actions(sec, data, decision, wanted, actions):
     rows = [r for r in data['corporate_action_coverage_evidence'] if str(r.get('security_id')) == sec['security_id'] and r.get('qualified_symbol') == sec['qualified_symbol'] and visible(r, decision)]
     rows = [r for r in rows if day(r.get('assessed_from')) and day(r.get('assessed_to')) and day(r['assessed_from']) <= wanted[0]
             and day(r['assessed_to']) >= wanted[0] and r.get('source_identifier') and r.get('evidence_key')]
-    if not rows: return ['corporate_action_coverage_missing_or_incomplete'], None
+    if not rows: return _dividend_fetch_coverage(sec, data, decision, wanted, actions)
     extension = None
     if any(day(r['assessed_to']) >= wanted[-1] for r in rows):
         rows = [r for r in rows if day(r['assessed_to']) >= wanted[-1]]
