@@ -15,6 +15,9 @@ plus BUY MORE / HOLD / REDUCE / SELL / REVIEW for every holding, with reasons, a
 suggested allocation of new money within a 25% position limit. Recording a month
 freezes its calls; `/prototype/scorecard` later shows whether each was right.
 
+To widen the US catalogue from a 100-company sample to every listing near the size
+band (about 2,000), follow [the widening runbook](docs/us-catalogue-widening.md).
+
 The separate `/prototype` view proposes a deterministic, unfrozen membership and
 zero-to-three positive 126-session momentum results from stored evidence only.
 Company details show calculations, citations, risks and exact missing-data states.

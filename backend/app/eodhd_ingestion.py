@@ -61,6 +61,12 @@ RETRYABLE_FAILURE_CODES = frozenset({"provider_http_error", "provider_request_fa
 PLANNED_REQUEST_SAMPLE_LIMIT = 10
 
 
+MAX_US_SECURITIES = 3_000
+# The pre-screen uses last close x cover-page shares; the margin keeps
+# companies near the band edges, whose exact point-in-time size is decided later.
+US_BAND_MARGIN = 1.25
+
+
 class BudgetStop(RuntimeError):
     """A global safety bound stopped work; this is not a provider failure."""
 
@@ -79,10 +85,19 @@ class EODHDLimits:
     timeout_seconds: float = 15
     max_response_bytes: int = 16 * 1024 * 1024
     maximum_runtime_seconds: float = 1800
+    # Wide US mode (0 = off): select up to this many US listings whose
+    # pre-screened market cap (us_size_prescreen) is within the band widened by
+    # US_BAND_MARGIN, instead of the 100-per-region hash sample.
+    us_securities: int = 0
+    us_band_usd: tuple[float, float] = (300_000_000, 10_000_000_000)
 
     def __post_init__(self) -> None:
         if not 1 <= self.per_region <= 100 or not 1 <= self.total <= 500:
             raise ValueError("pilot caps are 100 per region and 500 total")
+        if not 0 <= self.us_securities <= MAX_US_SECURITIES:
+            raise ValueError(f"the US catalogue is capped at {MAX_US_SECURITIES} securities")
+        if not 0 < self.us_band_usd[0] < self.us_band_usd[1]:
+            raise ValueError("the US size band must be increasing and positive")
         if min(self.daily_requests, self.requests_per_minute, self.retries) < 1:
             raise ValueError("request budgets and retries must be positive")
         if not 0 < self.timeout_seconds <= 60 or self.max_response_bytes > 16 * 1024 * 1024:
@@ -284,16 +299,37 @@ class EODHDIngestion:
             items, rejected = parse_catalogue(payload, region)
             all_items.extend(items); exclusions.extend(rejected)
         selected, seen_companies, seen_isins = [], set(), set()
+        limits = self.client.limits
+        wide_us, sizes = bool(limits.us_securities), None
+        if wide_us:
+            from .us_size_prescreen import latest
+            with duckdb.connect(str(self.path), read_only=True) as db: sizes = latest(db)
+            if not sizes:
+                return {"command": "ingest-catalogue", "mode": "dry_run" if dry_run else "write", "status": "failed_validation",
+                        "error": "wide US selection needs a us_size_prescreen run first (python -m app.us_size_prescreen)",
+                        "activated": False, "requests": self.client.requests}
+        low, high = limits.us_band_usd[0] / US_BAND_MARGIN, limits.us_band_usd[1] * US_BAND_MARGIN
         for region in REGIONS:
             candidates = sorted((x for x in all_items if x.exchange == region),
                 key=lambda x: (hashlib.sha256(f"signallens-eodhd-pilot-v2|{x.qualified_symbol}".encode()).hexdigest(), x.qualified_symbol))
+            if region == "US" and wide_us:
+                in_band = []
+                for item in candidates:
+                    size = sizes.get(item.ticker.strip().upper())
+                    reason = "excluded_size_unknown" if size is None else None if low <= size <= high else "excluded_outside_size_band"
+                    if reason: exclusions.append({"exchange_qualified_symbol": item.qualified_symbol, "region": region,
+                                                  "currency": item.currency, "reason": reason})
+                    else: in_band.append(item)
+                candidates = in_band
+            cap = limits.us_securities if region == "US" and wide_us else limits.per_region
             for item in candidates:
                 issuer = normalized_company_name(re.sub(r"\b(ADR|GDR|CDR|DEPOSITARY|DEPOSITORY|RECEIPTS?)\b", "", item.company_name.upper()))
                 normalized_isin = (item.isin or "").strip().upper()
                 if issuer in seen_companies or (normalized_isin and normalized_isin in seen_isins):
                     exclusions.append({"exchange_qualified_symbol": item.qualified_symbol, "region": region,
                                        "currency": item.currency, "reason": "excluded_cross_region_duplicate_company"})
-                elif len([x for x in selected if x.exchange == region]) < self.client.limits.per_region and len(selected) < self.client.limits.total:
+                elif (len([x for x in selected if x.exchange == region]) < cap
+                      and (region == "US" and wide_us or len([x for x in selected if not (wide_us and x.exchange == "US")]) < limits.total)):
                     selected.append(item); seen_companies.add(issuer)
                     if normalized_isin: seen_isins.add(normalized_isin)
                 else: exclusions.append({"exchange_qualified_symbol": item.qualified_symbol, "region": region,
@@ -313,7 +349,9 @@ class EODHDIngestion:
                   "selected_by_region": selected_by_region, "selected_by_currency": _item_counts(selected, "currency"),
                   "excluded_by_region": _row_counts(exclusions, "region"), "excluded_by_currency": _row_counts(exclusions, "currency"),
                   "unexpected_zero_regions": zero_regions, "provider_diagnostics": diagnostics,
-                  "selection_policy": "deterministic_sha256_not_liquidity_ranked", "requests": self.client.requests}
+                  "selection_policy": "deterministic_sha256_not_liquidity_ranked" + (
+                      f"; US: pre-screened market cap {low:,.0f}-{high:,.0f} USD, up to {limits.us_securities}" if wide_us else ""),
+                  "requests": self.client.requests}
         if not dry_run and valid:
             result.update(self.universe.refresh(CatalogueProvider(selected), retrieved_at=retrieved_at))
             self._record_catalogue_validation(retrieved_at, "validated", len(selected), [])
