@@ -5,6 +5,8 @@ Nothing here opens the research or production databases for writing. There is
 no update or delete path: watchlist removal is a new event, a note correction is
 a new note, a mistaken trade is voided by a new row, and a snapshot is immutable
 once recorded (verified by SHA-256 on every read). Snapshots are never backfilled.
+The one exception is index-fund prices for the scorecard benchmark: market data,
+rewritten on refresh like the research database's prices.
 """
 from datetime import date, datetime, timedelta, timezone
 import hashlib
@@ -47,6 +49,9 @@ CREATE TABLE IF NOT EXISTS monthly_snapshots(
   snapshot_id VARCHAR PRIMARY KEY, month VARCHAR NOT NULL UNIQUE, decision_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL, version VARCHAR NOT NULL, configuration_hash VARCHAR NOT NULL,
   synthetic_fixture BOOLEAN NOT NULL, report_sha256 VARCHAR NOT NULL, report_json VARCHAR NOT NULL);
+CREATE TABLE IF NOT EXISTS benchmark_prices(
+  qualified_symbol VARCHAR NOT NULL, trading_date DATE NOT NULL, close DOUBLE NOT NULL, adjusted_close DOUBLE NOT NULL,
+  retrieved_at TIMESTAMPTZ NOT NULL, source VARCHAR NOT NULL, PRIMARY KEY (qualified_symbol, trading_date));
 CREATE TABLE IF NOT EXISTS monthly_decision_records(
   record_id VARCHAR PRIMARY KEY, month VARCHAR NOT NULL UNIQUE, decision_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL, record_sha256 VARCHAR NOT NULL, record_json VARCHAR NOT NULL);
@@ -273,6 +278,26 @@ class PrototypeStore:
         with self._connect(True) as db:
             db.execute("INSERT INTO portfolio_transactions (transaction_id, kind, note, voids_transaction_id, recorded_at) VALUES (?, 'void', ?, ?, ?)",
                 [uuid.uuid4().hex, reason, target['transaction_id'], _now()])
+
+    # Benchmark fund prices ---------------------------------------------------
+    def store_benchmark_prices(self, rows):
+        """Insert or replace (symbol, date, close, adjusted_close, retrieved_at, source) rows."""
+        if not rows: return
+        with self._connect(True) as db:
+            db.executemany('INSERT OR REPLACE INTO benchmark_prices VALUES (?, ?, ?, ?, ?, ?)', rows)
+
+    def benchmark_latest_dates(self):
+        if not self._has_table('benchmark_prices'): return {}
+        return {r['qualified_symbol']: date.fromisoformat(str(r['latest'])[:10])
+                for r in self._rows('SELECT qualified_symbol, max(trading_date) AS latest FROM benchmark_prices GROUP BY 1')}
+
+    def benchmark_prices(self, now=None):
+        """{symbol: {date: adjusted_close}} for prices retrieved by `now`."""
+        if not self._has_table('benchmark_prices'): return {}
+        out = {}
+        for r in self._rows('SELECT qualified_symbol, trading_date, adjusted_close FROM benchmark_prices WHERE retrieved_at <= ?', [now or _now()]):
+            out.setdefault(r['qualified_symbol'], {})[date.fromisoformat(str(r['trading_date'])[:10])] = float(r['adjusted_close'])
+        return out
 
     # Monthly decision records ---------------------------------------------
     def create_decision_record(self, record, *, now=None):

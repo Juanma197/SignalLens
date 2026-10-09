@@ -305,10 +305,19 @@ test("scorecard shows hit rates, pending checkpoints and the empty state",()=>{
       items:[{kind:"pick",qualified_symbol:"LKQ.US",decision:null,recommendation:"buy",rank:1,group:"pick",checkpoints:[point(21,{status:"available",return:0.08,excess:0.06,right:true}),point(63,{status:"pending",sessions_elapsed:21})]},
         {kind:"holding",qualified_symbol:"MSFT.US",decision:"REVIEW",group:null,checkpoints:[point(21,{status:"missing_price"}),point(63,{status:"pending",sessions_elapsed:21})]}]}]};
   const html=renderToStaticMarkup(<ScorecardView card={card}/>);
-  assert.match(html,/1 of 2 right \(50\.00%\)/);
+  assert.match(html,/1 of 2 right vs list \(50\.00%\)/);
   assert.match(html,/none scored yet/);
   assert.match(html,/Pick #1 · Buy/);
-  assert.match(html,/✓ \+6\.00% vs benchmark/);
+  assert.match(html,/✓ \+6\.00% vs list/);
+  assert.match(html,/once index-fund prices are downloaded/);
+  const withMarket:Scorecard={...card,market:"S&P 500 (SPY)",
+    summary:card.summary.map(x=>x.group==="pick"&&x.sessions===21?{...x,market_scored:2,market_right:0,market_hit_rate:0,mean_excess_market:-0.04}:x),
+    months:card.months.map(m=>({...m,funds:[{qualified_symbol:"SPY.US",label:"S&P 500 (SPY)",checkpoints:[{sessions:21,return:0.05},{sessions:63,return:null}]}],
+      items:m.items.map(i=>({...i,checkpoints:i.checkpoints.map(p=>p.status==="available"?{...p,excess_market:0.03,right_market:true}:p)}))}))};
+  const market=renderToStaticMarkup(<ScorecardView card={withMarket}/>);
+  assert.match(market,/0 of 2 right vs S&amp;P 500 · average -4\.00%/);
+  assert.match(market,/✓ \+3\.00% vs S&amp;P 500/);
+  assert.match(market,/S&amp;P 500 \(SPY\).*\+5\.00%/);
   assert.match(html,/pending \(21\/63\)/);
   assert.match(html,/REVIEW · not scored/);
   assert.match(html,/~1 month/);

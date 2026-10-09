@@ -1,5 +1,5 @@
 """Scorecard: frozen monthly records scored against the assessed-universe benchmark (offline)."""
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import duckdb
@@ -58,10 +58,22 @@ def test_calls_are_scored_against_the_benchmark_at_exact_sessions(paths):
     assert review['status'] == 'missing_price' and 'right' not in review and by['NOPE.US']['group'] is None
     assert [c['status'] for c in by['SYN07.US']['checkpoints'][1:]] == ['pending'] * 3
     summary = {(s['group'], s['sessions']): s for s in result['summary']}
-    assert summary[('pick', 21)] == {'group': 'pick', 'sessions': 21, 'scored': 1, 'right': 1, 'hit_rate': 1.0,
-                                    'mean_excess': pytest.approx(0.42 - bench21['return'])}
+    assert {k: summary[('pick', 21)][k] for k in ('scored', 'right', 'hit_rate')} == {'scored': 1, 'right': 1, 'hit_rate': 1.0}
+    assert summary[('pick', 21)]['mean_excess'] == pytest.approx(0.42 - bench21['return'])
     assert summary[('pick', 63)]['scored'] == 0 and summary[('pick', 63)]['hit_rate'] is None
     assert score([], research_db=paths[0])['months'] == []
+    # With SPY prices for the same sessions (1.5% per session), every call is also compared with the market.
+    sessions = [date(2026, 9, 30)] + list(pd.bdate_range(start='2026-10-01', periods=30).date)
+    spy = {d: 100 * (1 + 0.015 * j) for j, d in enumerate(sessions)}
+    with_market = score([record(symbols)], research_db=paths[0], funds={'SPY.US': spy}, now=datetime(2027, 1, 5, tzinfo=timezone.utc))
+    month = with_market['months'][0]
+    assert month['funds'][0]['qualified_symbol'] == 'SPY.US' and month['funds'][0]['checkpoints'][0]['return'] == pytest.approx(0.315)
+    by = {i['qualified_symbol']: i['checkpoints'][0] for i in month['items']}
+    assert by['SYN07.US']['excess_market'] == pytest.approx(0.42 - 0.315) and by['SYN07.US']['right_market'] is True
+    assert by['SYN05.US']['right_market'] is True and by['SYN03.US']['right_market'] is False
+    pick21 = next(s for s in with_market['summary'] if s['group'] == 'pick' and s['sessions'] == 21)
+    assert pick21['market_scored'] == 1 and pick21['market_hit_rate'] == 1.0 and with_market['market'] == 'S&P 500 (SPY)'
+    assert summary[('pick', 21)]['market_scored'] == 0  # without fund prices, no market comparison
 
 
 def test_records_are_frozen_once_per_month_and_never_backfilled(paths):

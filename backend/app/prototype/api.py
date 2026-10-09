@@ -386,11 +386,13 @@ _SCORECARD = {}
 @router.get('/scorecard')
 def scorecard():
     settings = get_settings()
-    records = _call(_store().decision_records)
-    key = (tuple(r['record_id'] for r in records), datetime.now(timezone.utc).date(), _stat(settings.research_database_path))
+    store = _store()
+    records = _call(store.decision_records)
+    key = (tuple(r['record_id'] for r in records), datetime.now(timezone.utc).date(), _stat(settings.research_database_path),
+           _stat(settings.prototype_database_path))
     if key not in _SCORECARD:
         try:
-            result = score(records, research_db=settings.research_database_path)
+            result = score(records, research_db=settings.research_database_path, funds=_call(store.benchmark_prices))
         except PrototypeError as exc:
             raise HTTPException(409, detail={'code': exc.code, 'message': 'Stored prices could not safely be read.'}) from None
         if len(_SCORECARD) >= 8: _SCORECARD.clear()

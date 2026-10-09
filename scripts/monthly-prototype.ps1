@@ -1,6 +1,8 @@
 # PowerShell 5.1. Monthly prototype routine, one stage at a time with checks:
 #   1 preflight  2 verified backup  3 refresh dry run  4 price refresh (EODHD)
 #   5 read-only roster at the current cutoff, saved as a report
+# Stage 4 also downloads index-fund prices (SPY, IJH, IJR) into the separate
+# prototype store for the scorecard's market benchmark (3 requests).
 # Recording the snapshot stays a deliberate step in the UI afterwards.
 #   .\scripts\monthly-prototype.ps1                 full routine
 #   .\scripts\monthly-prototype.ps1 -SkipRefresh    stage 5 only (no backup, no requests)
@@ -17,6 +19,7 @@ $Backend = Join-Path $Project "backend"
 $Research = Join-Path $Backend "data\research\signallens-research.duckdb"
 $Production = Join-Path $Backend "data\signallens.duckdb"
 $Reports = Join-Path $Backend "data\research\reports"
+$PrototypeDb = Join-Path $Backend "data\prototype\signallens-prototype.duckdb"
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 function Stage([string]$Text) { Write-Host ""; Write-Host "== $Text" -ForegroundColor Cyan }
 
@@ -66,6 +69,9 @@ if (-not $SkipRefresh) {
         $Result = & $Python -m app.eodhd_ingestion_cli refresh --research-db $Research --production-db $Production `
             --daily-request-budget $DailyRequestBudget --requests-per-minute $RequestsPerMinute --maximum-runtime-seconds 7200
         $Exit = $LASTEXITCODE
+        # Market benchmark for the scorecard; a failure here never blocks the refresh.
+        $Bench = & $Python -m app.prototype.benchmarks --prototype-db $PrototypeDb
+        $BenchExit = $LASTEXITCODE
     } finally {
         Remove-Item Env:SIGNALLENS_EODHD_API_TOKEN -ErrorAction SilentlyContinue
         Remove-Variable Secure -ErrorAction SilentlyContinue
@@ -76,6 +82,10 @@ if (-not $SkipRefresh) {
     if ($Exit -ne 0) { throw "Refresh failed (exit $Exit). Research backup: $Backup. Output: $Output" }
     $Refresh = ($Result -join "`n") | ConvertFrom-Json
     Write-Host "Refresh status: $($Refresh.status); completed $($Refresh.completed), failed $($Refresh.failed), pending $($Refresh.pending). Output: $Output"
+    $BenchOutput = Join-Path $Reports "benchmarks-$Stamp.json"
+    [System.IO.File]::WriteAllText($BenchOutput, ($Bench -join [Environment]::NewLine), $Utf8)
+    if ($BenchExit -eq 0) { Write-Host "Index-fund prices updated (SPY, IJH, IJR). Output: $BenchOutput" }
+    else { Write-Host "Index-fund prices were not fully updated (exit $BenchExit); the scorecard keeps the previous ones. Output: $BenchOutput" -ForegroundColor Yellow }
     if ($Refresh.status -eq "partial_checkpointed") {
         Write-Host "Stopped at the request budget or runtime limit. Rerun this script tomorrow to continue; do not record a snapshot yet." -ForegroundColor Yellow
         return
