@@ -9,7 +9,14 @@ export type ValueAssessment = {security_id: string; qualified_symbol: string; co
   price_session?: string; middle_value_per_share?: number|null; conviction?: "high"|"medium"|"low"; conviction_points?: number; conviction_for?: string[];
   conviction_against?: string[]; risk?: "low"|"medium"|"high"; risks?: string[]; score?: number; value_traps?: string[]};
 export type ValueRanking = {population: number; picks: string[]; companies: ValueAssessment[]; method: string; label: string;
-  rules: {minimum_upside: number; strong_upside: number; maximum_picks: number}};
+  rules: {minimum_upside: number; strong_upside: number; maximum_picks: number};
+  verdict_rules?: Record<VerdictQuestion|"action", string>; verdict_method?: string};
+export type VerdictQuestion = "cheap"|"quality"|"growth"|"risk";
+export type VerdictLevel = "positive"|"mixed"|"negative"|"neutral"|"unknown";
+export type VerdictFigure = {label: string; value: number; unit: "percent"|"multiple"|"ratio"|"usd"|"per_share_usd"|"count"};
+export type Verdict = {question: VerdictQuestion|"action"; level: VerdictLevel; headline: string; because: string[]; figures: VerdictFigure[]};
+/** Plain-English answers for one eligible company (backend `prototype/verdicts.py`); absent in older snapshots. */
+export type Verdicts = {action: Verdict; answers: Verdict[]};
 
 const RECOMMENDATION = {strong_buy: "Strong Buy", buy: "Buy"};
 const STATUS: Record<ValueStatus, string> = {candidate: "Candidate", watch: "Watch — cheap but not convincing", not_undervalued: "Not undervalued",

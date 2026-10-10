@@ -1,11 +1,11 @@
 import Link from "next/link";
 import {useState} from "react";
 import {describeCutoff} from "./when";
-import type {ValueRanking} from "./value-view";
+import type {ValueRanking, Verdicts} from "./value-view";
 
 export type Calculation = {formula: string; start_session: string; end_session: string; start_adjusted_close: number; end_adjusted_close: number; session_intervals: number; momentum_return: number; source: string[]; latest_input_retrieved_at: string};
 export type Fact = {field: string; value: number; unit: string; concept: string; reported_start: string|null; reported_end: string; period_kind: string; reported_days?: number|null; form: string; public_at: string; retrieved_at: string; known_at: string; citation: {fact_key: string; accession: string; cik: string; source_endpoint: string}};
-export type Company = {security_id: string; direct_field_count?: number; qualified_symbol: string|null; company_name: string|null; eligible: boolean; reasons: string[]; calculation: Calculation|null; direct_evidence: Fact[]; missing_data: {field: string; reasons: string[]}[]; risks: string[]; identity_evidence: Record<string, string|null>|null; action_coverage: ActionCoverage|null; industry?: Industry|null; size?: Size|null; financials?: Financials|null; valuation?: Valuation|null; sector_notes?: string[]; events?: Events|null; brief?: AnalystBrief|null};
+export type Company = {security_id: string; direct_field_count?: number; qualified_symbol: string|null; company_name: string|null; eligible: boolean; reasons: string[]; calculation: Calculation|null; direct_evidence: Fact[]; missing_data: {field: string; reasons: string[]}[]; risks: string[]; identity_evidence: Record<string, string|null>|null; action_coverage: ActionCoverage|null; industry?: Industry|null; size?: Size|null; financials?: Financials|null; valuation?: Valuation|null; sector_notes?: string[]; events?: Events|null; brief?: AnalystBrief|null; verdicts?: Verdicts|null};
 export type FinValue = {value: number; concept: string; accession: string; form: string; known_at: string};
 export type FinYear = {fiscal_year_end: string; values: Record<string, FinValue>; calculated: Record<string, number>};
 export type Observation = {kind: "strength"|"weakness"|"neutral"|"gap"; area: string; text: string; fiscal_years: string[]};
