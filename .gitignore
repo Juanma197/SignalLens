@@ -7,4 +7,6 @@ backend/data/
 *.duckdb
 frontend/.next/
 frontend/node_modules/
+# Railway's configuration SDK (root package.json), used by `railway config plan`.
+/node_modules/
 frontend/.env.local
