@@ -1,8 +1,12 @@
 """Recent SEC filing events (8-K/6-K) as catalyst and risk context.
 
-Reads the stored, already-classified `sec_event_metadata` (no requests). An
-event is visible from the later of its public time and retrieval time. Categories
-come from the stored classifier, whose confidence is shown. Flags and timing
+Reads the stored `sec_event_metadata` (no requests). An event is visible from the
+later of its public time and retrieval time. Categories are derived here from the
+stored 8-K item codes (ITEMS below) rather than taken from the stored category:
+the shared classifier, kept as it is for the frozen research tracks, files items
+2.05 (exit or disposal costs) and 2.06 (impairments) under bankruptcy and misses
+item 1.03 (bankruptcy or receivership). Filings without item codes keep the
+stored category. Flags and timing
 estimates below are fixed rules and interpretation; they never affect the
 shortlist. Each event links to its SEC filing.
 """
@@ -20,18 +24,42 @@ CATEGORY_LABELS = {
     'acquisition_disposal': 'Acquisition or disposal',
     'capital_raise': 'Capital raise or new debt',
     'delisting_compliance': 'Listing compliance or delisting',
-    'bankruptcy_distress': 'Bankruptcy or financial distress',
+    'bankruptcy_distress': 'Bankruptcy, receivership or debt acceleration',
+    'impairment': 'Material impairment (write-down)',
+    'restructuring': 'Restructuring or exit costs',
     'other_material_event': 'Other material event',
     'material_event_unclassified': 'Material event (unclassified)',
     'general_company_news': 'General company news',
 }
 # Category -> (kind, explanation) for rule-based flags.
 FLAGS = {
-    'bankruptcy_distress': ('risk', 'A filing classified as bankruptcy or financial distress appeared in the last year.'),
+    'bankruptcy_distress': ('risk', 'A bankruptcy, receivership or debt-acceleration filing (8-K item 1.03 or 2.04) appeared in the last year.'),
+    'impairment': ('risk', 'A material impairment (an asset write-down, 8-K item 2.06) was filed in the last year.'),
     'delisting_compliance': ('risk', 'A listing-compliance or delisting notice appeared in the last year.'),
     'capital_raise': ('risk', 'A capital raise or new borrowing was filed in the last year (possible dilution or more debt).'),
     'acquisition_disposal': ('catalyst', 'An acquisition or disposal was filed in the last year; it can change the business mix.'),
 }
+# SEC 8-K item -> category. https://www.sec.gov/files/form8-k.pdf
+ITEMS = {
+    '1.01': 'material_contract', '1.02': 'material_contract', '1.03': 'bankruptcy_distress',
+    '2.01': 'acquisition_disposal', '2.02': 'earnings_financial_results',
+    '2.04': 'bankruptcy_distress', '2.05': 'restructuring', '2.06': 'impairment',
+    '3.01': 'delisting_compliance', '3.02': 'capital_raise', '4.01': 'other_material_event', '4.02': 'other_material_event',
+    '5.02': 'management_director_change', '5.07': 'shareholder_matters',
+    '7.01': 'other_material_event', '8.01': 'other_material_event', '9.01': 'other_material_event',
+}
+# A filing with several items takes the most serious one; otherwise the shared classifier's order. Only the
+# distress items differ from the shared classifier; everything else is classified exactly as before.
+PRIORITY = ('bankruptcy_distress', 'delisting_compliance', 'impairment', 'restructuring', 'material_contract', 'acquisition_disposal',
+            'earnings_financial_results', 'capital_raise', 'other_material_event', 'management_director_change', 'shareholder_matters')
+
+
+def categorize(codes, stored):
+    """The category for a filing's 8-K item codes; the stored one when there are none."""
+    found = {ITEMS[c] for c in codes if c in ITEMS}
+    return next((p for p in PRIORITY if p in found), stored)
+
+
 ACCESSION = re.compile(r'^\d{10}-\d{2}-\d{6}$')
 DOCUMENT = re.compile(r'^[A-Za-z0-9._-]{1,120}$')
 
@@ -49,6 +77,7 @@ def read_events(db, decision, stamp, *, known=None):
         if not (stamp(public) and stamp(retrieved) and stamp(public) <= decision and stamp(retrieved) <= (known or decision)): continue
         try: codes = [str(c) for c in json.loads(items)] if items else []
         except ValueError: codes = []
+        category = categorize(codes, category)
         found.setdefault(str(sid), []).append({'cik': cik, 'accession': accession, 'form': form, 'filing_date': filed,
             'known_at': max(stamp(public), stamp(retrieved)), 'items': codes, 'category': category,
             'label': CATEGORY_LABELS.get(category, category), 'confidence': confidence, 'amendment': bool(amendment),
