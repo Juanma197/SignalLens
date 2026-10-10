@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {setTimeout as delay} from "node:timers/promises";
 import {NextRequest} from "next/server";
-import {GET, MODEL_LABORATORY_TIMEOUT_MS, POST, timeoutForResearchPath} from "./[...path]/route";
+import {GET, MODEL_LABORATORY_TIMEOUT_MS, POST, PROTOTYPE_TIMEOUT_MS, timeoutForResearchPath} from "./[...path]/route";
 
 test("a response taking more than 15 seconds succeeds within the Model Laboratory timeout",async t=>{
   const originalFetch=globalThis.fetch;
@@ -15,7 +15,9 @@ test("a response taking more than 15 seconds succeeds within the Model Laborator
   assert.equal(response.status,200);
   assert.equal(MODEL_LABORATORY_TIMEOUT_MS,60_000);
   assert.equal(timeoutForResearchPath(["briefs"]),15_000);
-  assert.equal(timeoutForResearchPath(["prototype","roster"]),60_000);
+  assert.equal(PROTOTYPE_TIMEOUT_MS,240_000);
+  assert.equal(timeoutForResearchPath(["prototype","roster"]),240_000);
+  assert.equal(timeoutForResearchPath(["model-laboratory","runs"]),60_000);
 });
 
 test("API authentication is forwarded to the Model Laboratory backend",async t=>{

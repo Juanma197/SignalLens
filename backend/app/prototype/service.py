@@ -35,7 +35,8 @@ MAX_ROWS = 2_000_000
 MAX_ROSTER = 4_000
 MAX_COMPANY_FACTS = 100_000
 MAX_CELL = 1024
-MAX_OUTPUT = 40_000_000
+# The full report is ~30 KB per eligible company: 36 MB at 1,207 eligible.
+MAX_OUTPUT = 200_000_000
 MAX_FILE_BYTES = 32_000_000_000
 FACTS = {
     'CashAndCashEquivalentsAtCarryingValue': ('cash_and_cash_equivalents', 'instant'),
@@ -156,19 +157,36 @@ def _fact_identities(db):
     return [dict(zip(('security_id', 'cik', 'public_at', 'retrieved_at'), r)) for r in rows], _state(actual, 'sec_facts')
 
 
+FACT_BATCH = 200
+
+
+def _company_facts_many(db, security_ids):
+    """Each company's facts for the concepts the prototype uses, read with one query
+    per batch of companies: one query per company took about a minute at ~2,000.
+    Rows keep the table's order within each company."""
+    columns, actual, failed = _columns(db, 'sec_facts')
+    if failed or not {'security_id', 'concept'} <= actual: return {}
+    out = {}
+    for start in range(0, len(security_ids), FACT_BATCH):
+        batch = list(security_ids[start:start + FACT_BATCH])
+        where = (f"WHERE security_id IN ({', '.join('?' for _ in batch)})"
+                 f" AND concept IN ({', '.join('?' for _ in FACT_CONCEPTS)})")
+        args = [*batch, *FACT_CONCEPTS]
+        checks = ' OR '.join(f'length(CAST("{c}" AS VARCHAR))>{MAX_CELL}' for c in columns)
+        if db.execute(f'SELECT count(*) FROM sec_facts {where} AND ({checks})', args).fetchone()[0]:
+            raise PrototypeError('PROTOTYPE_CELL_LIMIT')
+        names = ','.join('"' + c + '"' for c in columns)
+        rows = {sid: [] for sid in batch}
+        for r in db.execute(f'SELECT {names} FROM sec_facts {where}', args).fetchall():
+            row = dict(zip(columns, r)); rows[row['security_id']].append(row)
+        if any(len(v) > MAX_COMPANY_FACTS for v in rows.values()): raise PrototypeError('PROTOTYPE_ROW_LIMIT')
+        out.update(rows)
+    return out
+
+
 def _company_facts(db, security_id):
     """One company's facts for the concepts the prototype uses."""
-    columns, actual, failed = _columns(db, 'sec_facts')
-    if failed or not {'security_id', 'concept'} <= actual: return []
-    marks = ', '.join('?' for _ in FACT_CONCEPTS)
-    where, args = f'WHERE security_id = ? AND concept IN ({marks})', [security_id, *FACT_CONCEPTS]
-    checks = ' OR '.join(f'length(CAST("{c}" AS VARCHAR))>{MAX_CELL}' for c in columns)
-    if db.execute(f'SELECT count(*) FROM sec_facts {where} AND ({checks})', args).fetchone()[0]:
-        raise PrototypeError('PROTOTYPE_CELL_LIMIT')
-    names = ','.join('"' + c + '"' for c in columns)
-    rows = [dict(zip(columns, r)) for r in db.execute(f'SELECT {names} FROM sec_facts {where} LIMIT {MAX_COMPANY_FACTS + 1}', args).fetchall()]
-    if len(rows) > MAX_COMPANY_FACTS: raise PrototypeError('PROTOTYPE_ROW_LIMIT')
-    return rows
+    return _company_facts_many(db, [security_id]).get(security_id, [])
 
 
 def _matched(data, decision):
@@ -560,20 +578,32 @@ def _size(sec, entries, decision, calculation):
     return ([] if low <= value <= high else ['market_cap_outside_band']), size
 
 
-def _fiscal_year_prices(db, symbol, ends, known):
-    """Unadjusted close on the last stored US session on or before each fiscal
-    year end (within 7 days), visible by the cutoff. Prices beyond the main
-    450-day read are needed, so this is a small separate query per company."""
-    found = {}
-    for end in ends[:6]:
-        row = db.execute("""SELECT trading_date, close FROM global_price_observations
-            WHERE qualified_symbol = ? AND exchange = 'US' AND status = 'available'
-              AND trading_date BETWEEN ? AND ? AND retrieved_at <= ?
-            ORDER BY trading_date DESC, source LIMIT 1""",
-            [symbol, end - timedelta(days=7), end, known.replace(tzinfo=None)]).fetchone()
-        if row and finite(row[1]) and float(row[1]) > 0:
-            found[end] = {'session': day(row[0]), 'close': float(row[1])}
+def _fiscal_year_prices_many(db, wanted, known):
+    """{symbol: fiscal year ends} -> {symbol: {end: price}}: the unadjusted close on
+    the last stored US session on or before each fiscal year end (within 7 days),
+    visible by the cutoff. Prices beyond the main 450-day read are needed, so these
+    are read separately: one query per batch of companies, not per year per company."""
+    pairs = [(symbol, end) for symbol, ends in wanted.items() for end in ends[:6]]
+    found = {symbol: {} for symbol in wanted}
+    for start in range(0, len(pairs), FACT_BATCH * 6):
+        batch = pairs[start:start + FACT_BATCH * 6]
+        values = ', '.join('(?, CAST(? AS DATE))' for _ in batch)
+        rows = db.execute(f"""SELECT symbol, fiscal_end, trading_date, close FROM (
+              SELECT w.symbol, w.fiscal_end, p.trading_date, p.close, row_number() OVER (
+                PARTITION BY w.symbol, w.fiscal_end ORDER BY p.trading_date DESC, p.source) AS n
+              FROM (VALUES {values}) AS w(symbol, fiscal_end)
+              JOIN global_price_observations p ON p.qualified_symbol = w.symbol
+              WHERE p.exchange = 'US' AND p.status = 'available' AND p.retrieved_at <= ?
+                AND p.trading_date BETWEEN w.fiscal_end - INTERVAL 7 DAY AND w.fiscal_end)
+            WHERE n = 1""", [v for pair in batch for v in pair] + [known.replace(tzinfo=None)]).fetchall()
+        for symbol, end, session, close in rows:
+            if finite(close) and float(close) > 0:
+                found[symbol][day(end)] = {'session': day(session), 'close': float(close)}
     return found
+
+
+def _fiscal_year_prices(db, symbol, ends, known):
+    return _fiscal_year_prices_many(db, {symbol: ends}, known)[symbol]
 
 
 def _build(db, decision, target, known=None, cache=None):
@@ -621,13 +651,18 @@ def _build(db, decision, target, known=None, cache=None):
     symbol_counts = Counter(r.get('qualified_symbol') for r in selected)
     company_facts = {}
     companies = []
+    listed = [sid for sid in sorted(roster_ids) if len(listings_by_sid.get(sid, [])) == 1]
+    facts_by_sid = {}
     for sid in sorted(roster_ids):
         listings = listings_by_sid.get(sid, [])
         if len(listings) != 1:
             companies.append({'security_id': sid, 'qualified_symbol': None, 'company_name': None, 'eligible': False,
                 'reasons': ['active_listing_missing_or_ambiguous'], 'calculation': None, 'direct_evidence': [], 'missing_data': [], 'risks': ['Identity cannot be resolved.'], 'identity_evidence': None, 'action_coverage': None, 'industry': None, 'size': None}); continue
         sec = dict(listings[0], security_id=sid)
-        facts = _company_facts(db, sid)
+        if sid not in facts_by_sid:  # the next batch of companies, read together
+            at = listed.index(sid)
+            facts_by_sid = _company_facts_many(db, listed[at:at + FACT_BATCH])
+        facts = facts_by_sid[sid]
         own = {t: rows.get(sid, []) for t, rows in by_sid.items()} | {t: rows.get(sec['qualified_symbol'], []) for t, rows in by_symbol.items()} | {'sec_facts': facts}
         prices, calculation, wanted, actions = _price(sec, own, decision, sessions, known)
         identity, resolved_cik, mapping = _identity(sec, own, decision, matched, wanted[0] if wanted else decision.date(), known)
@@ -657,15 +692,20 @@ def _build(db, decision, target, known=None, cache=None):
             'financials': annual_brief(sec, facts, decision, stamp=stamp, finite=finite, known=known)})
         if not reasons: company_facts[sid] = facts  # kept for the first-reported history below
     eligible = sorted([c for c in companies if c['eligible']], key=lambda c: (hashlib.sha256((CONFIG['version'] + ':' + c['security_id']).encode()).hexdigest(), c['security_id']))
+    firsts = {}
     for c in companies:
         if c.get('financials') is not None: c['valuation'] = valuation(c.get('size'), c['financials'])
+        if c['eligible'] and c.get('valuation'):
+            firsts[c['security_id']] = annual_brief({'security_id': c['security_id'], 'cik': c['cik']}, company_facts[c['security_id']], decision,
+                                                    stamp=stamp, finite=finite, revision='first', known=known)
+    year_prices = _fiscal_year_prices_many(db, {c['qualified_symbol']: [y['fiscal_year_end'] for y in firsts[c['security_id']]['years']]
+                                                for c in companies if c['security_id'] in firsts}, known)
+    for c in companies:
         if c.get('industry'): c['sector_notes'] = sector_notes(c['industry'])
         if c.get('cik'): c['events'] = event_brief(c, filing_events.get(c['security_id'], []), decision, full=c['eligible'])
-        if c['eligible'] and c.get('valuation'):
-            first = annual_brief({'security_id': c['security_id'], 'cik': c['cik']}, company_facts[c['security_id']], decision,
-                                 stamp=stamp, finite=finite, revision='first', known=known)
-            prices = _fiscal_year_prices(db, c['qualified_symbol'], [y['fiscal_year_end'] for y in first['years']], known)
-            c['valuation']['history'] = valuation_history(first, prices, c['size']['close'])
+        if c['security_id'] in firsts:
+            first = firsts[c['security_id']]
+            c['valuation']['history'] = valuation_history(first, year_prices[c['qualified_symbol']], c['size']['close'])
             c['valuation']['scenarios'] = scenario_ranges(c['financials'], c['valuation']['history'], c['size'])
         if not c['eligible'] and c.get('financials'): c['financials'] = summary_only(c['financials'])
     members = eligible[:target]
