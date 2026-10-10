@@ -45,5 +45,6 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: "/((?!_next/static|_next/image|favicon.ico).*)",
+  // /api/health is Railway's deploy health check: public, it reveals nothing.
+  matcher: "/((?!_next/static|_next/image|favicon.ico|api/health$).*)",
 };

@@ -17,7 +17,7 @@ export default defineRailway(() => {
     source: github("Juanma197/SignalLens", { checkSuites: false, rootDirectory: "/frontend" }),
     // From frontend/railway.toml (Config as Code, retired 2026-12-01). Restarts on failure: Railway's default policy, stored as unset.
     build: { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
-    deploy: { healthcheckPath: "/", healthcheckTimeout: 300, restartPolicyMaxRetries: 5 },
+    deploy: { healthcheckPath: "/api/health", healthcheckTimeout: 300, restartPolicyMaxRetries: 5 },  // "/" requires the dashboard login
     replicas: { "sfo": 1 },
     env: { SIGNALLENS_API_TOKEN: preserve(), SIGNALLENS_API_URL: preserve(), SIGNALLENS_DASHBOARD_PASSWORD: preserve(), SIGNALLENS_DASHBOARD_USERNAME: preserve(), SIGNALLENS_ENVIRONMENT: preserve() },
   });
