@@ -22,7 +22,7 @@ from .shadow_portfolios import (create_shadow_vintage, evaluate_matured_shadows,
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bounded EODHD global research ingestion")
-    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "diagnose-extreme-labels", "plan-label-repair", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage", "model-readiness", "research-scoring", "research-horizon-evaluation", "research-us-fundamentals-evaluation", "research-us-fundamentals-diagnostics", "plan-shadow-vintage", "create-shadow-vintage", "shadow-status", "evaluate-matured-shadows"])
+    parser.add_argument("command", choices=["plan", "diagnose-catalogue", "diagnose-extreme-labels", "plan-label-repair", "dry-run", "ingest-catalogue", "ingest-prices", "ingest-splits", "ingest-fx", "resume", "audit", "plan-refresh", "refresh", "retry-failures", "reconcile", "status", "coverage", "model-readiness", "research-scoring", "research-horizon-evaluation", "research-us-fundamentals-evaluation", "research-us-fundamentals-diagnostics", "plan-shadow-vintage", "create-shadow-vintage", "shadow-status", "evaluate-matured-shadows"])
     parser.add_argument("--catalogue-fixture", type=Path,
                         help="local sanitized JSON object keyed by region (diagnose-catalogue only)")
     parser.add_argument("--research-db", type=Path)
@@ -144,6 +144,7 @@ def execute(args: argparse.Namespace, *, transport=None, now: datetime | None = 
     if args.command == "ingest-prices": return operation.prices(retrieved_at=captured)
     if args.command == "resume": return operation.prices(retrieved_at=captured, resume=True)
     if args.command == "ingest-fx": return operation.fx(retrieved_at=captured)
+    if args.command == "ingest-splits": return operation.splits(retrieved_at=captured)
     if args.command == "status": return operation.status()
     if args.command == "audit": return operation.audit(as_of=captured, affected_limit=args.affected_limit)
     if args.command == "plan-refresh": return operation.plan_refresh(

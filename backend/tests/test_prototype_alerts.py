@@ -117,6 +117,7 @@ def test_daily_prices_fill_every_missing_weekday_then_mark_coverage(paths):
     calls = []
     def transport(request):
         day = request.url.params['date']; calls.append((day, request.url.params.get('type')))
+        if request.url.params.get('type') == 'splits': return httpx.Response(200, json=[])
         if request.url.params.get('type') == 'dividends':
             return httpx.Response(200, json=[{'code': 'SYN01', 'date': day, 'dividend': '0.25'}] if day == '2026-10-05' else [])
         return httpx.Response(200, json=[{'code': 'SYN01', 'date': day, 'open': 10, 'high': 11, 'low': 9, 'close': 10.5, 'adjusted_close': 10.5, 'volume': 100},
@@ -125,7 +126,7 @@ def test_daily_prices_fill_every_missing_weekday_then_mark_coverage(paths):
     client = EODHDClient('secret', EODHDLimits(daily_requests=50, requests_per_minute=100000), transport=httpx.MockTransport(transport), sleep=lambda _: None)
     report = update(research=research, production=production, client=client, now=datetime(2026, 10, 6, 23, tzinfo=timezone.utc))
     assert report['status'] == 'completed' and [d['date'] for d in report['days']] == ['2026-10-02', '2026-10-05', '2026-10-06']
-    assert report['days'][1] == {'date': '2026-10-05', 'prices': 1, 'dividends': 1}  # invalid SYN02 row and unlisted code skipped
+    assert report['days'][1] == {'date': '2026-10-05', 'prices': 1, 'dividends': 1, 'splits': 0, 'rebased': []}  # invalid SYN02 row and unlisted code skipped
     with duckdb.connect(str(research), read_only=True) as db:
         assert db.execute("SELECT count(*) FROM eodhd_ingestion_checkpoints WHERE stage = 'bulk_daily'").fetchone()[0] == len(symbols)
         assert db.execute("SELECT value FROM global_corporate_actions WHERE qualified_symbol = 'SYN01.US' AND ex_date = DATE '2026-10-05'").fetchone()[0] == 0.25
@@ -133,6 +134,58 @@ def test_daily_prices_fill_every_missing_weekday_then_mark_coverage(paths):
     # Nothing new before the next close: no requests.
     assert update(research=research, production=production, client=client, now=datetime(2026, 10, 7, 12, tzinfo=timezone.utc))['days'] == []
 
+
+
+def test_daily_prices_split_downloads_the_listing_again_on_one_basis(paths):
+    from app.daily_prices import update
+    from app.eodhd_ingestion import EODHDClient, EODHDLimits
+    research, production = paths[:2]
+    with duckdb.connect(str(research)) as db:
+        db.execute("CREATE TABLE IF NOT EXISTS eodhd_ingestion_checkpoints (stage VARCHAR, qualified_symbol VARCHAR, status VARCHAR, error_code VARCHAR, updated_at TIMESTAMP, PRIMARY KEY(stage, qualified_symbol))")
+        symbols = [r[0] for r in db.execute("SELECT qualified_symbol FROM security_listings").fetchall()]
+        db.executemany("INSERT OR REPLACE INTO eodhd_ingestion_checkpoints VALUES ('refresh', ?, 'completed', NULL, TIMESTAMP '2026-10-02 23:00:00')", [[s] for s in symbols])
+        db.execute("UPDATE global_price_observations SET source = 'eodhd'")  # only provider rows are rebased
+        first = db.execute("SELECT min(trading_date) FROM global_price_observations WHERE qualified_symbol = 'SYN01.US'").fetchone()[0]
+    histories = []
+    def transport(request):
+        if request.url.path.endswith('/eod/SYN01.US'):
+            histories.append(request.url.params['from'])
+            return httpx.Response(200, json=[{'date': d, 'open': 5, 'high': 6, 'low': 4, 'close': 5.25, 'adjusted_close': 5.25, 'volume': 100}
+                                             for d in (request.url.params['from'], '2026-10-05')])
+        day, kind = request.url.params['date'], request.url.params.get('type')
+        if kind == 'splits':
+            return httpx.Response(200, json=[{'code': 'SYN01', 'exchange': 'US', 'date': day, 'split': '2.000000/1.000000'}] if day == '2026-10-05' else [])
+        if kind == 'dividends': return httpx.Response(200, json=[])
+        return httpx.Response(200, json=[{'code': 'SYN01', 'date': day, 'open': 5, 'high': 6, 'low': 4, 'close': 5.25, 'adjusted_close': 5.25, 'volume': 100}])
+    client = EODHDClient('secret', EODHDLimits(daily_requests=50, requests_per_minute=100000), transport=httpx.MockTransport(transport), sleep=lambda _: None)
+    report = update(research=research, production=production, client=client, now=datetime(2026, 10, 5, 23, tzinfo=timezone.utc))
+    assert report['status'] == 'completed' and report['days'][0]['rebased'] == ['SYN01.US']
+    assert histories == [first.isoformat()]  # everything stored is fetched again, not just ten years
+    with duckdb.connect(str(research), read_only=True) as db:
+        assert db.execute("SELECT value FROM global_corporate_actions WHERE qualified_symbol = 'SYN01.US' AND action_type = 'split'").fetchone()[0] == 2
+        assert db.execute("SELECT close, retrieved_at FROM global_price_observations WHERE qualified_symbol = 'SYN01.US' AND trading_date = ?", [first]).fetchone() == (5.25, datetime(2026, 10, 5, 23))
+
+
+def test_daily_prices_failed_split_rebase_stops_before_storing_the_day(paths):
+    from app.daily_prices import update
+    from app.eodhd_ingestion import EODHDClient, EODHDLimits
+    research, production = paths[:2]
+    with duckdb.connect(str(research)) as db:
+        db.execute("CREATE TABLE IF NOT EXISTS eodhd_ingestion_checkpoints (stage VARCHAR, qualified_symbol VARCHAR, status VARCHAR, error_code VARCHAR, updated_at TIMESTAMP, PRIMARY KEY(stage, qualified_symbol))")
+        symbols = [r[0] for r in db.execute("SELECT qualified_symbol FROM security_listings").fetchall()]
+        db.executemany("INSERT OR REPLACE INTO eodhd_ingestion_checkpoints VALUES ('refresh', ?, 'completed', NULL, TIMESTAMP '2026-10-02 23:00:00')", [[s] for s in symbols])
+        db.execute("UPDATE global_price_observations SET source = 'eodhd'")  # only provider rows are rebased
+    def transport(request):
+        if '/eod/' in request.url.path: return httpx.Response(200, json=[{'date': 'not-a-date'}])
+        if request.url.params.get('type') == 'splits':
+            return httpx.Response(200, json=[{'code': 'SYN01', 'date': request.url.params['date'], 'split': '1.000000/10.000000'}])
+        return httpx.Response(200, json=[])
+    client = EODHDClient('secret', EODHDLimits(daily_requests=50, requests_per_minute=100000), transport=httpx.MockTransport(transport), sleep=lambda _: None)
+    report = update(research=research, production=production, client=client, now=datetime(2026, 10, 5, 23, tzinfo=timezone.utc))
+    assert report['status'] == 'stopped' and report['stop_reason'] == 'split_rebase_failed' and report['days'] == []
+    with duckdb.connect(str(research), read_only=True) as db:
+        assert db.execute("SELECT count(*) FROM global_corporate_actions WHERE action_type = 'split'").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM eodhd_bulk_days").fetchone()[0] == 0
 
 def test_telegram_chat_id_lists_who_messaged_the_bot():
     from app.prototype.alerts import telegram_chat_id
