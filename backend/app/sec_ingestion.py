@@ -302,16 +302,19 @@ def ingest(*, research: Path, production: Path, authorization: str | None, dry_r
            limits: IngestionLimits, fixture: dict[str, Any] | None = None,
            retry_only: bool = False, now: datetime | None = None,
            transport: httpx.BaseTransport | None = None, clock=time.monotonic,
-           security_ids: set[str] | None = None, refresh: bool = False) -> dict[str, Any]:
+           security_ids: set[str] | None = None, refresh: bool = False,
+           listings: list[dict[str, str]] | None = None) -> dict[str, Any]:
     """`security_ids` limits the run to those securities; `refresh` re-reads them even
-    when already completed (new filings: stored facts are recognised, new ones added)."""
+    when already completed (new filings: stored facts are recognised, new ones added).
+    `listings` replaces the active catalogue (security_id, qualified_symbol, ticker and,
+    for companies SEC's current ticker file no longer lists, cik and mapping_source)."""
     if authorization != AUTHORIZATION_PHRASE: raise PermissionError("exact SEC ingestion authorization phrase required")
     validate_paths(research, production); production_before=fingerprint(production)
     with duckdb.connect(str(production), read_only=True) as db: db.execute("SELECT 1")
     initialize_schema(research)
     timestamp=(now or datetime.now(timezone.utc)).astimezone(timezone.utc); run_id=str(uuid.uuid4())
     with duckdb.connect(str(research)) as db:
-        selected=_catalogue(db)
+        selected=list(listings) if listings is not None else _catalogue(db)
         if security_ids is not None:
             selected=[r for r in selected if r["security_id"] in security_ids]
         if refresh: pass  # every selected security, completed or not
@@ -325,11 +328,12 @@ def ingest(*, research: Path, production: Path, authorization: str | None, dry_r
             [run_id,timestamp,None,"running",dry_run,limits.max_requests,limits.runtime_seconds,0,0,0,0,None])
     user_agent=os.getenv("SIGNALLENS_SEC_USER_AGENT","")
     client=None if fixture is not None else BudgetClient(user_agent,limits,clock=clock,transport=transport)
-    mapping_payload=fixture.get("ticker_mapping",{}) if fixture else client.get(SEC_TICKERS)
-    mapping=ticker_ciks(mapping_payload,[r["ticker"] for r in selected])
+    unmapped=[r["ticker"] for r in selected if not r.get("cik")]
+    mapping_payload=(fixture.get("ticker_mapping",{}) if fixture else client.get(SEC_TICKERS)) if unmapped else {}
+    mapping=ticker_ciks(mapping_payload,unmapped) if unmapped else {}
     inserted=unchanged=revisions=0; stop_reason=None
     for item in selected:
-        ticker=item["ticker"]; cik=mapping.get(ticker)
+        ticker=item["ticker"]; cik=item.get("cik") or mapping.get(ticker)
         if not cik:
             _failure(research,run_id,item,"ticker_mapping_missing",False,timestamp); continue
         try:
@@ -339,7 +343,7 @@ def ingest(*, research: Path, production: Path, authorization: str | None, dry_r
             if dry_run: continue
             with duckdb.connect(str(research)) as db:
                 db.begin()
-                db.execute("INSERT OR IGNORE INTO sec_issuers VALUES (?,?,?,?,?,?,?)",[item["security_id"],item["qualified_symbol"],ticker,cik,None,SEC_TICKERS,timestamp])
+                db.execute("INSERT OR IGNORE INTO sec_issuers VALUES (?,?,?,?,?,?,?)",[item["security_id"],item["qualified_symbol"],ticker,cik,item.get("issuer_name"),item.get("mapping_source") or SEC_TICKERS,timestamp])
                 # The company's stored facts, read once (per-row lookups rescan the whole table).
                 stored=db.execute("""SELECT taxonomy,concept,unit,period_start,period_end,accession_number,value
                     FROM sec_facts WHERE security_id=?""",[item["security_id"]]).fetchall()

@@ -37,6 +37,7 @@ import uuid
 
 import duckdb
 
+from ..delisted import universe_rows
 from ..model_readiness import fingerprint
 from .allocation import allocate
 from .decisions import decide
@@ -74,8 +75,9 @@ class Series:
 
 class Market:
     """US adjusted closes by symbol, GBP-per-USD rates and index funds, all as Series."""
-    def __init__(self, prices, fx, funds):
-        self.prices, self.fx, self.funds = prices, fx, funds
+    def __init__(self, prices, fx, funds, ended=frozenset()):
+        # `ended`: symbols whose trading stopped (delisted; backtest phase 3).
+        self.prices, self.fx, self.funds, self.ended = prices, fx, funds, frozenset(ended)
 
     def gbp(self, series, day):
         """(session, value in pounds) of the first session after `day`, or None."""
@@ -83,8 +85,14 @@ class Market:
         rate = hit and self.fx.on_or_before(hit[0], max_gap=7)
         return (hit[0], hit[1] * rate[1]) if hit and rate else None
 
-    def gbp_return(self, series, start, end):
+    def gbp_return(self, series, start, end, ended=False):
+        """Return from the first session after `start` to the first after `end`. A
+        company whose trading `ended` before `end` is sold at its last price (then
+        cash): dropping it would bring survivorship back."""
         a, b = self.gbp(series, start), self.gbp(series, end)
+        if a and not b and ended and series.dates[-1] <= end:
+            rate = self.fx.on_or_before(series.dates[-1], max_gap=7)
+            b = rate and (series.dates[-1], series.values[-1] * rate[1])
         return b[1] / a[1] - 1 if a and b else None
 
 
@@ -120,7 +128,7 @@ def pick_returns(months, market, horizon):
         start, end = month['cutoff'], months[i + horizon]['cutoff']
         returns = {}
         for e in month['eligible']:
-            r = market.gbp_return(market.prices.get(e['qualified_symbol']), start, end)
+            r = market.gbp_return(market.prices.get(e['qualified_symbol']), start, end, ended=e['qualified_symbol'] in market.ended)
             if r is not None: returns[e['security_id']] = r
         if not returns: continue
         picks = [returns[s] for s in month['picks'] if s in returns]
@@ -319,7 +327,7 @@ def criteria(simulation, global_plan, skill_12m, *, holdout, survivors_only=True
                         'not shown' if None not in (portfolio, skill) else 'insufficient data') + ('' if not reasons else ' (not decisive)')}
 
 
-def measure(months, market, *, holdout, draws=DRAWS):
+def measure(months, market, *, holdout, draws=DRAWS, survivors_only=True):
     rows = {h: pick_returns(months, market, h) for h in HORIZONS}
     picks = {f'{h}m': pick_summary(rows[h], h, draws=draws) for h in HORIZONS}
     simulation = simulate(months, market)
@@ -332,7 +340,7 @@ def measure(months, market, *, holdout, draws=DRAWS):
                        'average_holdings': _mean([p['holdings'] for p in simulation['path']]), 'path': simulation['path']},
             'global_index': {'fund': GLOBAL, 'performance': global_plan and performance(global_plan['path'])},
             'sp500': {'fund': SP500, 'performance': sp500_plan and performance(sp500_plan['path'])},
-            'criteria': criteria(simulation, global_plan, picks['12m'].get('skill_vs_eligible'), holdout=holdout),
+            'criteria': criteria(simulation, global_plan, picks['12m'].get('skill_vs_eligible'), holdout=holdout, survivors_only=survivors_only),
             'method': __doc__.split('\n\n')[1].strip()}
 
 
@@ -363,6 +371,7 @@ def load_market(research_db, prototype_db, symbols, first, last):
         rows = db.execute("""SELECT qualified_symbol, trading_date, adjusted_close FROM global_price_observations
             WHERE exchange = 'US' AND status = 'available' AND trading_date BETWEEN ? AND ?
               AND list_contains(?, qualified_symbol)""", [first, last, symbols]).fetchall()
+        ended = {r['qualified_symbol'] for r in universe_rows(db)}
         fx = db.execute("""SELECT observed_on, rate FROM global_fx_observations WHERE base_currency = 'USD' AND quote_currency = 'GBP'
                            AND observed_on BETWEEN ? AND ?""", [first, last]).fetchall() \
             if db.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'global_fx_observations'").fetchone()[0] else []
@@ -377,7 +386,7 @@ def load_market(research_db, prototype_db, symbols, first, last):
                 for s, d, v in db.execute('SELECT qualified_symbol, trading_date, adjusted_close FROM benchmark_prices WHERE trading_date BETWEEN ? AND ?',
                                           [first, last]).fetchall():
                     funds.setdefault(s, []).append((d, v))
-    return Market(prices, Series(fx), {s: Series(v) for s, v in funds.items()})
+    return Market(prices, Series(fx), {s: Series(v) for s, v in funds.items()}, ended=ended)
 
 
 def report(replay_db, research_db, prototype_db, run_id=None, draws=DRAWS):
@@ -387,7 +396,10 @@ def report(replay_db, research_db, prototype_db, run_id=None, draws=DRAWS):
     first = months[0]['cutoff']
     last = date(months[-1]['cutoff'].year + 2, 1, 1)
     market = load_market(research_db, prototype_db, symbols, first, last)
-    result = measure(months, market, holdout=holdout, draws=draws) | {'run_id': run_id, 'holdout': holdout}
+    # Phase 3 runs include delisted companies (their ids start "delisted:").
+    delisted = sum(1 for m in months for e in m['eligible'] if str(e['security_id']).startswith('delisted:'))
+    result = measure(months, market, holdout=holdout, draws=draws, survivors_only=not delisted) | {
+        'run_id': run_id, 'holdout': holdout, 'delisted_company_months': delisted}
     for missing in (GLOBAL, SP500):
         if missing not in market.funds: result.setdefault('warnings', []).append(f'{missing} prices are not stored: run app.prototype.benchmarks first.')
     if not market.fx.dates: result.setdefault('warnings', []).append('No GBP/USD rates are stored for this period.')

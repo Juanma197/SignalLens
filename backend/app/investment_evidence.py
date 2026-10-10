@@ -190,8 +190,10 @@ def _catalogue(db, decision):
     active=select_active_catalogue(db,as_of=decision.replace(tzinfo=None))
     if active is None: return []
     frame=active.listings
+    # Delisted companies (backtest phase 3, replay only) are classified like the rest.
+    from .delisted import universe_rows
     return [{"security_id":str(x.security_id),"qualified_symbol":str(x.qualified_symbol)}
-            for x in frame.loc[frame.region.eq("US") & frame.eligible].sort_values("qualified_symbol").itertuples(index=False)]
+            for x in frame.loc[frame.region.eq("US") & frame.eligible].sort_values("qualified_symbol").itertuples(index=False)] +            [{"security_id":r["security_id"],"qualified_symbol":r["qualified_symbol"]} for r in universe_rows(db)]
 
 def _classification_candidates(db, security, decision, rows=None):
     rows=rows or (lambda *a: _rows_where(db,*a)); sid=security["security_id"]; out=[]

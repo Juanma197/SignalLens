@@ -165,7 +165,10 @@ def normalize(payload: dict[str, Any], issuer: dict[str, str], retrieved_at: dat
 
 
 def _mapped(db: duckdb.DuckDBPyConnection) -> tuple[list[dict[str, str]], int]:
-    catalogue = _catalogue(db)
+    # Delisted companies (backtest phase 3) get the same filing events as survivors.
+    from .delisted import universe_rows
+    catalogue = _catalogue(db) + [{"security_id": r["security_id"], "qualified_symbol": r["qualified_symbol"], "ticker": r["ticker"]}
+                                  for r in universe_rows(db)]
     if "sec_issuers" not in {row[0] for row in db.execute("SHOW TABLES").fetchall()}:
         return [], len(catalogue)
     mappings = {str(r[0]): (str(r[1]), str(r[2])) for r in db.execute(
