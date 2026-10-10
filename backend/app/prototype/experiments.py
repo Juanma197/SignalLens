@@ -37,12 +37,28 @@ def _scored(month, statuses=('candidate',)):
 def _ids(assessments): return [a['security_id'] for a in assessments]
 
 
+def _one_sign_is_medium(month):
+    """Rescore with a single warning sign counted as medium risk instead of low
+    (the live rule needs two); every other rule unchanged. Candidates whose new
+    risk would be high stay excluded, as in the live rule."""
+    levels, factor = RULES['risk_levels'], RULES['risk_factor']
+    rescored = []
+    for a in _scored(month):
+        n = len(a.get('risks') or [])
+        risk = 'high' if n >= levels['high'] else 'medium' if n >= 1 else 'low'
+        if risk == 'high': continue
+        score = min(a['upside'], RULES['upside_cap_for_score']) * RULES['conviction_factor'][a['conviction']] * factor[risk]
+        rescored.append((score, a['security_id']))
+    return [sid for _, sid in sorted(rescored, key=lambda x: (-x[0], x[1]))[:3]]
+
+
 # Each variant maps a stored month to its picks. The first is the live rule.
 VARIANTS = {
     'top3_live_rules': lambda m: m['picks'],
     'top10_by_score': lambda m: _ids(_scored(m)[:10]),
     'all_candidates': lambda m: _ids(_scored(m)),
     'top3_without_sharp_fallers': lambda m: _ids([a for a in _scored(m) if not any(r.startswith(FELL) for r in a.get('risks') or [])][:3]),
+    'top3_one_sign_is_medium_risk': _one_sign_is_medium,
     'top3_strong_buy_only': lambda m: _ids([a for a in _scored(m) if a.get('recommendation') == 'strong_buy'][:3]),
     'top3_value_traps_allowed': lambda m: _ids([a for a in _scored(m, ('candidate', 'value_trap'))
                                                 if (a.get('upside') or 0) >= RULES['minimum_upside']][:3]),
