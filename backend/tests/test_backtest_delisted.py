@@ -74,6 +74,7 @@ def test_discovery_verifies_each_filer_and_records_why_others_are_excluded(tmp_p
                    "0000004001": filings([("10-K", "2015-03-01")])})
     result = delisted.discover(research=research, production=production, eodhd=eodhd, sec=sec, names_text=lambda: NAMES, now=NOW)
     assert result["filtered_by_type_or_venue"] == 1 and result["verified"] == 2 and result["eodhd_requests_for_prices"] == 4
+    assert result["new_candidates"] == 5 and result["new_exclusions"] == 3
     with duckdb.connect(str(research), read_only=True) as db:
         rows = {r[0]: r[1:] for r in db.execute("SELECT ticker, status, reason, cik, ticker_confirmed FROM delisted_listings").fetchall()}
     assert rows["AAA"][:2] == ("excluded", "ticker_used_by_active_listing")
