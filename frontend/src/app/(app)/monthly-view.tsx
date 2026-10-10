@@ -3,8 +3,7 @@ import type {ReactNode} from "react";
 import {OVERALL, type CompanyChecks} from "./checks-view";
 import {money, type Total} from "./portfolio-view";
 import {detailHref, percent} from "./view";
-import {describeCutoff} from "./when";
-import {Detail, LEVEL, PickCard, QUESTION, type Pick} from "./pick-card";
+import {Detail, LEVEL, QUESTION, type Pick} from "./pick-card";
 import type {VerdictQuestion, Verdicts} from "./value-view";
 
 export type Decision = "SELL"|"REDUCE"|"REVIEW"|"BUY MORE"|"HOLD";
@@ -60,11 +59,10 @@ export function AllocationView({allocation, decision, target}: {allocation: Allo
 }
 
 const signed = (value: number|null|undefined) => value == null ? "—" : `${value > 0 ? "+" : ""}${percent(value)}`;
-const monthYear = (iso: string) => new Date(iso).toLocaleDateString("en-GB", {month: "long", year: "numeric", timeZone: "UTC"});
 
 /** One holding: the decision and what changed first, then why, then the plain
  *  answers, with the figures behind a disclosure. */
-function HoldingRow({h, link, rules}: {h: Holding; link: (h: Holding) => ReactNode; rules?: Record<string, string>|null}) {
+export function HoldingRow({h, link, rules}: {h: Holding; link: (h: Holding) => ReactNode; rules?: Record<string, string>|null}) {
   const answers = h.verdicts?.answers ?? [];
   const change = h.change;
   return <article className="holding-row">
@@ -85,30 +83,4 @@ function HoldingRow({h, link, rules}: {h: Holding; link: (h: Holding) => ReactNo
   </article>;
 }
 
-const ORDER: Decision[] = ["SELL", "REDUCE", "REVIEW", "BUY MORE", "HOLD"];
 const slug = (d: Decision) => d.toLowerCase().replace(" ", "-");
-
-export function MonthlyView({monthly}: {monthly: Monthly}) {
-  const link = (h: {security_id: string|null; qualified_symbol: string}) =>
-    h.security_id ? <Link href={detailHref(h.security_id, monthly.decision_at, monthly.target_members)}>{h.qualified_symbol}</Link> : h.qualified_symbol;
-  return <div className="brief-stack">
-    {monthly.synthetic_fixture && <p className="notice warning">SYNTHETIC FIXTURE — invented companies and evidence.</p>}
-    <section className="panel prototype-panel"><p className="eyebrow">AS OF {describeCutoff(monthly.decision_at).toUpperCase()}</p><h2>What to do this month</h2>
-      <p className="prototype-decision-counts">{ORDER.map(d => <span key={d} className={`prototype-decision prototype-decision-${slug(d)}`}>{d} {monthly.counts[d]}</span>)}</p>
-      <p>{monthly.label}</p></section>
-
-    <section className="panel prototype-panel"><h2>New opportunities</h2>
-      <p>The month&apos;s undervaluation ranking, from {monthly.population} eligible companies. Places are never filled with weaker names.</p>
-      {monthly.picks.length === 0 ? <p>No company qualifies this month. Keeping cash or your current holdings is a valid outcome.</p> :
-        <div className="pick-cards">{monthly.picks.map(p => <PickCard key={p.security_id} p={p} decision={monthly.decision_at} target={monthly.target_members} rules={monthly.verdict_rules}/>)}</div>}</section>
-
-    <section className="panel prototype-panel"><h2>Your holdings</h2>
-      {monthly.holdings.length === 0 ? <p>No holdings recorded before this cutoff. Record your trades on the <Link href="/portfolio">Portfolio</Link> page.</p> :
-        <div className="holding-rows">{monthly.holdings.map(h => <HoldingRow key={h.qualified_symbol + h.currency} h={h} link={link} rules={monthly.verdict_rules}/>)}</div>}
-      {(monthly.no_longer_held ?? []).length > 0 && <p className="pick-meta">No longer held since {monthYear(monthly.no_longer_held![0].since)}: {monthly.no_longer_held!.map(g => `${g.qualified_symbol} (was ${g.previous_decision})`).join(", ")}.</p>}
-      <p><small>{monthly.method} BUY MORE needs at least {percent(monthly.rules.buy_more_minimum_upside)} upside and a position under {percent(monthly.rules.maximum_position_weight_for_buying)};
-        REDUCE when the price is above the middle-case value or a position exceeds {percent(monthly.rules.reduce_above_position_weight)}; SELL when the thesis breaks or the price is {percent(-monthly.rules.sell_below_upside)} above the middle-case value.
-        In between, HOLD, so small monthly moves do not cause trades.</small></p></section>
-    {monthly.allocation && <AllocationView allocation={monthly.allocation} decision={monthly.decision_at} target={monthly.target_members}/>}
-  </div>;
-}

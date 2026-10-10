@@ -1,7 +1,6 @@
 "use client";
 import {FormEvent, Suspense, useCallback, useEffect, useState} from "react";
 import {useSearchParams} from "next/navigation";
-import Link from "next/link";
 import {PrototypeNotice} from "../view";
 import {ChecksOverview, ChecksReport} from "../checks-view";
 import {When, WhenPicker, cutoffFor, friendlyError, getJson, whenFromQuery} from "../when";
@@ -20,7 +19,7 @@ function ChecksPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on open with the initial choice
   useEffect(() => {load(when);}, [load]);
   function submit(event: FormEvent) {event.preventDefault(); setLoading(true); setError(""); setReport(null); load(when);}
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Thesis checks</strong><Link href="/shortlist">Shortlist</Link><Link href="/">This month</Link><Link href="/portfolio">Portfolio</Link><Link href="/watchlist">Watchlist</Link><Link href="/snapshots">Snapshots</Link></nav>
+  return <main className="research-page">
     <section className="hero compact"><p className="eyebrow">HOLDINGS · WATCHLIST · YOUR CONDITIONS</p><h1>Is the thesis still true?<br/><span>Check before the price tells you.</span></h1>
       <p className="lede">Every holding, watched company and company with conditions, re-checked against the stored evidence. Broken theses come first.</p></section>
     <PrototypeNotice/>

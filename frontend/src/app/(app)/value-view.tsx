@@ -36,9 +36,9 @@ function PickCard({a, decision, target}: {a: ValueAssessment; decision: string; 
   </article>;
 }
 
-export function ValueRankingView({ranking, decision, target}: {ranking: ValueRanking; decision: string; target: number}) {
+export function ValueRankingView({ranking, decision, target, initialFind = ""}: {ranking: ValueRanking; decision: string; target: number; initialFind?: string}) {
   const picks = ranking.companies.filter(a => a.rank != null);
-  const [find, setFind] = useState("");
+  const [find, setFind] = useState(initialFind);
   const needle = find.trim().toLowerCase();
   const [rows, more] = useShown(needle ? ranking.companies.filter(a => `${a.qualified_symbol} ${a.company_name ?? ""}`.toLowerCase().includes(needle)) : ranking.companies);
   return <section className="panel prototype-panel"><p className="eyebrow">THIS MONTH · UNDERVALUATION RANKING</p><h2>Top {ranking.rules.maximum_picks} undervalued candidates</h2>
@@ -48,7 +48,7 @@ export function ValueRankingView({ranking, decision, target}: {ranking: ValueRan
       : <div className="prototype-cards prototype-picks">{picks.map(a => <PickCard key={a.security_id} a={a} decision={decision} target={target}/>)}</div>}
     {picks.length > 0 && picks.length < ranking.rules.maximum_picks && <p>Only {picks.length} {picks.length === 1 ? "company qualifies" : "companies qualify"}; the remaining places are left empty rather than filled with weaker names.</p>}
     <h3>Every eligible company</h3>
-    {ranking.companies.length > 25 && <p><label>Find a company <input type="search" value={find} onChange={e => setFind(e.target.value)} placeholder="Symbol or name"/></label></p>}
+    {(ranking.companies.length > 25 || initialFind) && <p><label>Find a company <input type="search" value={find} onChange={e => setFind(e.target.value)} placeholder="Symbol or name"/></label></p>}
     <div className="prototype-table-wrap"><table className="prototype-value-table"><thead><tr><th>Rank</th><th>Company</th><th>Outcome</th><th>Upside</th><th>Conviction</th><th>Risk</th><th>Why</th></tr></thead><tbody>
       {rows.map(a => <tr key={a.security_id}><td>{a.rank ?? "—"}</td>
         <td><Link href={detailHref(a.security_id, decision, target)}>{a.qualified_symbol}</Link><small>{a.company_name}</small></td>
