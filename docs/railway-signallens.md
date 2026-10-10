@@ -15,6 +15,22 @@ The backend runs in staging mode: API writes are refused except to the prototype
 store (portfolio, theses, snapshots). The daily alert job writes the research
 database itself, inside the backend process, under the maintenance lock.
 
+## Infrastructure as code
+
+The Railway services, their build and deploy settings and the volume are defined in
+`.railway/railway.ts` (it replaced `backend/railway.toml` and `frontend/railway.toml`,
+whose Config-as-Code format Railway retires on 2026-12-01). Secrets appear only as
+`preserve()`; their values stay in the dashboard. To change infrastructure, edit the
+file, then from the repository root:
+
+```powershell
+.\scripts\railway-config.ps1 plan    # read-only preview
+.\scripts\railway-config.ps1 apply   # asks before changing Railway
+```
+
+`apply` manages the whole project: a resource removed from the file is deleted, so
+keep every service and the volume in it.
+
 ## 1. Grow the disk and check the memory
 
 The widened research database is a few GB, and the safe upload procedure keeps the
