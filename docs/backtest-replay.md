@@ -99,3 +99,23 @@ after each month's cutoff. The report has:
 
 Simplification: positions are held in adjusted-close units, so dividends are
 reinvested in the same company rather than paid into the cash pool.
+
+## Tuning experiments (2019–2022 only)
+
+```powershell
+& $Py -m app.prototype.experiments --replay-db data\research\backtest\replay.duckdb
+```
+
+Scores other ways of choosing the picks from the same stored months (no new
+replay): the live Top 3, the top 10, every candidate, the Top 3 without sharp
+fallers, Strong Buy only, and the Top 3 with value traps allowed. For each: 12-month
+skill against random picks with its interval, percentile, hit rate, and the
+simulated portfolio (money-weighted return, maximum drawdown, final value). It
+refuses holdout runs. On a survivors-only replay the results are flattered; rerun
+after phase 3 before changing any rule, and record any change as an amendment to
+the pre-registration.
+
+First look, 2026-10-10, survivors only (indicative): no variant had a 12-month skill
+interval above zero. Allowing value traps scored best (+12.8%, 95th percentile),
+which is what survivorship would produce if the traps that failed are missing;
+phase 3 tests exactly that.
