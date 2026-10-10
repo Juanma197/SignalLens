@@ -212,7 +212,9 @@ def _identity(sec, data, decision, matched, window_start, known=None):
     sid, symbol = sec['security_id'], sec['qualified_symbol']
     reasons = []
     if sid not in matched: reasons.append('durable_id_not_matched_or_conflicting')
-    classes = [r for r in data['security_classification_evidence'] if str(r.get('security_id')) == sid]
+    # Retired (is_current false) rows were replaced by a later materialization.
+    classes = [r for r in data['security_classification_evidence']
+               if str(r.get('security_id')) == sid and r.get('is_current', True) is True]
     # Identity (classification, CIK mapping) is evidence about who the company is:
     # in replay it is taken as known today (`known`), a documented simplification.
     classification = classify_security(classes, known, security_id=sid)
