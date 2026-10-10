@@ -134,7 +134,7 @@ export default function OperationsPage() {
   const isolated = health.data?.database_isolation_confirmed === true;
 
   return <main className="operations">
-    <nav><span className="mark">SL</span><strong>Research operations</strong><Link href="/">Research view</Link></nav>
+    <nav><span className="mark">SL</span><strong>Research operations</strong><Link href="/lab">Research view</Link></nav>
     <section className="hero compact"><p className="eyebrow">{LABEL}</p><h1>Operate safely.<br/><span>Fail closed.</span></h1></section>
     <Summary section={summary} retry={() => load("/summary", setSummary)}/>
     <section className="panel result"><p className="eyebrow">EXPLORATORY DIAGNOSTICS — NOT A NEW MODEL</p><h2>US fundamentals failure diagnosis</h2>

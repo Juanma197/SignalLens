@@ -8,7 +8,7 @@
     "npm": ">=11 <12"
   },
   "scripts": {
-    "test": "tsx --test src/app/model/model-laboratory-client.test.ts src/app/api/research/research-proxy.test.ts src/app/prototype/workflow.test.tsx",
+    "test": "tsx --test src/app/model/model-laboratory-client.test.ts src/app/api/research/research-proxy.test.ts \"src/app/(app)/workflow.test.tsx\"",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

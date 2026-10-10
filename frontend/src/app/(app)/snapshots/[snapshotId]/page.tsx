@@ -10,6 +10,6 @@ export default function SnapshotPage() {
   const [data, setData] = useState<{snapshot: Snapshot; tracking: Tracking}|null>(null);
   const [error, setError] = useState("");
   useEffect(() => {call<{snapshot: Snapshot; tracking: Tracking}>(`snapshots/${encodeURIComponent(snapshotId)}`).then(setData).catch(e => setError(e.message));}, [snapshotId]);
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Snapshot follow-up</strong><Link href="/prototype/snapshots">All snapshots</Link></nav><PrototypeNotice/>
+  return <main className="research-page"><nav><span className="mark">SL</span><strong>Snapshot follow-up</strong><Link href="/snapshots">All snapshots</Link></nav><PrototypeNotice/>
     {error ? <p role="alert" className="notice warning">{error}</p> : data ? <SnapshotView {...data}/> : <p role="status">Verifying the snapshot and reading stored prices…</p>}</main>;
 }

@@ -2,23 +2,23 @@
 
 ## Unvalidated 15-company prototype — first slice
 
-The `/prototype` page opens with **Top 3 undervalued candidates**: every eligible
+The `/shortlist` page opens with **Top 3 undervalued candidates**: every eligible
 company is ranked by middle-scenario upside x conviction x risk after value-trap
 exclusions (losses, negative free cash flow, materially falling revenue, negative
 equity). At most three picks, never forced; every reason is shown. Rules live in
 `backend/app/prototype/ranking.py`. Unvalidated arithmetic, not advice.
 
-`/prototype/checks` re-checks every holding and watched company against your own
+`/checks` re-checks every holding and watched company against your own
 thesis conditions and automatic warning signs, so a broken thesis shows up even
-when the price has not fallen. `/prototype/monthly` brings it together: the Top 3
+when the price has not fallen. `/` (This month) brings it together: the Top 3
 plus BUY MORE / HOLD / REDUCE / SELL / REVIEW for every holding, with reasons, and a
 suggested allocation of your cash pool within a 25% position limit. Recording a month
-freezes its calls; `/prototype/scorecard` later shows whether each was right.
+freezes its calls; `/scorecard` later shows whether each was right.
 
 To widen the US catalogue from a 100-company sample to every listing near the size
 band (about 2,000), follow [the widening runbook](docs/us-catalogue-widening.md).
 
-The separate `/prototype` view proposes a deterministic, unfrozen membership and
+The `/shortlist` page also proposes a deterministic, unfrozen membership and
 zero-to-three positive 126-session momentum results from stored evidence only.
 Company details show calculations, citations, risks and exact missing-data states.
 Run it locally with `.\scripts\start-prototype.ps1 -Operator`; the [monthly routine](docs/prototype-monthly-routine.md) covers refresh, review and snapshots. Membership
@@ -26,7 +26,7 @@ review is required before any freeze. Track A/B are unchanged and validation cre
 runbook](docs/prototype-first-slice.md). Watchlist/snapshot persistence and subsequent
 performance tracking are deferred to a separate prototype database.
 
-`/prototype/portfolio` records your own trades (append-only, voidable) and shows
+`/portfolio` records your own trades (append-only, voidable) and shows
 holdings at average cost, valued at the latest stored close. It also keeps the
 **cash pool**: uninvested pounds that carry over each month, built only from
 deposits you confirm and the pound total your broker reports for each trade (sale
