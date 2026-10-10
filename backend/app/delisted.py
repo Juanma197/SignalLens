@@ -178,7 +178,7 @@ def discover(*, research: Path, production: Path, eodhd: EODHDClient | None, sec
                            "candidate_ciks, status, reason, discovered_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                            [f"delisted:{symbol}", symbol, item.ticker.upper(), item.company_name, (item.raw or {}).get("Exchange"),
                             item.isin, json.dumps([c for c in ciks if c not in active_ciks]), state, reason, at, at])
-                added += status == "candidate"; excluded += status != "candidate"
+                added += state == "candidate"; excluded += state != "candidate"
         filtered_out = len(filtered)
     else:
         filtered_out = None
