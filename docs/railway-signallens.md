@@ -54,10 +54,19 @@ Both services build from `Juanma197/SignalLens`. Merging to `main` deploys them
 
 After the widening has finished locally and the prototype is stopped:
 
-1. Research database: follow `docs/milestone-33-railway-research-sync.md` (managed
-   backup → upload to `/data/bootstrap/` → `plan-research-sync` → `apply-research-sync`
-   → verify). For the upload, `railway ssh config --service SignalLens` adds an
-   OpenSSH host so that `scp` can copy the file to `/data/bootstrap/`.
+1. Research database: with the prototype stopped, run
+
+   ```powershell
+   .\scripts\sync-research-to-railway.ps1
+   ```
+
+   It does the `docs/milestone-33-railway-research-sync.md` procedure end to end:
+   a verified snapshot, a capacity check against the volume (it says what to resize
+   to), the upload to `/data/bootstrap/` over `scp` (using the Railway SSH key in
+   `~/.ssh/railway_signallens_ed25519`), the read-only remote plan, your `yes`, the
+   atomic apply (the previous database is kept as a rollback copy), the status
+   checks, and removal of the upload. If the upload finished but a later step
+   stopped, rerun with `-SkipUpload`.
 2. Prototype store (your trades, theses, snapshots): copy
    `backend\data\prototype\signallens-prototype.duckdb` to
    `/data/prototype/signallens-prototype.duckdb` with the backend stopped or before
