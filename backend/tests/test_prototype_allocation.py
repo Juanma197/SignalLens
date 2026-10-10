@@ -130,10 +130,10 @@ def test_monthly_api_returns_an_allocation(paths, monkeypatch):
         assert account['cash_pool'] == pytest.approx(292) and account['contribution_included'] == 250
         assert account['available'] == pytest.approx(542) and account['gbp_per_usd']['source'] == 'stored'
         assert plan['new_cash'] == pytest.approx(677.5)
-        # The only holding is 100% of the portfolio: REDUCE for size, trimmed to 25%; no picks in the fixture.
-        assert plan['sales'][0]['action'] == 'TRIM' and plan['buys'] == []
-        assert plan['sales'][0]['amount_gbp'] == pytest.approx(plan['sales'][0]['amount'] * 0.8)
-        assert account['left_as_cash'] == pytest.approx(542 + plan['sale_proceeds'] * 0.8)
+        # The only holding is 100% of the portfolio: above your limit it is a review, never a forced trim; no picks in the fixture.
+        assert plan['sales'] == [] and plan['buys'] == [] and plan['awaiting_proceeds'] == 0
+        assert account['left_as_cash'] == pytest.approx(542) and account['reconciliation']['status'] == 'unchecked'
+        assert body['plan']['assumes']['cash_pool'] == pytest.approx(292) and len(body['plan']['version']) == 8
         without = client.get('/api/v1/research/prototype/monthly', headers=headers,
                              params={'decision_at': DECISION.isoformat()}).json()['allocation']['account']
         assert without['contribution_included'] == 0 and without['available'] == pytest.approx(292)

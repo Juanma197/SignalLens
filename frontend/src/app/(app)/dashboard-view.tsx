@@ -141,15 +141,17 @@ export function DashboardView({m, activity, toolbar, keepScore}: {m: Monthly; ac
   return <div className="dashboard">
     {m.synthetic_fixture && <p className="notice warning">SYNTHETIC FIXTURE — invented companies and evidence.</p>}
     {toolbar}
+    {f.account?.reconciliation && f.account.reconciliation.status !== "matched" && <p className={`notice${f.account.reconciliation.blocks_buys ? " warning" : ""}`}>
+      {f.account.reconciliation.message} <Link href="/portfolio#reconcile">{f.account.reconciliation.blocks_buys ? "Fix it" : "Check now"}</Link></p>}
     <section className="stat-grid">
       <Stat label="Portfolio value"><b className="stat-value">{gbp(f.value)}</b>
         {f.profit != null && <span className={f.profit >= 0 ? "gain" : "loss"}>{f.profit >= 0 ? "+" : "−"}{gbp(Math.abs(f.profit))} ({signedPct(f.profitReturn)})</span>}
         <small>Holdings + cash</small></Stat>
       <Stat label="Invested" icon={<Icon name="portfolio"/>}><b className="stat-value">{gbp(f.cost)}</b><small>{holdings.length} {holdings.length === 1 ? "stock" : "stocks"}</small></Stat>
       <Stat label="Cash available" icon={<Icon name="portfolio"/>}><b className="stat-value">{gbp(f.cash)}</b><small>{f.account?.overdrawn ? "Below zero: a deposit may be missing" : "In your cash pool"}</small></Stat>
-      <Stat label="This month's budget" icon={<Icon name="picks"/>}><b className="stat-value">{gbp(budget)}</b>
+      <Stat label="This month's deposit" icon={<Icon name="picks"/>}><b className="stat-value">{gbp(deposited)}</b>
         {budget ? <><span className="progress"><i style={{width: `${Math.min(100, deposited / budget * 100)}%`}}/></span>
-          <small>{deposited >= budget ? "Deposited" : `${gbp(Math.max(0, budget - deposited))} still to deposit`}</small></> : <small>Set it on the Portfolio page</small>}</Stat>
+          <small>{deposited >= budget ? `Planned ${gbp(budget)} arrived` : `of ${gbp(budget)} planned; unspent cash carries over`}</small></> : <small>Set your plan on the Portfolio page</small>}</Stat>
     </section>
     <div className="dash-grid">
       <section className="card picks-card"><header><h2>This month&apos;s top picks</h2><Link href="/shortlist">View all picks →</Link></header>
@@ -174,9 +176,9 @@ export function DashboardView({m, activity, toolbar, keepScore}: {m: Monthly; ac
       <div className="holding-rows">{holdings.map(h => <HoldingRow key={h.qualified_symbol + h.currency} h={h} rules={m.verdict_rules}
         link={x => x.security_id ? <Link href={detailHref(x.security_id, m.decision_at, m.target_members)}>{x.qualified_symbol}</Link> : x.qualified_symbol}/>)}</div>
       <p className="muted"><small>{m.method} BUY MORE needs at least {percent(m.rules.buy_more_minimum_upside)} upside and a position under {percent(m.rules.maximum_position_weight_for_buying)};
-        REDUCE when the price is above the middle-case value or a position exceeds {percent(m.rules.reduce_above_position_weight)}; SELL when the thesis breaks or the price is {percent(-m.rules.sell_below_upside)} above the middle-case value.
+        REDUCE when the price is above the middle-case value; a position above {percent(m.rules.reduce_above_position_weight)} is flagged for review, never sold just for its size; SELL when the thesis breaks or the price is {percent(-m.rules.sell_below_upside)} above the middle-case value.
         In between, HOLD, so small monthly moves do not cause trades.</small></p></section>}
-    {m.allocation && <AllocationView allocation={m.allocation} decision={m.decision_at} target={m.target_members}/>}
+    {m.allocation && <AllocationView allocation={m.allocation} decision={m.decision_at} target={m.target_members} plan={m.plan}/>}
     {keepScore}
     <p className="muted"><small>{m.label}</small></p>
   </div>;

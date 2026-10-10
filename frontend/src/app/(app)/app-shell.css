@@ -169,3 +169,9 @@
   .stat-grid { grid-template-columns:1fr; } .donut-wrap { grid-template-columns:1fr; justify-items:center; }
   .quick-actions { grid-template-columns:1fr; }
 }
+.app-shell .notice.matched { background:var(--green-soft); color:#166534; border-color:#bbf7d0; }
+.plan-stamp { color:var(--muted); }
+.app-shell .prototype-trade-form .prototype-inline-check { grid-column:span 2; display:block !important; align-self:center; white-space:normal; }
+.app-shell .prototype-trade-form .prototype-inline-check input { width:auto; margin-right:8px; vertical-align:middle; }
+@media (max-width:760px) { .app-shell .prototype-trade-form .prototype-inline-check { grid-column:1 / -1; } }
+.app-shell .dash-options-form .prototype-inline-check { white-space:normal; }

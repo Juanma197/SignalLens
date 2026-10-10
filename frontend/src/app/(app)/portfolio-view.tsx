@@ -10,13 +10,22 @@ export type Total = {currency: string; positions: number; priced_positions: numb
   market_value: number|null; unrealised_profit: number|null; unrealised_return: number|null; realised_profit: number};
 export type Transaction = {transaction_id: string; kind: "buy"|"sell"; qualified_symbol: string; company_name: string|null; shares: number; price: number;
   fees: number; currency: string; traded_on: string; note: string|null; recorded_at: string; voided_at: string|null; void_reason: string|null; account_amount?: number|null};
-export type CashEntry = {on: string; kind: "deposit"|"withdrawal"|"buy"|"sell"; amount: number; balance: number; movement_id?: string; transaction_id?: string;
-  qualified_symbol?: string; note?: string|null};
+export type CashEntry = {on: string; kind: "deposit"|"withdrawal"|"buy"|"sell"|"dividend"|"interest"|"fee"; amount: number; balance: number;
+  movement_id?: string; transaction_id?: string; adjustment_id?: string; qualified_symbol?: string|null; note?: string|null};
 export type CashPool = {currency: string; balance: number; overdrawn: boolean; deposited: number; withdrawn: number; spent_on_buys: number; received_from_sales: number;
+  dividends?: number; interest?: number; fees?: number;
   deposited_this_month: number; uncounted_trades: {transaction_id: string; qualified_symbol: string; traded_on: string}[]; entries: CashEntry[]; method: string};
-export type PortfolioSettings = {monthly_contribution: number; max_holdings: number; fractional_shares: boolean; currency: string; is_default: boolean; recorded_at: string|null};
+export type PortfolioSettings = {monthly_contribution: number; max_holdings: number; fractional_shares: boolean; currency: string; is_default: boolean; recorded_at: string|null;
+  position_limit?: number; top3_limit?: number; minimum_trade?: number};
+/** The cash pool checked against the balance your broker shows; a mismatch holds back buy suggestions. */
+export type Reconciliation = {status: "unchecked"|"matched"|"mismatch"|"stale"; blocks_buys: boolean; message: string;
+  broker_balance?: number; as_of?: string; app_balance?: number; difference?: number; tolerance?: number};
 export type Portfolio = {as_of: string; method: string; positions: Position[]; closed_positions: Position[]; totals: Total[]; transactions: Transaction[]; currencies: string[];
-  account_currency: string; cash: CashPool; settings: PortfolioSettings; reassessment?: "scheduled"|"telegram_not_configured"};
+  account_currency: string; cash: CashPool; settings: PortfolioSettings; reassessment?: "scheduled"|"telegram_not_configured";
+  reconciliation?: Reconciliation; broker_balances?: {balance_id: string; amount: number; as_of: string; note: string|null}[];
+  gbp_per_usd?: {rate: number; observed_on: string; source: string}|null};
+/** A random id per submission, so a double click or a retry records once. */
+export const requestKey = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 export function ReassessmentNotice({status}: {status?: Portfolio["reassessment"]}) {
   if (!status) return null;
@@ -31,16 +40,53 @@ const signed = (value: number, currency: string) => (value > 0 ? "+" : "") + mon
 const shares = (value: number) => value.toLocaleString("en-US", {maximumFractionDigits: 6});
 const name = (p: {company_name: string|null; listed_name?: string|null}) => p.company_name ?? p.listed_name ?? "";
 
-export function PortfolioSummary({totals}: {totals: Total[]}) {
-  if (totals.length === 0) return null;
-  return <>{totals.map(t => <section className="prototype-cards panel" key={t.currency}>
-    <article><p className="eyebrow">Market value · {t.currency}</p><h3>{t.market_value === null ? "No stored prices" : money(t.market_value, t.currency)}</h3>
-      <p>{t.priced_positions} of {t.positions} holdings priced{t.priced_positions < t.positions ? "; unpriced holdings are excluded, not estimated" : ""}.</p></article>
-    <article><p className="eyebrow">Unrealised result</p><h3>{t.unrealised_profit === null ? "—" : signed(t.unrealised_profit, t.currency)}</h3>
-      <p>{t.unrealised_return === null ? "Needs a stored price." : `${percent(t.unrealised_return)} on ${money(t.priced_cost_basis, t.currency)} priced cost.`}</p></article>
-    <article><p className="eyebrow">Invested and realised</p><h3>{money(t.cost_basis, t.currency)}</h3>
-      <p>Cost of open holdings. Realised from sales: {signed(t.realised_profit, t.currency)}.</p></article>
-  </section>)}</>;
+/** Total value, available cash, invested market value and positions, in pounds. Holdings in
+ *  dollars use the stored rate; with no rate, or an unpriced holding, the total says so. */
+export function PortfolioSummary({portfolio}: {portfolio: Portfolio}) {
+  const rate = portfolio.gbp_per_usd?.rate ?? null;
+  const toGbp = (v: number, currency: string) => currency === "GBP" ? v : currency === "USD" && rate ? v * rate : null;
+  const priced = portfolio.totals.filter(t => t.market_value != null).map(t => toGbp(t.market_value!, t.currency));
+  const invested = priced.every(v => v != null) ? priced.reduce((a: number, v) => a + (v ?? 0), 0) : null;
+  const unpriced = portfolio.totals.reduce((n, t) => n + t.positions - t.priced_positions, 0);
+  const cash = portfolio.cash.balance;
+  const result = portfolio.totals.map(t => t.unrealised_profit == null ? null : toGbp(t.unrealised_profit, t.currency));
+  const profit = result.every(v => v != null) ? result.reduce((a: number, v) => a + (v ?? 0), 0) : null;
+  const pounds = (v: number|null) => v == null ? "—" : money(v, "GBP");
+  return <section className="stat-grid">
+    <div className="stat-card"><div className="stat-label">Total portfolio value</div><b className="stat-value">{pounds(invested == null ? null : invested + cash)}</b>
+      <small>{unpriced ? `${unpriced} unpriced holding${unpriced === 1 ? "" : "s"} excluded, not estimated` : "Holdings + cash"}</small></div>
+    <div className="stat-card"><div className="stat-label">Available cash</div><b className="stat-value">{pounds(cash)}</b>
+      <small>{portfolio.reconciliation?.status === "matched" ? "Matches your broker" : "Confirmed deposits, trades, dividends and fees"}</small></div>
+    <div className="stat-card"><div className="stat-label">Invested market value</div>
+      <b className="stat-value">{invested != null ? pounds(invested) : portfolio.totals.filter(t => t.market_value != null).map(t => money(t.market_value!, t.currency)).join(" + ") || "—"}</b>
+      {invested == null && portfolio.totals.some(t => t.market_value != null) && <small>No stored £/$ rate, so not converted to pounds</small>}
+      {profit != null && <small className={profit >= 0 ? "gain" : "loss"}>{profit >= 0 ? "+" : "−"}{pounds(Math.abs(profit))} unrealised</small>}
+      {rate && <small>$ at {rate.toFixed(4)} £/$ ({portfolio.gbp_per_usd!.observed_on})</small>}</div>
+    <div className="stat-card"><div className="stat-label">Portfolio positions</div><b className="stat-value">{portfolio.positions.length} / {portfolio.settings.max_holdings}</b>
+      <small>A maximum, not a target</small></div>
+  </section>;
+}
+
+/** Your broker's cash balance against the cash pool. */
+export function ReconcilePanel({portfolio, today, busy, onBalance}: {portfolio: Portfolio; today: string; busy: boolean;
+  onBalance: (amount: number, asOf: string) => Promise<boolean>}) {
+  const check = portfolio.reconciliation;
+  const [amount, setAmount] = useState("");
+  const [asOf, setAsOf] = useState(today);
+  const tone = !check ? "" : check.status === "mismatch" ? " warning" : check.status === "matched" ? " matched" : "";
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (await onBalance(Number(amount), asOf)) setAmount("");
+  }
+  return <section id="reconcile" className="panel prototype-panel"><h2>Check against your broker</h2>
+    {check && <p className={`notice${tone}`}>{check.message}{check.difference != null && check.status !== "matched" &&
+      <> Difference {signed(check.difference, "GBP")} (allowed ± {money(check.tolerance ?? 0, "GBP")}).</>}</p>}
+    <p>Enter the cash your broker shows. SignalLens holds back buy suggestions while its cash pool and your broker disagree, so it never suggests spending money that may not be there.</p>
+    <form onSubmit={submit} className="prototype-trade-form">
+      <label>Broker cash balance (£)<input required type="number" min="0" step="any" value={amount} onChange={e => setAmount(e.target.value)}/></label>
+      <label>As of<input required type="date" max={today} value={asOf} onChange={e => setAsOf(e.target.value)}/></label>
+      <button disabled={busy}>{busy ? "Saving…" : "Record balance"}</button>
+    </form></section>;
 }
 
 export function HoldingsTable({positions, cutoff}: {positions: Position[]; cutoff: string}) {
@@ -65,8 +111,8 @@ export function ClosedPositions({positions}: {positions: Position[]}) {
   </tbody></table></div></section>;
 }
 
-export type TradeDraft = {kind: "buy"|"sell"; qualified_symbol: string; shares: string; price: string; fees: string; currency: string; traded_on: string; company_name: string; note: string; account_amount: string};
-export const emptyTrade = (today: string): TradeDraft => ({kind: "buy", qualified_symbol: "", shares: "", price: "", fees: "0", currency: "USD", traded_on: today, company_name: "", note: "", account_amount: ""});
+export type TradeDraft = {kind: "buy"|"sell"; qualified_symbol: string; shares: string; price: string; fees: string; currency: string; traded_on: string; company_name: string; note: string; account_amount: string; request_key: string};
+export const emptyTrade = (today: string): TradeDraft => ({kind: "buy", qualified_symbol: "", shares: "", price: "", fees: "0", currency: "USD", traded_on: today, company_name: "", note: "", account_amount: "", request_key: requestKey()});
 
 export function TradeForm({currencies, account, today, busy, onSubmit}: {currencies: string[]; account: string; today: string; busy: boolean; onSubmit: (draft: TradeDraft) => Promise<boolean>}) {
   const [draft, setDraft] = useState<TradeDraft>(emptyTrade(today));
@@ -107,76 +153,86 @@ export function TransactionHistory({transactions, busy, onVoid}: {transactions: 
       </tr>)}</tbody></table></div></section>;
 }
 
-export type CashDraft = {kind: "deposit"|"withdrawal"; amount: string; moved_on: string; note: string};
-const CASH_KIND = {deposit: "Deposit", withdrawal: "Withdrawal", buy: "Buy", sell: "Sale"};
+export type CashDraft = {kind: "deposit"|"withdrawal"|"dividend"|"interest"|"fee"; amount: string; moved_on: string; note: string; qualified_symbol: string; request_key: string};
+const CASH_KIND = {deposit: "Deposit", withdrawal: "Withdrawal", buy: "Buy", sell: "Sale", dividend: "Dividend", interest: "Interest", fee: "Fee"};
 
 export function CashPanel({cash, settings, holdings, today, busy, onCash, onVoid}: {cash: CashPool; settings: PortfolioSettings; holdings: number; today: string; busy: boolean;
-  onCash: (draft: CashDraft) => Promise<boolean>; onVoid: (id: string) => void}) {
+  onCash: (draft: CashDraft) => Promise<boolean>; onVoid: (entry: CashEntry) => void}) {
   const pounds = (v: number) => money(v, cash.currency);
-  const [draft, setDraft] = useState<CashDraft>({kind: "deposit", amount: String(settings.monthly_contribution), moved_on: today, note: ""});
+  const [draft, setDraft] = useState<CashDraft>({kind: "deposit", amount: String(settings.monthly_contribution), moved_on: today, note: "", qualified_symbol: "", request_key: requestKey()});
   const set = (key: keyof CashDraft) => (e: {target: {value: string}}) => setDraft(d => ({...d, [key]: e.target.value}));
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (await onCash(draft)) setDraft(d => ({...d, amount: String(settings.monthly_contribution), note: ""}));
+    if (await onCash(draft)) setDraft(d => ({...d, amount: d.kind === "deposit" ? String(settings.monthly_contribution) : "", note: "", qualified_symbol: "", request_key: requestKey()}));
   }
   const uncounted = cash.uncounted_trades.length;
   return <section className="panel prototype-panel"><h2>Cash pool</h2>
     <section className="prototype-cards">
       <article><p className="eyebrow">Available cash · {cash.currency}</p><h3>{pounds(cash.balance)}</h3>
         <p>Carries over from month to month. Sale proceeds come back here.</p></article>
-      <article><p className="eyebrow">This month</p><h3>{pounds(cash.deposited_this_month)} deposited</h3>
-        <p>Planned contribution {pounds(settings.monthly_contribution)}. It only counts once you record it as arrived.</p></article>
-      <article><p className="eyebrow">Holdings</p><h3>{holdings} / {settings.max_holdings}</h3>
-        <p>A maximum, not a target.</p></article>
+      <article><p className="eyebrow">This month&apos;s deposit</p><h3>{pounds(cash.deposited_this_month)}</h3>
+        <p>Planned {pounds(settings.monthly_contribution)}. A deposit, not a budget: what you don&apos;t invest carries over.</p></article>
+      <article><p className="eyebrow">Dividends and fees</p><h3>{pounds((cash.dividends ?? 0) + (cash.interest ?? 0) - (cash.fees ?? 0))}</h3>
+        <p>{pounds(cash.dividends ?? 0)} dividends, {pounds(cash.interest ?? 0)} interest, {pounds(cash.fees ?? 0)} fees. {holdings} of {settings.max_holdings} holdings.</p></article>
     </section>
     {cash.overdrawn && <p className="notice warning">The cash pool is below zero, so a deposit is probably missing. Record it so the balance matches your broker.</p>}
     {uncounted > 0 && <p className="notice warning">{uncounted} earlier trade{uncounted === 1 ? " has" : "s have"} no {cash.currency} total and {uncounted === 1 ? "is" : "are"} not counted in the cash pool.
       If they were recorded before cash tracking, record your broker&apos;s current cash as one deposit instead.</p>}
     <form onSubmit={submit} className="prototype-trade-form">
-      <label>Type<select value={draft.kind} onChange={set("kind")}><option value="deposit">Deposit (money arrived)</option><option value="withdrawal">Withdrawal</option></select></label>
+      <label>Type<select value={draft.kind} onChange={set("kind")}><option value="deposit">Deposit (money arrived)</option><option value="withdrawal">Withdrawal</option>
+        <option value="dividend">Dividend received</option><option value="interest">Interest received</option><option value="fee">Fee charged</option></select></label>
       <label>Amount ({cash.currency})<input required type="number" min="0" step="any" value={draft.amount} onChange={set("amount")}/></label>
       <label>Date<input required type="date" max={today} value={draft.moved_on} onChange={set("moved_on")}/></label>
-      <label>Note (optional)<input maxLength={4000} value={draft.note} onChange={set("note")} placeholder={`Contribution ${today.slice(0, 7)}`}/></label>
+      {draft.kind === "dividend" && <label>From (ticker, optional)<input maxLength={32} value={draft.qualified_symbol} onChange={set("qualified_symbol")} placeholder="WU"/></label>}
+      <label>Note (optional)<input maxLength={4000} value={draft.note} onChange={set("note")} placeholder={draft.kind === "deposit" ? `Contribution ${today.slice(0, 7)}` : ""}/></label>
       <button disabled={busy}>{busy ? "Saving…" : `Record ${draft.kind}`}</button>
     </form>
     {cash.entries.length > 0 && <div className="prototype-table-wrap"><table><thead><tr><th>Date</th><th>Movement</th><th>Amount</th><th>Balance</th><th></th></tr></thead><tbody>
-      {cash.entries.slice(0, 30).map(e => <tr key={`${e.kind}-${e.movement_id ?? e.transaction_id}`}>
+      {cash.entries.slice(0, 30).map(e => <tr key={`${e.kind}-${e.movement_id ?? e.adjustment_id ?? e.transaction_id}`}>
         <td>{e.on}</td>
         <td><b>{CASH_KIND[e.kind]}{e.qualified_symbol ? ` ${e.qualified_symbol}` : ""}</b>{e.note && <small>{e.note}</small>}</td>
         <td>{signed(e.amount, cash.currency)}</td><td>{pounds(e.balance)}</td>
-        <td>{e.movement_id && <button disabled={busy} onClick={() => onVoid(e.movement_id!)}>Void</button>}</td>
+        <td>{(e.movement_id || e.adjustment_id) && <button disabled={busy} onClick={() => onVoid(e)}>Void</button>}</td>
       </tr>)}</tbody></table></div>}
     <p className="prototype-method"><small>{cash.method} Trades are voided in the trade history.</small></p>
   </section>;
 }
 
-export type SettingsDraft = {monthly_contribution: string; max_holdings: string; fractional_shares: boolean};
+export type SettingsDraft = {monthly_contribution: string; max_holdings: string; fractional_shares: boolean; position_limit: string; top3_limit: string; minimum_trade: string};
+const pct = (v: number|undefined, fallback: number) => String(Math.round((v ?? fallback) * 100));
 
 export function SettingsPanel({settings, busy, onSave}: {settings: PortfolioSettings; busy: boolean; onSave: (draft: SettingsDraft) => Promise<boolean>}) {
   const [draft, setDraft] = useState<SettingsDraft>({monthly_contribution: String(settings.monthly_contribution), max_holdings: String(settings.max_holdings),
-    fractional_shares: settings.fractional_shares});
+    fractional_shares: settings.fractional_shares, position_limit: pct(settings.position_limit, 0.15), top3_limit: pct(settings.top3_limit, 0.4),
+    minimum_trade: String(settings.minimum_trade ?? 25)});
   const set = (key: keyof SettingsDraft) => (e: {target: {value: string}}) => setDraft(d => ({...d, [key]: e.target.value}));
   return <section id="plan" className="panel prototype-panel"><h2>Your plan</h2>
-    <p>Change these whenever your plans change; earlier values are kept.{settings.is_default ? " These are the starting defaults." : ""}</p>
+    <p>Change these whenever your plans change; earlier values are kept.{settings.is_default ? " These are the starting defaults." : ""} Limits are shares of the whole
+      portfolio&apos;s market value. A holding that grows past its limit is flagged for review; nothing is sold just for that.</p>
     <form onSubmit={e => {e.preventDefault(); onSave(draft);}} className="prototype-trade-form">
       <label>Monthly contribution ({settings.currency})<input required type="number" min="0" step="any" value={draft.monthly_contribution} onChange={set("monthly_contribution")}/></label>
       <label>Maximum holdings<input required type="number" min="1" max="30" step="1" value={draft.max_holdings} onChange={set("max_holdings")}/></label>
+      <label>Maximum in one stock (%)<input required type="number" min="5" max="100" step="1" value={draft.position_limit} onChange={set("position_limit")}/></label>
+      <label>Maximum in the three largest (%)<input required type="number" min="5" max="100" step="1" value={draft.top3_limit} onChange={set("top3_limit")}/></label>
+      <label>Minimum trade ({settings.currency})<input required type="number" min="0" step="any" value={draft.minimum_trade} onChange={set("minimum_trade")}/></label>
       <label className="prototype-inline-check"><input type="checkbox" checked={draft.fractional_shares} onChange={e => setDraft(d => ({...d, fractional_shares: e.target.checked}))}/> My broker lets me buy part of a share (Trading 212 does)</label>
       <button disabled={busy}>{busy ? "Saving…" : "Save plan"}</button>
     </form></section>;
 }
 
-export function PortfolioView({portfolio, cutoff, today, busy, onTrade, onVoid, onCash, onVoidCash, onSettings}: {portfolio: Portfolio; cutoff: string; today: string; busy: boolean;
+export function PortfolioView({portfolio, cutoff, today, busy, onTrade, onVoid, onCash, onVoidCash, onSettings, onBalance}: {portfolio: Portfolio; cutoff: string; today: string; busy: boolean;
   onTrade: (draft: TradeDraft) => Promise<boolean>; onVoid: (id: string) => void; onCash: (draft: CashDraft) => Promise<boolean>;
-  onVoidCash: (id: string) => void; onSettings: (draft: SettingsDraft) => Promise<boolean>}) {
+  onVoidCash: (entry: CashEntry) => void; onSettings: (draft: SettingsDraft) => Promise<boolean>; onBalance?: (amount: number, asOf: string) => Promise<boolean>}) {
   return <div className="brief-stack">
     <ReassessmentNotice status={portfolio.reassessment}/>
-    <PortfolioSummary totals={portfolio.totals}/>
+    <PortfolioSummary portfolio={portfolio}/>
+    {portfolio.reconciliation?.blocks_buys && <p className="notice warning">{portfolio.reconciliation.message}</p>}
     <CashPanel key={`cash-${portfolio.settings.recorded_at}`} cash={portfolio.cash} settings={portfolio.settings} holdings={portfolio.positions.length} today={today} busy={busy} onCash={onCash} onVoid={onVoidCash}/>
     <HoldingsTable positions={portfolio.positions} cutoff={cutoff}/>
     <TradeForm currencies={portfolio.currencies} account={portfolio.account_currency} today={today} busy={busy} onSubmit={onTrade}/>
     <TransactionHistory transactions={portfolio.transactions} busy={busy} onVoid={onVoid}/>
     <ClosedPositions positions={portfolio.closed_positions}/>
+    {onBalance && <ReconcilePanel portfolio={portfolio} today={today} busy={busy} onBalance={onBalance}/>}
     <SettingsPanel key={`plan-${portfolio.settings.recorded_at}`} settings={portfolio.settings} busy={busy} onSave={onSettings}/>
     <p className="prototype-method"><small>Method: {portfolio.method}. Valued {portfolio.as_of.replace("T", " ").slice(0, 16)} UTC.</small></p>
   </div>;

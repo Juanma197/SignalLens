@@ -236,7 +236,9 @@ test("portfolio shows priced and unpriced holdings honestly and keeps voided tra
   const html=renderToStaticMarkup(<PortfolioView portfolio={portfolio} cutoff="2026-10-02T12:00:00Z" today="2026-10-09" busy={false} onTrade={async()=>true} onVoid={()=>{}}
     onCash={async()=>true} onVoidCash={()=>{}} onSettings={async()=>true}/>);
   assert.match(html,/\$1,200\.00/);
-  assert.match(html,/1 of 2 holdings priced; unpriced holdings are excluded, not estimated/);
+  assert.match(html,/1 unpriced holding excluded, not estimated/);
+  assert.match(html,/Invested market value<\/div><b class="stat-value">\$1,200\.00<\/b><small>No stored £\/\$ rate/);
+  assert.match(html,/2 \/ 10/);
   assert.match(html,/no stored price/);
   assert.match(html,/not covered by SignalLens data/);
   assert.match(html,/20\.00%/);
@@ -246,7 +248,7 @@ test("portfolio shows priced and unpriced holdings honestly and keeps voided tra
   assert.match(html,/Available cash · GBP/);
   assert.match(html,/£195\.00/);
   assert.match(html,/Sale OLD\.US/);
-  assert.match(html,/Planned contribution £250\.00/);
+  assert.match(html,/Planned £250.00. A deposit, not a budget/);
   assert.match(html,/2 \/ 10/);
   assert.match(html,/1 earlier trade has no GBP total/);
   assert.match(html,/value="250"/);
@@ -471,4 +473,29 @@ test("long rosters show the first rows with a button for the rest, as the slim r
   const ranking={...ready.value_ranking!,companies:Array.from({length:40},(_,i)=>({...ready.value_ranking!.companies[0],security_id:`v-${i}`,qualified_symbol:`V${i}.US`,rank:null}))};
   const value=renderToStaticMarkup(<ValueRankingView ranking={ranking} decision={ready.decision_at} target={ready.target_members}/>);
   assert.match(value,/Show all 40/); assert.match(value,/Find a company/); assert.doesNotMatch(value,/V25\.US/);
+});
+
+test("portfolio safeguards: broker mismatch holds back buys, proceeds wait, and the plan says what it assumed",()=>{
+  const reconciliation={status:"mismatch" as const,blocks_buys:true,message:"Your broker showed £203.20 on 05 Oct but SignalLens counts £200.00.",broker_balance:203.2,as_of:"2026-10-05",app_balance:200,difference:3.2,tolerance:2.03};
+  const portfolio:Portfolio={as_of:"2026-10-09T12:00:00+00:00",method:"average cost",positions:[],closed_positions:[],totals:[],transactions:[],currencies:["USD","GBP"],account_currency:"GBP",
+    cash:{currency:"GBP",balance:200,overdrawn:false,deposited:200,withdrawn:0,spent_on_buys:0,received_from_sales:0,dividends:0,interest:0,fees:0,deposited_this_month:200,uncounted_trades:[],entries:[],method:"m"},
+    settings:{monthly_contribution:200,max_holdings:10,fractional_shares:true,currency:"GBP",is_default:true,recorded_at:null,position_limit:0.15,top3_limit:0.4,minimum_trade:25},
+    reconciliation,gbp_per_usd:{rate:0.75,observed_on:"2026-10-09",source:"stored"}};
+  const html=renderToStaticMarkup(<PortfolioView portfolio={portfolio} cutoff="" today="2026-10-09" busy={false} onTrade={async()=>true} onVoid={()=>{}}
+    onCash={async()=>true} onVoidCash={()=>{}} onSettings={async()=>true} onBalance={async()=>true}/>);
+  assert.match(html,/notice warning">Your broker showed £203\.20/);
+  assert.match(html,/id="reconcile"/);
+  assert.match(html,/Difference \+£3\.20/);
+  assert.match(html,/Maximum in one stock \(%\)<input[^>]*value="15"/);
+  const order={action:"NEW BUY",qualified_symbol:"LZ.US",security_id:"lz",company_name:"LegalZoom",shares:10,price:5.92,amount:59.2,why:"Open.",amount_gbp:44.4};
+  const allocation:Allocation={new_cash:266,reinvest_sales:false,sale_proceeds:500,available:266,sales:[],buys:[],held_back_buys:[order],invested:0,left_as_cash:266,portfolio_after:766,
+    rules:{position_limit:0.15,minimum_purchase_usd:33,top3_limit:0.4},method:"m",label:"l",account:{currency:"GBP",cash_pool:200,overdrawn:false,uncounted_trades:0,deposited_this_month:200,
+      monthly_contribution:200,contribution_included:0,available:200,gbp_per_usd:{rate:0.75,observed_on:"2026-10-09",source:"stored"},sale_proceeds:375,invested:0,left_as_cash:200,
+      awaiting_proceeds:375,reconciliation}};
+  const plan={version:"ab12cd34",assumes:{cash_pool:200,prices_through:"2026-10-09"},valid_until:"You record a trade, deposit, dividend or fee, or new prices arrive. Then the plan is recalculated."};
+  const view=renderToStaticMarkup(<AllocationView allocation={allocation} decision="2026-10-10T00:00:00+00:00" target={15} plan={plan}/>);
+  assert.match(view,/1 suggested buy is held back: Your broker showed/);
+  assert.match(view,/About £375\.00 more becomes available once you record the suggested sales/);
+  assert.match(view,/the three largest within 40\.00%/);
+  assert.match(view,/Plan ab12cd34: assumes £200\.00 cash and prices to 2026-10-09\. Out of date when you record a trade/);
 });
