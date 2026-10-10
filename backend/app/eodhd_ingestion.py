@@ -53,6 +53,7 @@ EXCLUDED_TYPES = {"etf": "excluded_etf", "fund": "excluded_fund", "index": "excl
                   "preferred": "excluded_preferred_share", "warrant": "excluded_warrant",
                   "adr": "excluded_adr", "gdr": "excluded_depositary_receipt"}
 TEN_YEARS_DAYS = 3653
+PER_SECURITY_REQUESTS = 3  # eod, div, splits
 REFRESH_OVERLAP_DAYS = 7
 SHORT_HISTORY_OBSERVATIONS = 252
 STALE_CALENDAR_DAYS = 7
@@ -265,15 +266,15 @@ class EODHDIngestion:
 
     def plan(self, *, securities_per_region: int | None = None) -> dict:
         count = min(securities_per_region or self.client.limits.per_region, self.client.limits.per_region)
-        securities = count * len(REGIONS); lower = 5 + securities * 2 + 3
-        upper = 5 + securities * 2 * self.client.limits.retries + 3 * self.client.limits.retries
+        securities = count * len(REGIONS); lower = 5 + securities * PER_SECURITY_REQUESTS + 3
+        upper = 5 + securities * PER_SECURITY_REQUESTS * self.client.limits.retries + 3 * self.client.limits.retries
         rows = securities * 2520
         pacing = lower / self.client.limits.requests_per_minute
         timeout_upper = upper * self.client.limits.timeout_seconds / 60
         remaining = self._pending_count() if self.path.exists() else None
         observed_seconds = self._observed_seconds_per_request()
         if remaining is not None:
-            lower, upper, securities = remaining * 2, remaining * 2 * self.client.limits.retries, remaining
+            lower, upper, securities = remaining * PER_SECURITY_REQUESTS, remaining * PER_SECURITY_REQUESTS * self.client.limits.retries, remaining
             rows, pacing, timeout_upper = securities * 2520, lower / self.client.limits.requests_per_minute, upper * self.client.limits.timeout_seconds / 60
         observed_minutes = None if observed_seconds is None else round(lower * observed_seconds / 60, 1)
         runtime_warning = self.client.limits.maximum_runtime_seconds / 60 < max(
@@ -400,8 +401,10 @@ class EODHDIngestion:
                 prices = parse_eod(self.client.get(f"eod/{item.qualified_symbol}", {"from": start.isoformat(), "to": end.isoformat(), "period": "d"}), item, retrieved_at, start, end)
                 div_payload = self.client.get(f"div/{item.qualified_symbol}", {"from": start.isoformat(), "to": end.isoformat()})
                 actions = _dividends(div_payload, item, retrieved_at, start, end)
+                actions += _splits(self.client.get(f"splits/{item.qualified_symbol}", {"from": start.isoformat(), "to": end.isoformat()}), item, retrieved_at, start, end)
                 self.market.store(prices, actions); rows += len(prices); completed += 1
                 self._checkpoint("prices", item.qualified_symbol, "completed", None)
+                self._checkpoint("splits", item.qualified_symbol, "completed", None)
                 checkpoint = item.qualified_symbol
             except BudgetStop as exc:
                 if self.client.requests == item_request_start:
@@ -423,7 +426,40 @@ class EODHDIngestion:
         self._finish_run(run_id, retrieved_at, status, report)
         return {"command": "resume" if resume else "ingest-prices", "status": status,
                 **report, "failed": len(failures), "price_rows": rows,
-                "split_status": "provider_unsupported", "requests": self.client.requests}
+                "split_status": "ingested", "requests": self.client.requests}
+
+    def splits(self, *, retrieved_at: datetime) -> dict:
+        """Backfill ten years of splits for listings priced before splits were fetched.
+        One request per listing; a listing whose stored adjusted closes predate one of
+        its splits is re-downloaded (one more request). Rerunning continues where a
+        budget stop left off and retries failures."""
+        self._state_schema()
+        start, end = retrieved_at.date() - timedelta(days=TEN_YEARS_DAYS), retrieved_at.date()
+        with duckdb.connect(str(self.path), read_only=True) as db:
+            done = {r[0] for r in db.execute("SELECT qualified_symbol FROM eodhd_ingestion_checkpoints WHERE stage='splits' AND status='completed'").fetchall()}
+            priced = {r[0] for r in db.execute("SELECT qualified_symbol FROM eodhd_ingestion_checkpoints WHERE stage IN ('prices','refresh') AND status='completed'").fetchall()}
+        targets = [x for x in self._latest_listings(retrieved_at) if x.qualified_symbol in priced and x.qualified_symbol not in done]
+        completed, stored, rebased, failures, stop = 0, 0, [], [], None
+        for item in targets:
+            symbol = item.qualified_symbol
+            try:
+                splits = _splits(self.client.get(f"splits/{symbol}", {"from": start.isoformat(), "to": end.isoformat()}), item, retrieved_at, start, end)
+                with duckdb.connect(str(self.path), read_only=True) as db:
+                    first = rebase_from(db, symbol, splits, end + timedelta(days=1))
+                since = first
+                prices = parse_eod(self.client.get(f"eod/{symbol}", {"from": since.isoformat(), "to": end.isoformat(), "period": "d"}),
+                                   item, retrieved_at, since, end) if since else []
+                self.market.store(prices, splits); self._checkpoint("splits", symbol, "completed", None)
+                completed += 1; stored += len(splits)
+                if since: rebased.append(symbol)
+            except BudgetStop as exc: stop = exc.reason; break
+            except Exception as exc:
+                code = _failure_code(exc); self._checkpoint("splits", symbol, "failed", code)
+                failures.append({"symbol": symbol, "code": code})
+        return {"command": "ingest-splits", "status": "partial_checkpointed" if stop else ("completed_with_failures" if failures else "completed"),
+                "targets": len(targets), "completed": completed, "failed": len(failures), "failures": failures[:PLANNED_REQUEST_SAMPLE_LIMIT],
+                "splits_stored": stored, "rebased_count": len(rebased), "rebased_after_split": rebased[:PLANNED_REQUEST_SAMPLE_LIMIT],
+                "stop_reason": stop, "requests": self.client.requests}
 
     def fx(self, *, retrieved_at: datetime) -> dict:
         start, end = retrieved_at.date() - timedelta(days=TEN_YEARS_DAYS), retrieved_at.date()
@@ -544,7 +580,7 @@ class EODHDIngestion:
             mode = "periodic_reconciliation" if reconcile else ("incremental_refresh" if item.qualified_symbol in latest else "initial_backfill")
             start = as_of.date() - timedelta(days=TEN_YEARS_DAYS) if mode != "incremental_refresh" else latest[item.qualified_symbol] - timedelta(days=REFRESH_OVERLAP_DAYS - 1)
             estimated += max(0, (as_of.date() - start).days * 5 // 7)
-            requests.append({"target": item.qualified_symbol, "endpoints": ["eod", "div"], "from": start, "to": as_of.date(), "mode": mode})
+            requests.append({"target": item.qualified_symbol, "endpoints": ["eod", "div", "splits"], "from": start, "to": as_of.date(), "mode": mode})
         for currency in ("USD", "CAD", "EUR"):
             mode = "periodic_reconciliation" if reconcile else ("incremental_refresh" if currency in fx_latest else "initial_backfill")
             start = as_of.date() - timedelta(days=TEN_YEARS_DAYS) if mode != "incremental_refresh" else fx_latest[currency] - timedelta(days=REFRESH_OVERLAP_DAYS - 1)
@@ -592,7 +628,7 @@ class EODHDIngestion:
                     authorize_permanent_failures and state[1] in PERMANENT_FAILURE_CODES): targets.append(request)
             elif not retry_failures and (not state or state[0] != "failed" or state[1] in RETRYABLE_FAILURE_CODES): targets.append(request)
         for request in targets: self._checkpoint("refresh", request["target"], "pending", None)
-        revisions = completed = 0; failures = []; stop = None
+        revisions = completed = 0; failures = []; stop = None; rebased = []
         for request in targets:
             symbol, item = request["target"], listings[request["target"]]
             try:
@@ -600,6 +636,13 @@ class EODHDIngestion:
                 payload = self.client.get(f"eod/{symbol}", {"from": start.isoformat(), "to": end.isoformat(), "period": "d"})
                 prices = parse_eod(payload, item, retrieved_at, start, end)
                 actions = _dividends(self.client.get(f"div/{symbol}", {"from": start.isoformat(), "to": end.isoformat()}), item, retrieved_at, start, end)
+                splits = _splits(self.client.get(f"splits/{symbol}", {"from": start.isoformat(), "to": end.isoformat()}), item, retrieved_at, start, end)
+                actions += splits
+                with duckdb.connect(str(self.path), read_only=True) as db:
+                    first = rebase_from(db, symbol, splits, start)
+                if first:
+                    start = first; rebased.append(symbol)
+                    prices = parse_eod(self.client.get(f"eod/{symbol}", {"from": start.isoformat(), "to": end.isoformat(), "period": "d"}), item, retrieved_at, start, end)
                 with duckdb.connect(str(self.path), read_only=True) as db:
                     old = {r[0]: r[1:] for r in db.execute("SELECT trading_date,open,high,low,close,adjusted_close,volume,currency FROM global_price_observations WHERE qualified_symbol=? AND trading_date>=?", [symbol, start]).fetchall()}
                 revisions += sum(p.trading_date in old and old[p.trading_date] !=
@@ -627,7 +670,8 @@ class EODHDIngestion:
         return {"command": "reconcile" if reconcile else ("retry-failures" if retry_failures else "refresh"),
                 "status": "partial_checkpointed" if stop else ("completed_with_failures" if failures else "completed"), "completed": completed,
                 "failed": len(failures), "failures": failures, "pending": len(targets)-completed-len(failures),
-                "revisions": revisions, "stop_reason": stop, "overlap_days": REFRESH_OVERLAP_DAYS,
+                "revisions": revisions, "rebased_after_split": rebased[:PLANNED_REQUEST_SAMPLE_LIMIT], "rebased_count": len(rebased),
+                "stop_reason": stop, "overlap_days": REFRESH_OVERLAP_DAYS,
                 "historical_deletes": 0, "requests": self.client.requests}
 
     def _coverage(self) -> dict:
@@ -743,6 +787,39 @@ def _dividends(payload: Any, listing: ListingObservation, at: datetime, start: d
         if day < start or day > end or day in seen: raise ValueError("invalid or duplicate dividend date")
         seen.add(day); result.append(CorporateAction(listing.qualified_symbol, day, "cash_distribution", value, listing.currency, "eodhd", at))
     return result
+
+
+def split_ratio(text: Any) -> Decimal:
+    """EODHD's 'new/old' split text as shares after per share before: '4.000000/1.000000'
+    is 4, a 1-for-25 reverse split '1.000000/25.000000' is 0.04."""
+    new, slash, old = str(text).partition("/")
+    if not slash: raise ValueError("invalid split ratio")
+    return (_decimal(new) / _decimal(old)).quantize(Decimal("1e-10"))
+
+
+def _splits(payload: Any, listing: ListingObservation, at: datetime, start: date, end: date) -> list[CorporateAction]:
+    if not isinstance(payload, list): raise ValueError("invalid split response")
+    result, seen = [], set()
+    for row in payload:
+        day = date.fromisoformat(str(row.get("date"))[:10])
+        if day < start or day > end or day in seen: raise ValueError("invalid or duplicate split date")
+        # The documented field is 'split'; the stored probe fixture uses 'value'.
+        seen.add(day); result.append(CorporateAction(listing.qualified_symbol, day, "split",
+            split_ratio(row.get("split", row.get("value"))), None, "eodhd", at))
+    return result
+
+
+def rebase_from(db, symbol: str, splits: list[CorporateAction], kept_before: date) -> date | None:
+    """EODHD rebases a listing's whole adjusted-close series when it splits, so stored
+    rows retrieved on or before the split day are on the old basis and new rows would
+    not join them (a 2-for-1 split reads as a 50% fall). When such a row would be kept,
+    i.e. it predates both the split and the range being re-downloaded anyway, return
+    the listing's first stored date: everything from there must be fetched again."""
+    stale = any(db.execute("""SELECT 1 FROM global_price_observations WHERE qualified_symbol=? AND source='eodhd'
+        AND trading_date<? AND CAST(retrieved_at AS DATE)<=? LIMIT 1""",
+        [symbol, min(s.ex_date, kept_before), s.ex_date]).fetchone() for s in splits)
+    return db.execute("SELECT min(trading_date) FROM global_price_observations WHERE qualified_symbol=? AND source='eodhd'",
+                      [symbol]).fetchone()[0] if stale else None
 
 
 def _counts(rows: list[dict]) -> dict[str, int]:

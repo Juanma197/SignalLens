@@ -3,7 +3,10 @@
 The full refresh asks for each listing separately (two requests per listing,
 about 5,000 for a wide catalogue). Between full refreshes this step asks for one
 day of the whole US market at a time: `eod-bulk-last-day/US?date=D` for prices
-and `...&type=dividends` for dividends, two requests per trading day.
+and `...&type=dividends` and `...&type=splits` for dividends and splits, three
+requests per trading day. A listing that splits is downloaded again in full
+(one more request): EODHD rebases its whole adjusted-close history on the split,
+so the stored history and the new day would otherwise be on different bases.
 
 Prices are validated exactly as in the full refresh (one-row `parse_eod`) and
 stored for active-catalogue US listings only. A 'bulk_daily' checkpoint, which
@@ -19,7 +22,7 @@ from decimal import Decimal
 
 import duckdb
 
-from .eodhd_ingestion import BudgetStop, EODHDClient, parse_eod
+from .eodhd_ingestion import BudgetStop, EODHDClient, parse_eod, rebase_from, split_ratio
 from .global_market_data import CorporateAction, GlobalMarketDataRepository, utc_naive
 from .global_universe import GlobalUniverseRepository
 from .model_readiness import fingerprint
@@ -30,6 +33,7 @@ MAX_GAP_DAYS = 31
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS eodhd_bulk_days(trading_date DATE PRIMARY KEY, price_rows INTEGER NOT NULL,
   dividend_rows INTEGER NOT NULL, retrieved_at TIMESTAMP NOT NULL);
+ALTER TABLE eodhd_bulk_days ADD COLUMN IF NOT EXISTS split_rows INTEGER;
 """
 
 
@@ -61,6 +65,7 @@ def update(*, research, production, client: EODHDClient, now: datetime | None = 
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     listings = [x for x in GlobalUniverseRepository(research).latest_items(as_of=now)[2] if x.exchange == 'US']
     by_code = {x.ticker.strip().upper(): x for x in listings}
+    by_symbol = {x.qualified_symbol: x for x in listings}
     with duckdb.connect(str(research)) as db:
         db.execute(SCHEMA)
         start = covered_through(db, [x.qualified_symbol for x in listings])
@@ -76,6 +81,7 @@ def update(*, research, production, client: EODHDClient, now: datetime | None = 
         try:
             price_payload = client.get('eod-bulk-last-day/US', {'date': day.isoformat()})
             dividend_payload = client.get('eod-bulk-last-day/US', {'date': day.isoformat(), 'type': 'dividends'})
+            split_payload = client.get('eod-bulk-last-day/US', {'date': day.isoformat(), 'type': 'splits'})
         except BudgetStop as exc:
             stop = exc.reason; break
         prices, actions = [], []
@@ -90,10 +96,31 @@ def update(*, research, production, client: EODHDClient, now: datetime | None = 
             try: value = Decimal(str(row.get('dividend', row.get('value'))))
             except ArithmeticError: continue
             if value > 0: actions.append(CorporateAction(listing.qualified_symbol, day, 'cash_distribution', value, listing.currency, 'eodhd', now))
-        market.store(prices, actions)
+        dividends, splits = len(actions), []
+        for row in split_payload if isinstance(split_payload, list) else []:
+            listing = by_code.get(str(row.get('code', '')).strip().upper())
+            if listing is None or str(row.get('date', ''))[:10] != day.isoformat(): continue
+            try: splits.append(CorporateAction(listing.qualified_symbol, day, 'split', split_ratio(row.get('split', row.get('value'))), None, 'eodhd', now))
+            except (ValueError, ArithmeticError): continue
+        rebased = []
+        try:
+            for split in splits:
+                with duckdb.connect(str(research), read_only=True) as db:
+                    first = rebase_from(db, split.qualified_symbol, [split], day)
+                if first:
+                    since, listing = first, by_symbol[split.qualified_symbol]
+                    history = parse_eod(client.get(f'eod/{split.qualified_symbol}', {'from': since.isoformat(), 'to': last.isoformat(), 'period': 'd'}), listing, now, since, last)
+                    prices = [p for p in prices if p.qualified_symbol != split.qualified_symbol] + history
+                    rebased.append(split.qualified_symbol)
+        except BudgetStop as exc:
+            stop = exc.reason; break
+        except Exception:
+            # Storing the day without the rebase would join two bases; stop and retry it next run.
+            stop = 'split_rebase_failed'; break
+        market.store(prices, actions + splits)
         with duckdb.connect(str(research)) as db:
-            db.execute('INSERT OR REPLACE INTO eodhd_bulk_days VALUES (?, ?, ?, ?)', [day, len(prices), len(actions), utc_naive(now)])
-        processed.append({'date': day.isoformat(), 'prices': len(prices), 'dividends': len(actions)})
+            db.execute('INSERT OR REPLACE INTO eodhd_bulk_days VALUES (?, ?, ?, ?, ?)', [day, len(prices), dividends, utc_naive(now), len(splits)])
+        processed.append({'date': day.isoformat(), 'prices': len(prices), 'dividends': dividends, 'splits': len(splits), 'rebased': rebased})
     if processed and stop is None:
         with duckdb.connect(str(research)) as db:
             db.executemany('INSERT OR REPLACE INTO eodhd_ingestion_checkpoints VALUES (?, ?, ?, ?, ?)',

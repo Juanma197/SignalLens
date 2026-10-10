@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import duckdb
@@ -10,7 +11,7 @@ import httpx
 import pytest
 
 from app.eodhd_ingestion import (EODHDClient, EODHDIngestion, EODHDLimits,
-    catalogue_diagnostics, classify_type, parse_catalogue, parse_eod)
+    _splits, catalogue_diagnostics, classify_type, parse_catalogue, parse_eod, split_ratio)
 from app.eodhd_ingestion_cli import build_parser, execute
 
 NOW = datetime(2026, 9, 26, 12, tzinfo=timezone.utc)
@@ -33,6 +34,8 @@ def transport(request: httpx.Request) -> httpx.Response:
                                "XETRA": "XETRA", "PA": "PA"}[region]
         rows[0].pop("Isin", None)
         return httpx.Response(200, json=rows)
+    if "/splits/" in path:
+        return httpx.Response(200, json=[])
     if "/div/" in path:
         return httpx.Response(200, json=fixture("dividends.json"))
     return httpx.Response(200, json=fixture("prices.json"))
@@ -70,7 +73,7 @@ def test_plan_reports_bounded_cost_and_honest_limitations(tmp_path: Path) -> Non
     operation = EODHDIngestion(tmp_path / "research.duckdb", tmp_path / "production.duckdb", client(per_region=5, total=25))
     report = operation.plan()
     assert report["maximum_securities"] == 25
-    assert report["request_count_bounds"] == {"lower": 58, "upper": 111}
+    assert report["request_count_bounds"] == {"lower": 83, "upper": 161}
     assert "pacing_only_lower" in report["runtime_estimates_minutes"]
     assert "not survivorship-free" in report["warnings"][0]
     assert not (tmp_path / "research.duckdb").exists()
@@ -100,7 +103,7 @@ def test_catalogue_prices_actions_resume_and_existing_schemas(tmp_path: Path) ->
     assert catalogue["candidate_accepted"] == catalogue["activated_selection_count"] == 5
     assert catalogue["activated"] is True
     result = operation.prices(retrieved_at=NOW)
-    assert result["completed"] == 5 and result["split_status"] == "provider_unsupported"
+    assert result["completed"] == 5 and result["split_status"] == "ingested"
     resumed = operation.prices(retrieved_at=NOW + __import__("datetime").timedelta(seconds=1), resume=True)
     assert resumed["completed"] == 0
     with duckdb.connect(str(path), read_only=True) as db:
@@ -122,6 +125,8 @@ def pilot_transport(request: httpx.Request) -> httpx.Response:
     if "exchange-symbol-list" in request.url.path:
         region = request.url.path.rsplit("/", 1)[-1]
         return httpx.Response(200, json=fixture("pilot_catalogues.json")[region])
+    if "/splits/" in request.url.path:
+        return httpx.Response(200, json=[])
     if "/div/" in request.url.path:
         return httpx.Response(200, json=fixture("dividends.json"))
     return httpx.Response(200, json=fixture("prices.json"))
@@ -249,7 +254,7 @@ def test_runtime_stop_is_checkpointed_and_resume_only_processes_pending(tmp_path
     assert resumed["completed"] == 4 and resumed["pending"] == 0 and resumed["actual_failed"] == 0
     coverage = EODHDIngestion(path, production, resume_client).coverage()
     assert coverage["latest_run"]["attempted"] == 4
-    assert coverage["latest_run"]["request_count"] == 8
+    assert coverage["latest_run"]["request_count"] == 12
     assert coverage["security_progress"] == {"attempted": 5, "completed": 5, "pending": 0,
         "actual_failed": 0, "permanently_failed": 0, "retryable_or_other_failed": 0}
     assert coverage["catalogue_selections"] and len(coverage["price_history"]) == 5
@@ -289,7 +294,7 @@ def test_refresh_plan_excludes_permanent_failure_and_bounds_request_details(
     assert plan["skipped_permanent_securities"] == 1
     assert plan["skipped_nonretryable_securities"] == 0
     assert plan["pending_securities"] == 0
-    assert plan["provider_request_estimate"] == 1001
+    assert plan["provider_request_estimate"] == 1500
     assert plan["planned_requests_total"] == 502
     assert len(plan["planned_requests"]) == 10
     assert plan["planned_requests_truncated"] is True
@@ -317,15 +322,15 @@ def test_normal_refresh_never_executes_permanent_initial_backfill_and_retry_requ
     routine = operation.refresh(retrieved_at=NOW)
     assert called_permanent == []
     assert routine["completed"] == 4
-    assert routine["requests"] == 11  # Four securities x two endpoints plus three FX pairs.
+    assert routine["requests"] == 15  # Four securities x three endpoints plus three FX pairs.
 
     guarded_client.requests = 0
     retry = operation.refresh(retrieved_at=NOW, retry_failures=True)
     assert retry["completed"] == 0 and guarded_client.requests == 0
     authorized = operation.refresh(retrieved_at=NOW, retry_failures=True,
                                    authorize_permanent_failures=True)
-    assert authorized["completed"] == 1 and guarded_client.requests == 2
-    assert len(called_permanent) == 2
+    assert authorized["completed"] == 1 and guarded_client.requests == 3
+    assert len(called_permanent) == 3
 
 
 def test_plan_reports_pending_and_nonretryable_aggregates(tmp_path: Path) -> None:
@@ -392,3 +397,69 @@ def test_reconciliation_requires_deliberate_authorization_and_dry_run_is_immutab
         operation.refresh(retrieved_at=NOW, reconcile=True)
     dry = operation.refresh(retrieved_at=NOW, reconcile=True, authorized=True, dry_run=True)
     assert dry["full_reconciliation_required"] is True and path.read_bytes() == before
+
+
+def test_split_ratio_is_shares_after_per_share_before() -> None:
+    assert split_ratio("4.000000/1.000000") == 4
+    assert split_ratio("1.000000/25.000000") == Decimal("0.04")
+    assert split_ratio("3/2") == Decimal("1.5")
+    for bad in ("4", "0/1", "1/0", "x/1", None):
+        with pytest.raises(ValueError): split_ratio(bad)
+    listing = parse_catalogue(fixture("catalogue.json"), "US")[0][0]
+    rows = _splits([{"date": "2020-08-31", "split": "4.000000/1.000000"}, {"date": "2021-01-04", "value": "1/2"}],
+                   listing, NOW, date(2016, 9, 26), date(2026, 9, 26))
+    assert [(r.ex_date, r.action_type, r.value, r.currency) for r in rows] == [
+        (date(2020, 8, 31), "split", 4, None), (date(2021, 1, 4), "split", Decimal("0.5"), None)]
+    with pytest.raises(ValueError): _splits(rows and [{"date": "2020-08-31", "split": "2/1"}] * 2, listing, NOW, date(2016, 9, 26), date(2026, 9, 26))
+
+
+def _split_transport(ex_date: str, history: list[str]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/splits/" in request.url.path:
+            return httpx.Response(200, json=[{"date": ex_date, "split": "2.000000/1.000000"}])
+        if "/eod/" in request.url.path and not request.url.path.endswith("FOREX"):
+            history.append(request.url.params["from"])
+            return httpx.Response(200, json=[{"date": request.url.params["from"], "open": 5, "high": 6, "low": 4, "close": 5.5, "adjusted_close": 5.5, "volume": 10}])
+        return transport(request)
+    return handler
+
+
+def test_refresh_downloads_everything_again_after_a_split(tmp_path: Path) -> None:
+    path = tmp_path / "research.duckdb"
+    operation = EODHDIngestion(path, tmp_path / "prod.duckdb", client(per_region=1, total=5))
+    operation.catalogue(retrieved_at=NOW); operation.prices(retrieved_at=NOW); operation.fx(retrieved_at=NOW)
+    with duckdb.connect(str(path)) as db:  # an older stored session, outside the refresh window
+        db.execute("""INSERT INTO global_price_observations SELECT qualified_symbol, DATE '2026-09-01', exchange, currency, open, high,
+            low, close, adjusted_close, volume, status, source, retrieved_at FROM global_price_observations WHERE trading_date = DATE '2026-09-24'""")
+    later, history = NOW + timedelta(days=3), []
+    split_client = EODHDClient("secret", EODHDLimits(requests_per_minute=100000), transport=httpx.MockTransport(_split_transport("2026-09-28", history)), sleep=lambda _: None)
+    result = EODHDIngestion(path, tmp_path / "prod.duckdb", split_client).refresh(retrieved_at=later)
+    assert result["rebased_count"] == 5
+    # Each listing: the window request, then the full history from its first stored day.
+    assert history.count("2026-09-19") == history.count("2026-09-01") == 5
+    with duckdb.connect(str(path), read_only=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM global_corporate_actions WHERE action_type='split' AND value=2").fetchone()[0] == 5
+    # The split is now stored and older rows were re-fetched after it: no further rebase.
+    again = EODHDIngestion(path, tmp_path / "prod.duckdb", EODHDClient("secret", EODHDLimits(requests_per_minute=100000),
+        transport=httpx.MockTransport(_split_transport("2026-09-28", [])), sleep=lambda _: None)).refresh(retrieved_at=later)
+    assert again["rebased_count"] == 0
+
+
+def test_split_backfill_stores_history_rebases_stale_listings_and_resumes(tmp_path: Path) -> None:
+    path = tmp_path / "research.duckdb"
+    operation = EODHDIngestion(path, tmp_path / "prod.duckdb", client(per_region=1, total=5))
+    operation.catalogue(retrieved_at=NOW); operation.prices(retrieved_at=NOW)
+    with duckdb.connect(str(path)) as db:  # as if priced before splits were fetched
+        db.execute("DELETE FROM eodhd_ingestion_checkpoints WHERE stage='splits'")
+    history = []
+    backfill_client = EODHDClient("secret", EODHDLimits(requests_per_minute=100000, daily_requests=7),
+        transport=httpx.MockTransport(_split_transport("2026-09-26", history)), sleep=lambda _: None)
+    first = EODHDIngestion(path, tmp_path / "prod.duckdb", backfill_client).splits(retrieved_at=NOW)
+    # Rows retrieved on the split day itself may predate it: treated as stale, fetched again from the first day.
+    assert first["status"] == "partial_checkpointed" and first["completed"] == 3 and first["rebased_count"] == 3
+    assert set(history) == {"2026-09-24"}
+    rest = EODHDIngestion(path, tmp_path / "prod.duckdb", EODHDClient("secret", EODHDLimits(requests_per_minute=100000),
+        transport=httpx.MockTransport(_split_transport("2026-09-26", [])), sleep=lambda _: None)).splits(retrieved_at=NOW)
+    assert rest["status"] == "completed" and rest["targets"] == 2 and rest["completed"] == 2
+    with duckdb.connect(str(path), read_only=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM global_corporate_actions WHERE action_type='split'").fetchone()[0] == 5
