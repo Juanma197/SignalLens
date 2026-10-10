@@ -22,7 +22,7 @@ export function ReassessmentNotice({status}: {status?: Portfolio["reassessment"]
   if (!status) return null;
   return <p role="status" className="notice">
     {status === "scheduled" ? "Reassessing your cash now. You'll get a Telegram message only if it has a worthwhile use; nothing is bought for you." :
-      "Telegram isn't set up, so no message will follow."}{" "}See <Link href="/prototype/monthly">This month</Link> for the suggested use of your cash.</p>;
+      "Telegram isn't set up, so no message will follow."}{" "}See <Link href="/">This month</Link> for the suggested use of your cash.</p>;
 }
 
 export const money = (value: number, currency: string) =>

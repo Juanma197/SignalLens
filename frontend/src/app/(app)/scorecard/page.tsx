@@ -12,7 +12,7 @@ export default function Page() {
       const v = await r.json(); if (!r.ok) throw new Error(v.detail?.code ?? "PROTOTYPE_SERVICE_UNAVAILABLE"); setCard(v);
     }).catch(e => setError(e instanceof Error ? e.message : "PROTOTYPE_SERVICE_UNAVAILABLE"));
   }, []);
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Scorecard</strong><Link href="/prototype/monthly">This month</Link><Link href="/prototype">Shortlist</Link><Link href="/prototype/portfolio">Portfolio</Link><Link href="/prototype/checks">Thesis checks</Link></nav>
+  return <main className="research-page"><nav><span className="mark">SL</span><strong>Scorecard</strong><Link href="/">This month</Link><Link href="/shortlist">Shortlist</Link><Link href="/portfolio">Portfolio</Link><Link href="/checks">Thesis checks</Link></nav>
     <section className="hero compact"><p className="eyebrow">RECORDED CALLS · MEASURED AFTERWARDS</p><h1>Keeping score.<br/><span>Right or wrong, in public.</span></h1>
       <p className="lede">Every recorded month&apos;s picks and decisions, measured against the rest of the companies assessed that month after about 1, 3, 6 and 12 months.</p></section>
     <PrototypeNotice/>

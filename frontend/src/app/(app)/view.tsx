@@ -46,7 +46,7 @@ const valuationLine = (v: Valuation) => {
     v.history && v.history.comparisons.length > 0 && `vs own history: ${below} below, ${above} above range`].filter(Boolean).join(" · ") || "Valuation multiples not meaningful";
 };
 const sizeLine = (c: Company) => [c.size ? `${money(c.size.market_cap_usd)} market cap` : null, c.industry?.sic_description ?? null].filter(Boolean).join(" · ");
-export const detailHref = (id: string, decision: string, target=15) => `/prototype/company/${encodeURIComponent(id)}?decision_at=${encodeURIComponent(decision)}&target_members=${target}`;
+export const detailHref = (id: string, decision: string, target=15) => `/company/${encodeURIComponent(id)}?decision_at=${encodeURIComponent(decision)}&target_members=${target}`;
 const words = (value: string) => value.replaceAll("_", " ");
 
 /** The first rows of a long list, with a button for the rest: with the full US

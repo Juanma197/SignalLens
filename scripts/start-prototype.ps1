@@ -109,14 +109,14 @@ try {
         if ($Api.HasExited -or $Web.HasExited) { throw "A service exited; inspect logs in $Work" }
         try {
             $Health = Invoke-RestMethod -Uri "http://127.0.0.1:8015/api/v1/health" -TimeoutSec 2
-            $Page = Invoke-WebRequest -UseBasicParsing -Headers $WebHeaders -Uri "http://127.0.0.1:3015/prototype" -TimeoutSec 10
+            $Page = Invoke-WebRequest -UseBasicParsing -Headers $WebHeaders -Uri "http://127.0.0.1:3015/shortlist" -TimeoutSec 10
             if ($Health.status -eq "ok" -and $Page.StatusCode -eq 200) { $Ready = $true; break }
         } catch { Start-Sleep -Seconds 1 }
     }
     if (-not $Ready) { throw "Startup timed out; inspect logs in $Work" }
     Write-Host ""
     if ($Operator) { Write-Host "OPERATOR DATABASES, READ ONLY." -ForegroundColor Yellow } else { Write-Host "SYNTHETIC FIXTURE ONLY." -ForegroundColor Yellow }
-    Write-Host "Open:     http://127.0.0.1:3015/prototype?decision_at=$Cutoff"
+    Write-Host "Open:     http://127.0.0.1:3015/?decision_at=$Cutoff"
     if ($LoginSource) { Write-Host "Login:    your configured dashboard username and password (from $LoginSource)" }
     else { Write-Host "Login:    $Username / $Password  (one-time; set SIGNALLENS_DASHBOARD_USERNAME/PASSWORD to use your own)" }
     Write-Host "Store:    $PrototypeDb (watchlist, notes, theses, snapshots, trades)"

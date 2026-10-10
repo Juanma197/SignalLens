@@ -33,7 +33,7 @@ export function AllocationView({allocation, decision, target}: {allocation: Allo
       <p>{pounds(account.cash_pool)} in the cash pool{account.contribution_included ? ` + ${pounds(account.contribution_included)} planned contribution` : ""}
         {allocation.reinvest_sales && allocation.sale_proceeds > 0 ? ` + ${pounds(account.sale_proceeds)} from suggested sales` : ""}.
         {" "}Suggested buys use <b>{pounds(account.invested)}</b>; <b>{pounds(account.left_as_cash)}</b> stays as cash for later.</p>
-      {!account.contribution_included && account.deposited_this_month === 0 && <p>This month&apos;s {pounds(account.monthly_contribution)} contribution isn&apos;t recorded yet. Include it above, or record it on the <Link href="/prototype/portfolio">Portfolio</Link> page once it arrives.</p>}
+      {!account.contribution_included && account.deposited_this_month === 0 && <p>This month&apos;s {pounds(account.monthly_contribution)} contribution isn&apos;t recorded yet. Include it above, or record it on the <Link href="/portfolio">Portfolio</Link> page once it arrives.</p>}
       {account.overdrawn && <p className="notice warning">Your cash pool is below zero, so a deposit is probably missing. It is treated as zero here.</p>}
       {account.uncounted_trades > 0 && <p className="notice warning">{account.uncounted_trades} trade(s) have no {account.currency} total, so the cash pool may not match your broker.</p>}
       {account.gbp_per_usd ? <p><small>Pounds converted at {account.gbp_per_usd.rate.toFixed(4)} per dollar ({account.gbp_per_usd.source === "stored" ? "stored rate" : "implied by your last dollar trade"}, {account.gbp_per_usd.observed_on}). Your broker&apos;s rate and fees will differ slightly.</small></p>
@@ -76,7 +76,7 @@ export function MonthlyView({monthly}: {monthly: Monthly}) {
         </tbody></table></div>}</section>
 
     <section className="panel prototype-panel"><h2>Your holdings</h2>
-      {monthly.holdings.length === 0 ? <p>No holdings recorded before this cutoff. Record your trades on the <Link href="/prototype/portfolio">Portfolio</Link> page.</p> :
+      {monthly.holdings.length === 0 ? <p>No holdings recorded before this cutoff. Record your trades on the <Link href="/portfolio">Portfolio</Link> page.</p> :
         <div className="prototype-table-wrap"><table className="prototype-holdings-table"><thead><tr><th>Holding</th><th>Decision</th><th>Why</th><th>Upside</th><th>Weight</th><th>Thesis</th></tr></thead><tbody>
           {monthly.holdings.map(h => <tr key={h.qualified_symbol + h.currency}>
             <td><b>{link(h)}</b><small>{h.company_name}</small></td>

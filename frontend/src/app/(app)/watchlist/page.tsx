@@ -13,7 +13,7 @@ function Watchlist() {
   const [data, setData] = useState<{items: WatchItem[]; notes: Note[]}|null>(null);
   const [error, setError] = useState("");
   useEffect(() => {call<{items: WatchItem[]; notes: Note[]}>("watchlist").then(setData).catch(e => setError(e.message));}, []);
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Prototype watchlist</strong><Link href="/prototype">Shortlist</Link><Link href="/prototype/monthly">This month</Link><Link href="/prototype/portfolio">Portfolio</Link><Link href="/prototype/checks">Thesis checks</Link><Link href="/prototype/snapshots">Snapshots</Link></nav><PrototypeNotice/>
+  return <main className="research-page"><nav><span className="mark">SL</span><strong>Prototype watchlist</strong><Link href="/shortlist">Shortlist</Link><Link href="/">This month</Link><Link href="/portfolio">Portfolio</Link><Link href="/checks">Thesis checks</Link><Link href="/snapshots">Snapshots</Link></nav><PrototypeNotice/>
     {error ? <p role="alert" className="notice warning">{error}</p> : data ? <WatchlistView items={data.items} notes={data.notes} cutoff={cutoff}/> : <p role="status">Reading the prototype store…</p>}</main>;
 }
 export default function Page() {return <Suspense fallback={<p>Loading watchlist…</p>}><Watchlist/></Suspense>;}

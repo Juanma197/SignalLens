@@ -2,10 +2,10 @@
 import {FormEvent, Suspense, useCallback, useEffect, useState} from "react";
 import {useSearchParams} from "next/navigation";
 import Link from "next/link";
-import {PrototypeNotice} from "../view";
-import {Monthly, MonthlyView} from "../monthly-view";
-import {money} from "../portfolio-view";
-import {When, WhenPicker, cutoffFor, describeCutoff, friendlyError, getJson, whenFromQuery} from "../when";
+import {PrototypeNotice} from "./view";
+import {Monthly, MonthlyView} from "./monthly-view";
+import {money} from "./portfolio-view";
+import {When, WhenPicker, cutoffFor, describeCutoff, friendlyError, getJson, whenFromQuery} from "./when";
 
 function MonthlyPage() {
   const query = useSearchParams();
@@ -36,7 +36,7 @@ function MonthlyPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on open with the initial choices
   useEffect(() => {load(when, contribution, reinvest);}, [load]);
   function submit(event: FormEvent) {event.preventDefault(); setLoading(true); setError(""); setMonthly(null); setRecorded(""); load(when, contribution, reinvest);}
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>This month</strong><Link href="/prototype">Shortlist</Link><Link href="/prototype/portfolio">Portfolio</Link><Link href="/prototype/checks">Thesis checks</Link><Link href="/prototype/watchlist">Watchlist</Link><Link href="/prototype/scorecard">Scorecard</Link><Link href="/prototype/snapshots">Snapshots</Link></nav>
+  return <main className="research-page"><nav><span className="mark">SL</span><strong>This month</strong><Link href="/shortlist">Shortlist</Link><Link href="/portfolio">Portfolio</Link><Link href="/checks">Thesis checks</Link><Link href="/watchlist">Watchlist</Link><Link href="/scorecard">Scorecard</Link><Link href="/snapshots">Snapshots</Link></nav>
     <section className="hero compact"><p className="eyebrow">MONTHLY DECISIONS · DECISION SUPPORT ONLY</p><h1>What to buy, keep and sell.<br/><span>And why.</span></h1>
       <p className="lede">New undervalued opportunities and a decision for every holding, from your trades, the valuation ranking and your thesis checks at one cutoff. Nothing is executed.</p></section>
     <PrototypeNotice/>
@@ -44,7 +44,7 @@ function MonthlyPage() {
     {monthly && <p className="prototype-as-of">Showing data as of {describeCutoff(monthly.decision_at)}.</p>}
     {error && <p role="alert" className="notice warning">{error}</p>}
     {monthly && <><MonthlyView monthly={monthly}/>
-      <section className="panel prototype-panel"><h2>Keep score</h2><p>Recording freezes this month&apos;s picks and decisions so the <Link href="/prototype/scorecard">Scorecard</Link> can measure them later. One record per month, within 14 days of the cutoff; it can never be changed.</p>
+      <section className="panel prototype-panel"><h2>Keep score</h2><p>Recording freezes this month&apos;s picks and decisions so the <Link href="/scorecard">Scorecard</Link> can measure them later. One record per month, within 14 days of the cutoff; it can never be changed.</p>
         <button onClick={record} disabled={recording}>{recording ? "Recording…" : "Record this month's decisions"}</button>{recorded && <p role="status">{recorded}</p>}</section></>}</main>;
 }
 export default function Page() {return <Suspense fallback={<p>Loading this month…</p>}><MonthlyPage/></Suspense>;}

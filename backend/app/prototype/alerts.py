@@ -133,7 +133,7 @@ def reassess(trigger, *, symbol=None, notifier=None, now=None, dry_run=False, mo
     store = PrototypeStore(settings.prototype_database_path, protected_paths=(settings.research_database_path, settings.database_path))
     monthly = monthly or api.monthly(now, 15, False, False)
     base = os.environ.get('SIGNALLENS_PUBLIC_URL', '').rstrip('/')
-    link = f"{base}/prototype/monthly?decision_at={quote(monthly['decision_at'])}" if base else None
+    link = f"{base}/?decision_at={quote(monthly['decision_at'])}" if base else None
     planned = cash_message(monthly, trigger, symbol=symbol, link=link)
     if planned is None: return {'status': 'nothing_worthwhile'}
     fingerprint, text = planned
@@ -297,7 +297,7 @@ def run(*, notifier=None, dry_run=False, update=True, now=None):
                                                    store=store, user_agent=agent, now=now)
     monthly = api.monthly(now, 15, False, True)
     base = os.environ.get('SIGNALLENS_PUBLIC_URL', '').rstrip('/')
-    link = f"{base}/prototype/monthly?decision_at={quote(monthly['decision_at'])}" if base else None
+    link = f"{base}/?decision_at={quote(monthly['decision_at'])}" if base else None
     last_summary = store.last_alert_at('summary')
     last_summary = datetime.fromisoformat(last_summary) if isinstance(last_summary, str) else last_summary
     planned = plan_messages(monthly, store.alert_states(), now=now, last_summary=last_summary, link=link)
@@ -316,7 +316,7 @@ def run(*, notifier=None, dry_run=False, update=True, now=None):
                            decision=decision, thesis=thesis, now=now)
         if text and delivered: sent.append(text)
     cycle = monthly_cycle(store, monthly, notifier=notifier, now=now, dry_run=dry_run, link=link,
-                          portfolio_link=f'{base}/prototype/portfolio' if base else None)
+                          portfolio_link=f'{base}/portfolio' if base else None)
     sent += cycle.pop('messages')
     if cycle: steps['monthly_cycle'] = cycle
     cash = reassess('daily', notifier=notifier, now=now, dry_run=dry_run)
