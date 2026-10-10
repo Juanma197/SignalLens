@@ -274,3 +274,49 @@ def test_unit_repair_failure_rolls_back_and_cli_error_is_redacted(monkeypatch,tm
     completed=subprocess.run(command,cwd=Path(__file__).parents[1],text=True,capture_output=True)
     assert completed.returncode==1 and "wrong" not in completed.stderr
     assert json.loads(completed.stderr)["error"]["message"]=="investment research request failed; details redacted"
+
+import investment_evidence_fixture as evidence_fixture
+
+def stored_evidence(path):
+    """Every stored evidence row, without the per-run timestamps and ids."""
+    skip={"materialized_at","last_run_id","updated_at"}; result={}
+    with duckdb.connect(str(path),read_only=True) as db:
+        for table in ("security_classification_evidence","canonical_factor_evidence",
+                      "corporate_action_coverage_evidence","investment_evidence_checkpoints"):
+            columns=[c[0] for c in db.execute(f'DESCRIBE "{table}"').fetchall() if c[0] not in skip]
+            result[table]=sorted(map(repr,db.execute(f'SELECT {",".join(columns)} FROM "{table}"').fetchall()))
+    return result
+
+def materialize_fixture(tmp_path,name,monkeypatch,batch_size):
+    research=tmp_path/f"{name}.duckdb"; production=tmp_path/"production.duckdb"
+    evidence_fixture.create(research,companies=24)
+    if not production.exists():
+        with duckdb.connect(str(production)) as db: db.execute("CREATE TABLE marker(value INTEGER)")
+    monkeypatch.setattr(investment_evidence,"BATCH_SIZE",batch_size)
+    runs=[materialize_stored(research_db=research,production_db=production,
+            decision_at=evidence_fixture.DECISION,authorization=MATERIALIZE_AUTHORIZATION) for _ in range(2)]
+    return research,runs
+
+def test_batched_materialization_matches_one_company_at_a_time(tmp_path,monkeypatch):
+    single,single_runs=materialize_fixture(tmp_path,"single",monkeypatch,1)
+    batched,batched_runs=materialize_fixture(tmp_path,"batched",monkeypatch,7)
+    counts=lambda runs:[{k:r[k] for k in ("inserted","unchanged","withheld","failures")} for r in runs]
+    assert counts(single_runs)==counts(batched_runs)
+    assert stored_evidence(single)==stored_evidence(batched)
+    first,second=counts(batched_runs)
+    assert first["inserted"]>500 and first["failures"]==0
+    assert second["inserted"]==0 and second["unchanged"]==first["inserted"]
+
+def test_materialization_uses_only_evidence_public_at_the_decision(tmp_path,monkeypatch):
+    research,_=materialize_fixture(tmp_path,"research",monkeypatch,5)
+    with duckdb.connect(str(research),read_only=True) as db:
+        companies=db.execute("SELECT count(DISTINCT security_id) FROM security_classification_evidence").fetchone()[0]
+        late=db.execute("SELECT count(*) FROM canonical_factor_evidence WHERE available_at>?",[evidence_fixture.DECISION]).fetchone()[0]
+        after_decision_price=db.execute("SELECT count(*) FROM canonical_factor_evidence WHERE canonical_field='decision_price' AND value=99").fetchone()[0]
+        conflicts=db.execute("SELECT count(*) FROM security_classification_evidence WHERE classification_reason='conflicting_sources'").fetchone()[0]
+        derived=db.execute("SELECT count(*) FROM canonical_factor_evidence WHERE canonical_field IN ('market_capitalisation','free_cash_flow')").fetchone()[0]
+        coverage=dict(db.execute("SELECT coverage_state,count(*) FROM corporate_action_coverage_evidence GROUP BY 1").fetchall())
+    assert companies==21  # every eighth listing is an ADR, outside the catalogue
+    assert late==0 and after_decision_price==0
+    assert conflicts>0 and derived>0
+    assert set(coverage)=={"action_present","verified_no_action","coverage_missing"}

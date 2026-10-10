@@ -13,13 +13,16 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sys
 import time
 from typing import Any, Callable
 import uuid
 
 import duckdb
+import pandas as pd
 
 from .active_catalogue import select_active_catalogue
+from .global_market_data import bulk_insert
 from .model_readiness import fingerprint
 from .sec_ingestion import validate_paths, valid_user_agent
 from .prospective_us_shadow import CONFIGURATION_HASH, STRATEGY_VERSION
@@ -114,15 +117,49 @@ def _rows(db, table):
     cur=db.execute(f'SELECT * FROM "{table}"'); names=[x[0] for x in cur.description]
     return [dict(zip(names,row)) for row in cur.fetchall()]
 
-def _rows_where(db, table, column, values):
+def _rows_where(db, table, column, values, also="", also_values=()):
     """Rows whose `column`, as text, is one of `values`: the same rows as filtering
     _rows() with str(row[column]) in values, without reading the whole table for
-    every security."""
+    every security. `also` is an extra SQL condition."""
     values=[str(v) for v in values]
     if table not in _tables(db) or not values: return []
     marks=",".join("?" for _ in values)
-    cur=db.execute(f'SELECT * FROM "{table}" WHERE CAST("{column}" AS VARCHAR) IN ({marks})',values); names=[x[0] for x in cur.description]
+    cur=db.execute(f'SELECT * FROM "{table}" WHERE CAST("{column}" AS VARCHAR) IN ({marks}){also}',[*values,*also_values]); names=[x[0] for x in cur.description]
     return [dict(zip(names,row)) for row in cur.fetchall()]
+
+BATCH_SIZE=100
+
+class _BatchRows:
+    """The rows _rows_where would return for any company in one batch, read with one
+    query per table for the whole batch. Each per-company query scans the table, so
+    at about 2,000 companies and millions of SEC facts the per-company reads took
+    hours. Called like _rows_where without `db`; rows keep the table's order."""
+    def __init__(self, db, securities):
+        sids=[s["security_id"] for s in securities]; symbols=[s["qualified_symbol"] for s in securities]
+        self.groups={}
+        for table in ("reviewed_security_classifications","sec_issuers","security_listings"):
+            self._load(db,table,"security_id",sids)
+        concepts=sorted(set().union(*_aliases().values()))  # _canonical_rows ignores other concepts
+        self._load(db,"sec_facts","security_id",sids,f' AND concept IN ({",".join("?" for _ in concepts)})',concepts)
+        for table in ("global_price_observations","global_corporate_actions","eodhd_ingestion_checkpoints"):
+            self._load(db,table,"qualified_symbol",symbols)
+        ciks=sorted({str(r.get("cik")) for group in self.groups[("sec_issuers","security_id")].values() for _,r in group})
+        for table in ("sec_entity_metadata","sec_filings"): self._load(db,table,"cik",ciks)
+    def _load(self, db, table, column, values, also="", also_values=()):
+        groups={}
+        for index,row in enumerate(_rows_where(db,table,column,values,also,also_values)):
+            groups.setdefault(str(row.get(column)),[]).append((index,row))
+        self.groups[(table,column)]=groups
+    def __call__(self, table, column, values):
+        groups=self.groups[(table,column)]
+        return [row for _,row in sorted(x for v in {str(v) for v in values} for x in groups.get(v,[]))] if len(values)>1 else \
+               [row for v in values for _,row in groups.get(str(v),[])]
+
+def _batches(db, securities):
+    """(security, rows) for each security, reading the tables once per batch."""
+    for start in range(0,len(securities),BATCH_SIZE):
+        batch=securities[start:start+BATCH_SIZE]; rows=_BatchRows(db,batch)
+        for sec in batch: yield sec,rows
 
 def _aware(value: Any) -> datetime | None:
     if value is None: return None
@@ -156,23 +193,23 @@ def _catalogue(db, decision):
     return [{"security_id":str(x.security_id),"qualified_symbol":str(x.qualified_symbol)}
             for x in frame.loc[frame.region.eq("US") & frame.eligible].sort_values("qualified_symbol").itertuples(index=False)]
 
-def _classification_candidates(db, security, decision):
-    sid=security["security_id"]; out=[]
+def _classification_candidates(db, security, decision, rows=None):
+    rows=rows or (lambda *a: _rows_where(db,*a)); sid=security["security_id"]; out=[]
     # Explicit reviewed evidence has the highest semantic authority, while conflicts
     # are still refused rather than precedence-picked.
-    for r in _rows_where(db,"reviewed_security_classifications","security_id",[sid]):
+    for r in rows("reviewed_security_classifications","security_id",[sid]):
         if str(r.get("security_id"))==sid:
             out.append((str(r.get("security_type")),"explicit_review",str(r.get("review_id") or _key(r)),r))
-    issuers=[r for r in _rows_where(db,"sec_issuers","security_id",[sid]) if str(r.get("security_id"))==sid]
+    issuers=[r for r in rows("sec_issuers","security_id",[sid]) if str(r.get("security_id"))==sid]
     ciks={str(r.get("cik")) for r in issuers}
-    for r in _rows_where(db,"sec_entity_metadata","cik",ciks):
+    for r in rows("sec_entity_metadata","cik",ciks):
         if str(r.get("cik")) not in ciks: continue
         kind=r.get("security_type") or r.get("classification")
         if kind: out.append((str(kind),"sec_entity_metadata",str(r.get("source_identifier") or r.get("cik")),r))
-    forms={str(r.get("form","")) for r in _rows_where(db,"sec_filings","cik",ciks) if str(r.get("cik")) in ciks and _aware(r.get("public_at")) and availability(r.get("public_at"),r.get("retrieved_at"))<=decision}
+    forms={str(r.get("form","")) for r in rows("sec_filings","cik",ciks) if str(r.get("cik")) in ciks and _aware(r.get("public_at")) and availability(r.get("public_at"),r.get("retrieved_at"))<=decision}
     if forms & {"20-F","40-F","6-K"}: out.append(("foreign_issuer_or_adr","sec_filing_regime",",".join(sorted(forms)),issuers[-1] if issuers else {}))
     elif forms & {"10-K","10-Q"}: out.append(("us_operating_company","sec_filing_regime",",".join(sorted(forms)),issuers[-1] if issuers else {}))
-    for r in _rows_where(db,"security_listings","security_id",[sid]):
+    for r in rows("security_listings","security_id",[sid]):
         if str(r.get("security_id"))!=sid: continue
         raw=str(r.get("instrument_type") or r.get("security_type") or "").lower()
         mapping={"common stock":"us_operating_company","common_stock":"us_operating_company",
@@ -202,8 +239,9 @@ def _aliases():
     for k,v in _EXTRA_ALIASES.items(): result.setdefault(k,set()).update(v)
     return result
 
-def _canonical_rows(db, security, decision, now):
-    sid=security["security_id"]; aliases=_aliases(); facts=[r for r in _rows_where(db,"sec_facts","security_id",[sid]) if str(r.get("security_id"))==sid]
+def _canonical_rows(db, security, decision, now, rows=None):
+    rows=rows or (lambda *a: _rows_where(db,*a))
+    sid=security["security_id"]; aliases=_aliases(); facts=[r for r in rows("sec_facts","security_id",[sid]) if str(r.get("security_id"))==sid]
     candidates=[]
     for field,concepts in aliases.items():
         for r in facts:
@@ -236,15 +274,24 @@ def _canonical_rows(db, security, decision, now):
         if semantic not in chosen or (r["public_at"],r["retrieved_at"])>(chosen[semantic]["public_at"],chosen[semantic]["retrieved_at"]): chosen[semantic]=r
     return list(chosen.values())
 
-def _insert_factor(db,r):
-    exists=db.execute("SELECT count(*) FROM canonical_factor_evidence WHERE evidence_key=?",[r["evidence_key"]]).fetchone()[0]
-    if exists: return False
+def _factor_values(r):
     provenance=json.dumps({"source_table":"sec_facts","source_fact_key":r["source_fact_key"],
       "source_unit":r.get("source_unit",r.get("unit")),"canonical_unit":r.get("unit"),
       "unit_normalization":r.get("normalization")},sort_keys=True)
-    db.execute("""INSERT INTO canonical_factor_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",[
-      r["evidence_key"],r["security_id"],r["qualified_symbol"],r["canonical_field"],r["value"],r["unit"],r["currency"],r["period_start"],r["period_end"],r["instant_date"],r["fiscal_period"],r["form"],r["source"],r["public_at"],r["retrieved_at"],r["available_at"],r["materialized_at"],r["concept"],ALIAS_VERSION,r["sign"],r["reliability"],r["withholding"],provenance,r["source_fact_key"],json.dumps({"latest_visible_revision":True,"period_nature":r["period_nature"]}),])
-    return True
+    return [r["evidence_key"],r["security_id"],r["qualified_symbol"],r["canonical_field"],r["value"],r["unit"],r["currency"],r["period_start"],r["period_end"],r["instant_date"],r["fiscal_period"],r["form"],r["source"],r["public_at"],r["retrieved_at"],r["available_at"],r["materialized_at"],r["concept"],ALIAS_VERSION,r["sign"],r["reliability"],r["withholding"],provenance,r["source_fact_key"],json.dumps({"latest_visible_revision":True,"period_nature":r["period_nature"]})]
+
+def _insert_new(db, table, rows):
+    """Insert the rows (evidence key first) whose key is not stored yet, in one
+    statement; a key repeated within `rows` is kept once. Returns how many were new."""
+    fresh={}
+    for row in rows: fresh.setdefault(row[0],row)
+    if fresh:
+        db.register("staged_keys",pd.DataFrame({"evidence_key":list(fresh)}))
+        try: stored=db.execute(f'SELECT evidence_key FROM "{table}" WHERE evidence_key IN (SELECT evidence_key FROM staged_keys)').fetchall()
+        finally: db.unregister("staged_keys")
+        for (key,) in stored: fresh.pop(key,None)
+    bulk_insert(db,table,list(fresh.values()))
+    return len(fresh)
 
 def _json_object(value: Any) -> dict[str, Any]:
     if isinstance(value, str):
@@ -375,10 +422,11 @@ def canonical_unit_repair_status(*,research_db:Path,production_db:Path,decision_
         for (field,version),count in sorted(repaired_counts.items())],
       "read_only":True,"database_immutability":{"verified":True,"before":before,"after":after},**ZERO}
 
-def _market_and_action_rows(db, security, decision, now):
+def _market_and_action_rows(db, security, decision, now, rows=None):
     """Normalize price and explicit action coverage without treating absence as proof."""
+    rows=rows or (lambda *a: _rows_where(db,*a))
     symbol=security["qualified_symbol"]; sid=security["security_id"]; factors=[]
-    prices=[r for r in _rows_where(db,"global_price_observations","qualified_symbol",[symbol]) if r.get("qualified_symbol")==symbol
+    prices=[r for r in rows("global_price_observations","qualified_symbol",[symbol]) if r.get("qualified_symbol")==symbol
             and r.get("status")=="available" and _aware(r.get("retrieved_at"))<=decision
             and r.get("trading_date")<=decision.date()]
     if prices:
@@ -387,8 +435,8 @@ def _market_and_action_rows(db, security, decision, now):
         factors.append({"evidence_key":key,"security_id":sid,"qualified_symbol":symbol,"canonical_field":"decision_price",
           "value":float(value) if value is not None else None,"unit":str(p.get("currency")),"currency":p.get("currency"),"period_start":None,"period_end":None,"instant_date":p["trading_date"],"fiscal_period":None,"form":None,
           "source":f"{p.get('source')}:{p['trading_date']}","public_at":avail,"retrieved_at":avail,"available_at":avail,"materialized_at":now,"concept":"adjusted_close","sign":"positive_price","reliability":"usable" if value is not None else "withheld","withholding":None if value is not None else "no_model_ready_price","source_fact_key":None,"period_nature":"instant"})
-    actions=[r for r in _rows_where(db,"global_corporate_actions","qualified_symbol",[symbol]) if r.get("qualified_symbol")==symbol and r.get("ex_date")<=decision.date() and _aware(r.get("retrieved_at"))<=decision]
-    checkpoints=[r for r in _rows_where(db,"eodhd_ingestion_checkpoints","qualified_symbol",[symbol]) if r.get("qualified_symbol")==symbol and r.get("stage") in {"corporate_actions","actions"} and r.get("status")=="completed" and _aware(r.get("updated_at"))<=decision]
+    actions=[r for r in rows("global_corporate_actions","qualified_symbol",[symbol]) if r.get("qualified_symbol")==symbol and r.get("ex_date")<=decision.date() and _aware(r.get("retrieved_at"))<=decision]
+    checkpoints=[r for r in rows("eodhd_ingestion_checkpoints","qualified_symbol",[symbol]) if r.get("qualified_symbol")==symbol and r.get("stage") in {"corporate_actions","actions"} and r.get("status")=="completed" and _aware(r.get("updated_at"))<=decision]
     if actions: state="action_present"; source=",".join(sorted({_iso(x.get("source")) for x in actions})); retrieved=max(_aware(x["retrieved_at"]) for x in actions); start=min(x["ex_date"] for x in actions)
     elif checkpoints: state="verified_no_action"; source="eodhd_ingestion_checkpoint"; retrieved=max(_aware(x["updated_at"]) for x in checkpoints); start=min((_aware(x["updated_at"]).date() for x in checkpoints),default=decision.date())
     else: state="coverage_missing"; source="none"; retrieved=decision; start=decision.date()
@@ -402,10 +450,10 @@ def plan_materialization(*,research_db:Path,production_db:Path,decision_at:datet
     with duckdb.connect(str(production_db),read_only=True):
       with duckdb.connect(str(research_db),read_only=True) as db:
         securities=_catalogue(db,decision); resolvable=[]; unavailable=[]; factors=0
-        for sec in securities:
-            if _classification_candidates(db,sec,decision): resolvable.append(sec["qualified_symbol"])
+        for sec,rows in _batches(db,securities):
+            if _classification_candidates(db,sec,decision,rows): resolvable.append(sec["qualified_symbol"])
             else: unavailable.append(sec["qualified_symbol"])
-            factors+=len(_canonical_rows(db,sec,decision,decision))
+            factors+=len(_canonical_rows(db,sec,decision,decision,rows))
     after={"research":fingerprint(research_db),"production":fingerprint(production_db)}
     if before!=after: raise InvestmentResearchError("database changed during read-only operation")
     return {"command":"plan-investment-evidence-materialization","decision_at":decision.isoformat(),"selected_security_count":len(securities),
@@ -430,19 +478,21 @@ def materialize_stored(*,research_db:Path,production_db:Path,decision_at:datetim
         initialize_schema(db); securities=_catalogue(db,decision)
         db.execute("""INSERT INTO investment_evidence_runs(run_id,command,mode,started_at,decision_at,request_budget,research_database_identity,production_database_identity,configuration_version,configuration_hash,selected_security_count) VALUES (?,?,?,?,?,0,?,?,?,?,?)""",
           [run_id,"materialize-stored-investment-evidence","stored-evidence",now,decision,json.dumps(research_before,default=str),json.dumps(prod_before,default=str),STRATEGY_VERSION,CONFIGURATION_HASH,len(securities)])
-        for sec in securities:
+        tables=("security_classification_evidence","canonical_factor_evidence","corporate_action_coverage_evidence")
+        for start in range(0,len(securities),BATCH_SIZE):
+         batch=securities[start:start+BATCH_SIZE]; rows=_BatchRows(db,batch)
+         staged={t:[] for t in tables}; checkpoints=[]
+         for sec in batch:
           try:
-            cs=_classification_candidates(db,sec,decision); kinds={x[0] for x in cs}
+            cs=_classification_candidates(db,sec,decision,rows); kinds={x[0] for x in cs}
             if len(kinds)==1:
               kind=next(iter(kinds)); best=cs[0]; key=_key(sec["security_id"],kind,best[1],best[2],best[6]); conflict=None
               row=[key,sec["security_id"],sec["qualified_symbol"],kind,"concordant_authoritative_evidence",best[1],best[2],str(best[3].get("cik") or "") or None,str(best[3].get("cik") or sec["security_id"]),best[3].get("effective_from"),best[3].get("effective_to"),best[4],best[5],best[6],now,"high",False,json.dumps({"hierarchy":["sec_entity_metadata","sec_filing_regime","catalogue_instrument_type","explicit_review"],"source":best[1]}),None,True,conflict]
             else:
               reason="conflicting_sources" if kinds else "classification_evidence_unavailable"; key=_key(sec["security_id"],reason,decision)
-              row=[key,sec["security_id"],sec["qualified_symbol"],"classification_unavailable",reason,"stored_evidence_hierarchy","none",None,sec["security_id"],None,None,decision,decision,decision,now,"unavailable",bool(kinds),json.dumps({"sources":[x[1] for x in cs]}),None,True,json.dumps({"classifications":sorted(kinds)}) if kinds else None]; withheld+=1
-            if db.execute("SELECT count(*) FROM security_classification_evidence WHERE evidence_key=?",[key]).fetchone()[0]: unchanged+=1
-            else: db.execute("INSERT INTO security_classification_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",row); inserted+=1
-            normalized=_canonical_rows(db,sec,decision,now)
-            market,coverage=_market_and_action_rows(db,sec,decision,now)
+              row=[key,sec["security_id"],sec["qualified_symbol"],"classification_unavailable",reason,"stored_evidence_hierarchy","none",None,sec["security_id"],None,None,decision,decision,decision,now,"unavailable",bool(kinds),json.dumps({"sources":[x[1] for x in cs]}),None,True,json.dumps({"classifications":sorted(kinds)}) if kinds else None]
+            normalized=_canonical_rows(db,sec,decision,now,rows)
+            market,coverage=_market_and_action_rows(db,sec,decision,now,rows)
             normalized.extend(market)
             latest={}
             for factor in normalized:
@@ -452,18 +502,21 @@ def materialize_stored(*,research_db:Path,production_db:Path,decision_at:datetim
               return {"evidence_key":_key(sec["security_id"],field,source),"security_id":sec["security_id"],"qualified_symbol":sec["qualified_symbol"],"canonical_field":field,"value":value,"unit":unit,"currency":components[0].get("currency"),"period_start":None,"period_end":None,"instant_date":decision.date(),"fiscal_period":None,"form":None,"source":source,"public_at":max(x["public_at"] for x in components),"retrieved_at":max(x["retrieved_at"] for x in components),"available_at":available,"materialized_at":now,"concept":field,"sign":sign,"reliability":"usable","withholding":None,"source_fact_key":None,"period_nature":"derived"}
             if {"decision_price","diluted_shares"}<=latest.keys(): normalized.append(derived("market_capitalisation",latest["decision_price"]["value"]*latest["diluted_shares"]["value"],[latest["decision_price"],latest["diluted_shares"]],latest["decision_price"]["unit"]))
             if {"operating_cash_flow","capital_expenditure"}<=latest.keys(): normalized.append(derived("free_cash_flow",latest["operating_cash_flow"]["value"]-latest["capital_expenditure"]["value"],[latest["operating_cash_flow"],latest["capital_expenditure"]],latest["operating_cash_flow"]["unit"],"operating_cash_flow_minus_positive_capex_outflow"))
-            for factor in normalized:
-              if _insert_factor(db,factor): inserted+=1
-              else: unchanged+=1
-              withheld+=factor["reliability"]!="usable"
-            if db.execute("SELECT count(*) FROM corporate_action_coverage_evidence WHERE evidence_key=?",[coverage[0]]).fetchone()[0]: unchanged+=1
-            else: db.execute("INSERT INTO corporate_action_coverage_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",coverage); inserted+=1
+            # Staged only once the whole company has normalized.
+            staged["security_classification_evidence"].append(row); withheld+=row[3]=="classification_unavailable"
+            staged["canonical_factor_evidence"].extend(_factor_values(f) for f in normalized)
+            withheld+=sum(f["reliability"]!="usable" for f in normalized)
+            staged["corporate_action_coverage_evidence"].append(coverage)
             withheld+=coverage[3] in {"coverage_missing","unresolved_action"}
-            db.execute("INSERT OR REPLACE INTO investment_evidence_checkpoints VALUES (?,?,?,?,?,?,?,?)",[sec["security_id"],"stored_evidence_materialization","stored","completed",1,run_id,now,False])
+            checkpoints.append([sec["security_id"],"stored_evidence_materialization","stored","completed",1,run_id,now,False])
           except Exception:
             failures+=1
             db.execute("INSERT INTO investment_evidence_failures VALUES (?,?,?,?,?,?,?,?,?,?,?)",[str(uuid.uuid4()),run_id,sec["security_id"],"stored_evidence_materialization","stored","materialization_failed",True,1,"stored evidence could not be normalized; details redacted",now,None])
-            db.execute("INSERT OR REPLACE INTO investment_evidence_checkpoints VALUES (?,?,?,?,?,?,?,?)",[sec["security_id"],"stored_evidence_materialization","stored","retryable",1,run_id,now,True])
+            checkpoints.append([sec["security_id"],"stored_evidence_materialization","stored","retryable",1,run_id,now,True])
+         for table in tables:
+            new=_insert_new(db,table,staged[table]); inserted+=new; unchanged+=len(staged[table])-new
+         bulk_insert(db,"investment_evidence_checkpoints",checkpoints,"REPLACE")
+         print(f"materialized {start+len(batch):,} of {len(securities):,} companies",file=sys.stderr,flush=True)
         finished=datetime.now(timezone.utc)
         db.execute("UPDATE investment_evidence_runs SET finished_at=?,inserted_count=?,unchanged_count=?,withheld_count=?,failure_count=?,stop_reason=? WHERE run_id=?",[finished,inserted,unchanged,withheld,failures,"completed" if not failures else "completed_with_failures",run_id])
         db.execute("COMMIT")
@@ -499,13 +552,12 @@ def enrichment_plan(*,research_db:Path,production_db:Path,decision_at:datetime,m
       with duckdb.connect(str(research_db),read_only=True) as db:
        securities=_catalogue(db,decision); completed={str(r.get("security_id")) for r in _rows(db,"investment_evidence_checkpoints") if r.get("workflow")=="sec_enrichment" and r.get("status")=="completed"} if "investment_evidence_checkpoints" in _tables(db) else set()
        mapped={str(r.get("security_id")) for r in _rows(db,"sec_issuers")}; result={"resolvable_from_stored_evidence":[],"requires_sec_submissions_metadata":[],"requires_sec_company_facts_refresh":[],"requires_mapping_review":[],"requires_catalogue_instrument_type_review":[],"structurally_excluded":[]}; requests=Counter()
-       for sec in securities:
-        if sec["security_id"] in completed and not refresh: continue
-        cs=_classification_candidates(db,sec,decision)
+       for sec,rows in _batches(db,[s for s in securities if s["security_id"] not in completed or refresh]):
+        cs=_classification_candidates(db,sec,decision,rows)
         if cs: result["resolvable_from_stored_evidence"].append(sec["qualified_symbol"])
         elif sec["security_id"] in mapped: result["requires_sec_submissions_metadata"].append(sec["qualified_symbol"]); requests["sec_submissions"]+=1
         else: result["requires_mapping_review"].append(sec["qualified_symbol"])
-        if not _canonical_rows(db,sec,decision,decision) and sec["security_id"] in mapped: result["requires_sec_company_facts_refresh"].append(sec["qualified_symbol"]); requests["sec_companyfacts"]+=1
+        if not _canonical_rows(db,sec,decision,decision,rows) and sec["security_id"] in mapped: result["requires_sec_company_facts_refresh"].append(sec["qualified_symbol"]); requests["sec_companyfacts"]+=1
        bounded={k:{"count":len(v),"symbol_samples":v[:max(0,min(MAX_SAMPLES,int(max_samples)))]} for k,v in result.items()}
     after={"research":fingerprint(research_db),"production":fingerprint(production_db)}
     if before!=after: raise InvestmentResearchError("database changed during read-only operation")
