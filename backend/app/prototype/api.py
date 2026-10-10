@@ -57,9 +57,30 @@ def report_at(decision_at, target_members):
         raise HTTPException(409, detail={'code': 'PROTOTYPE_EVIDENCE_READ_FAILED', 'message': 'Prototype evidence could not safely be read.'}) from None
 
 
+def roster_company(c):
+    """What the shortlist shows of one company. The full record (cited facts, yearly
+    tables, filing list, brief, scenarios) is about 32 KB for an eligible company, so
+    at a few thousand companies the full report would be tens of megabytes; the
+    company page reads it from /companies/{id} instead."""
+    if not c['eligible']:
+        return {k: c.get(k) for k in ('security_id', 'qualified_symbol', 'company_name', 'eligible', 'reasons')} | {
+            'calculation': None, 'direct_evidence': [], 'missing_data': [], 'risks': [],
+            'identity_evidence': None, 'action_coverage': None}
+    slim = {k: v for k, v in c.items() if k != 'brief'} | {
+        'direct_evidence': [], 'direct_field_count': len({f['field'] for f in c.get('direct_evidence') or []})}
+    if c.get('financials'): slim['financials'] = c['financials'] | {'years': []}
+    if c.get('events'): slim['events'] = c['events'] | {'events': []}
+    if c.get('valuation'):
+        v = c['valuation'] | {'scenarios': None}
+        if v.get('history'): v['history'] = v['history'] | {'years': []}
+        slim['valuation'] = v
+    return slim
+
+
 @router.get('/roster')
 def roster(decision_at: datetime = Query(...), target_members: int = Query(15, ge=10, le=20)):
-    return report_at(decision_at, target_members)
+    report = report_at(decision_at, target_members)
+    return report | {'companies': [roster_company(c) for c in report['companies']]}
 
 
 @router.get('/companies/{security_id}')

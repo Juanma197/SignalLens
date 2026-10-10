@@ -1,10 +1,11 @@
 import Link from "next/link";
+import {useState} from "react";
 import {describeCutoff} from "./when";
 import type {ValueRanking} from "./value-view";
 
 export type Calculation = {formula: string; start_session: string; end_session: string; start_adjusted_close: number; end_adjusted_close: number; session_intervals: number; momentum_return: number; source: string[]; latest_input_retrieved_at: string};
 export type Fact = {field: string; value: number; unit: string; concept: string; reported_start: string|null; reported_end: string; period_kind: string; reported_days?: number|null; form: string; public_at: string; retrieved_at: string; known_at: string; citation: {fact_key: string; accession: string; cik: string; source_endpoint: string}};
-export type Company = {security_id: string; qualified_symbol: string|null; company_name: string|null; eligible: boolean; reasons: string[]; calculation: Calculation|null; direct_evidence: Fact[]; missing_data: {field: string; reasons: string[]}[]; risks: string[]; identity_evidence: Record<string, string|null>|null; action_coverage: ActionCoverage|null; industry?: Industry|null; size?: Size|null; financials?: Financials|null; valuation?: Valuation|null; sector_notes?: string[]; events?: Events|null; brief?: AnalystBrief|null};
+export type Company = {security_id: string; direct_field_count?: number; qualified_symbol: string|null; company_name: string|null; eligible: boolean; reasons: string[]; calculation: Calculation|null; direct_evidence: Fact[]; missing_data: {field: string; reasons: string[]}[]; risks: string[]; identity_evidence: Record<string, string|null>|null; action_coverage: ActionCoverage|null; industry?: Industry|null; size?: Size|null; financials?: Financials|null; valuation?: Valuation|null; sector_notes?: string[]; events?: Events|null; brief?: AnalystBrief|null};
 export type FinValue = {value: number; concept: string; accession: string; form: string; known_at: string};
 export type FinYear = {fiscal_year_end: string; values: Record<string, FinValue>; calculated: Record<string, number>};
 export type Observation = {kind: "strength"|"weakness"|"neutral"|"gap"; area: string; text: string; fiscal_years: string[]};
@@ -48,6 +49,15 @@ const sizeLine = (c: Company) => [c.size ? `${money(c.size.market_cap_usd)} mark
 export const detailHref = (id: string, decision: string, target=15) => `/prototype/company/${encodeURIComponent(id)}?decision_at=${encodeURIComponent(decision)}&target_members=${target}`;
 const words = (value: string) => value.replaceAll("_", " ");
 
+/** The first rows of a long list, with a button for the rest: with the full US
+ *  catalogue a table can have hundreds of rows. */
+export function useShown<T>(rows: T[], first = 25) {
+  const [all, setAll] = useState(false);
+  const more = !all && rows.length > first
+    ? <p><button type="button" className="prototype-more" onClick={() => setAll(true)}>Show all {rows.length}</button></p> : null;
+  return [all ? rows : rows.slice(0, first), more] as const;
+}
+
 export function PrototypeNotice() {
   return <p className="notice warning">UNVALIDATED RESEARCH PROTOTYPE — ZERO VALIDATION CREDIT. Results describe past price behaviour. Membership is proposed and unfrozen; operator roster review is pending.</p>;
 }
@@ -62,6 +72,8 @@ export function CalculationView({calculation}: {calculation: Calculation|null}) 
 
 export function RosterView({report}: {report: Report}) {
   const companies = new Map(report.companies.map(c=>[c.security_id,c]));
+  const [roster, moreRoster] = useShown(report.eligible_roster);
+  const withheld = report.companies.filter(c=>!c.eligible);
   return <div className="brief-stack">
     {report.synthetic_fixture && <p className="notice warning">SYNTHETIC FIXTURE — invented companies and evidence. This is not the actual operator roster.</p>}
     <section className="panel prototype-panel"><h2>Proposed research shortlist</h2><p>As of {describeCutoff(report.decision_at)}. {report.proposed_membership.length} proposed members from {report.eligible_count} eligible companies; minimum {report.minimum_members}, target {report.target_members}.</p>
@@ -70,11 +82,11 @@ export function RosterView({report}: {report: Report}) {
     </section>
     {report.eligible_roster.length > 0 && <CompareView report={report} companies={companies}/>}
     <section className="panel prototype-panel"><h2>Actual eligible roster for review</h2><p>All eligible identities are listed below. Proposed membership is the first {report.target_members} in the fixed hash order. No universe has been frozen.</p><p><code>{report.configuration.membership_order}</code></p>
-      <div className="prototype-table-wrap"><table><thead><tr><th>Order</th><th>Company / durable ID</th><th>Membership proposal</th><th>Evidence</th></tr></thead><tbody>{report.eligible_roster.map((id,index)=>{const c=companies.get(id)!;return <tr key={id}><td>{index+1}</td><td><Link href={detailHref(id,report.decision_at,report.target_members)}>{c.qualified_symbol} · {c.company_name}</Link><small>{sizeLine(c)}</small><small>{id}</small></td><td>{report.proposed_membership.includes(id)?"Proposed · unfrozen":"Outside bounded proposal"}</td><td>{new Set(c.direct_evidence.map(f=>f.field)).size} direct fields; {c.missing_data.length} missing</td></tr>;})}</tbody></table></div>
+      <div className="prototype-table-wrap"><table><thead><tr><th>Order</th><th>Company / durable ID</th><th>Membership proposal</th><th>Evidence</th></tr></thead><tbody>{roster.map((id,index)=>{const c=companies.get(id)!;return <tr key={id}><td>{index+1}</td><td><Link href={detailHref(id,report.decision_at,report.target_members)}>{c.qualified_symbol} · {c.company_name}</Link><small>{sizeLine(c)}</small><small>{id}</small></td><td>{report.proposed_membership.includes(id)?"Proposed · unfrozen":"Outside bounded proposal"}</td><td>{c.direct_field_count ?? new Set(c.direct_evidence.map(f=>f.field)).size} direct fields; {c.missing_data.length} missing</td></tr>;})}</tbody></table></div>{moreRoster}
       {report.eligible_roster.length===0 && <p>No eligible identities can be established.</p>}
     </section>
     <section className="panel prototype-panel"><h2>Withheld companies and exact blockers</h2><p>Counts may overlap: a company can have several blockers.</p><ul>{Object.entries(report.withholding_counts).map(([reason,count])=><li key={reason}><code>{reason}</code>: {count}</li>)}</ul>
-      {report.companies.filter(c=>!c.eligible).map(c=><p key={c.security_id}><Link href={detailHref(c.security_id,report.decision_at,report.target_members)}>{c.qualified_symbol??c.security_id}</Link> — {c.reasons.join("; ")}</p>)}
+      {withheld.length > 0 && <details><summary>Every withheld company ({withheld.length})</summary>{withheld.map(c=><p key={c.security_id}><Link href={detailHref(c.security_id,report.decision_at,report.target_members)}>{c.qualified_symbol??c.security_id}</Link> — {c.reasons.join("; ")}</p>)}</details>}
       <details><summary>Stored schema availability</summary><ul>{Object.entries(report.source_schema_states).map(([table,state])=><li key={table}>{table}: {state}</li>)}</ul></details>
     </section>
     <section className="panel prototype-panel"><h2>Method and scope</h2><p>Version {report.version}. Configuration <code>{report.configuration_hash}</code>.</p><p>Direct facts retain their reported periods and source references. A usable direct observation is required; missing financial fields remain unknown. Maximum direct-fact age: {report.configuration.maximum_direct_fact_age_days} days. No accounting constructions are added.</p>{report.session_calendar&&<p>Session calendar derived from stored prices: {report.session_calendar.derived_sessions} sessions (latest {report.session_calendar.last_session}) from {report.session_calendar.candidate_dates} priced dates; a date counts when at least {report.session_calendar.minimum_symbols_per_session} of {report.session_calendar.us_symbols_priced} US symbols have a price.</p>}<p>Track A and Track B remain separate. Watchlist persistence, monthly snapshots and subsequent-performance tracking are pending the next slice in a separate prototype database.</p></section>
@@ -192,7 +204,7 @@ export function AnalystBriefView({brief}: {brief: AnalystBrief}) {
 /** Every eligible company side by side, from the same report. Sorted by durable-ID
  *  hash order (the membership order), never by any of these columns. */
 export function CompareView({report, companies}: {report: Report; companies: Map<string, Company>}) {
-  const rows = report.eligible_roster.map(id => companies.get(id)!).filter(Boolean);
+  const [rows, more] = useShown(report.eligible_roster.map(id => companies.get(id)!).filter(Boolean));
   const count = (c: Company, kind: string) => c.financials?.observations.filter(o => o.kind === kind).length ?? 0;
   const position = (c: Company) => { const cs = c.valuation?.history?.comparisons ?? [];
     return cs.length ? `${cs.filter(x => x.position === "below").length}↓ ${cs.filter(x => x.position === "within").length}= ${cs.filter(x => x.position === "above").length}↑` : "—"; };
@@ -210,7 +222,7 @@ export function CompareView({report, companies}: {report: Report; companies: Map
         <td>{c.events ? c.events.flags.filter(f => f.kind === "risk").length : "—"}</td>
         <td>{c.events?.results_timing?.next_results_estimate ?? "—"}</td>
       </tr>)}
-    </tbody></table></div></section>;
+    </tbody></table></div>{more}</section>;
 }
 
 export function ScenarioView({scenarios}: {scenarios: Scenarios}) {

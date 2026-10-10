@@ -216,7 +216,14 @@ def test_authenticated_api_shortlist_to_detail_and_staging_guard(paths,monkeypat
             response=client.get('/api/v1/research/prototype/companies/'+sid,params=params,headers=headers)
             assert response.status_code==200; detail=response.json()
             assert detail['qualifying_result'] and detail['proposed_member'] and detail['validation_credit']==0
-            assert detail['company']==next(c for c in report['companies'] if c['security_id']==sid)
+            listed=next(c for c in report['companies'] if c['security_id']==sid)
+            full=detail['company']
+            assert full['direct_evidence'] and listed['direct_evidence']==[]
+            assert listed['direct_field_count']==len({f['field'] for f in full['direct_evidence']})
+            assert api.roster_company(full)==listed
+        withheld=[c for c in report['companies'] if not c['eligible']]
+        assert all(set(c)=={'security_id','qualified_symbol','company_name','eligible','reasons','calculation',
+                            'direct_evidence','missing_data','risks','identity_evidence','action_coverage'} for c in withheld)
         assert client.get('/api/v1/research/prototype/companies/unknown',params=params,headers=headers).status_code==404
         assert client.post('/api/v1/research/prototype/roster',headers=headers).status_code==409
         assert client.get('/api/v1/research/prototype/roster',params={'decision_at':DECISION.isoformat(),'target_members':9},headers=headers).status_code==422
