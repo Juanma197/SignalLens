@@ -1,5 +1,6 @@
 import Link from "next/link";
-import {detailHref, percent} from "./view";
+import {useState} from "react";
+import {detailHref, percent, useShown} from "./view";
 import {describeCutoff} from "./when";
 
 export type ValueStatus = "candidate"|"watch"|"not_undervalued"|"value_trap"|"not_assessable";
@@ -30,6 +31,9 @@ function PickCard({a, decision, target}: {a: ValueAssessment; decision: string; 
 
 export function ValueRankingView({ranking, decision, target}: {ranking: ValueRanking; decision: string; target: number}) {
   const picks = ranking.companies.filter(a => a.rank != null);
+  const [find, setFind] = useState("");
+  const needle = find.trim().toLowerCase();
+  const [rows, more] = useShown(needle ? ranking.companies.filter(a => `${a.qualified_symbol} ${a.company_name ?? ""}`.toLowerCase().includes(needle)) : ranking.companies);
   return <section className="panel prototype-panel"><p className="eyebrow">THIS MONTH · UNDERVALUATION RANKING</p><h2>Top {ranking.rules.maximum_picks} undervalued candidates</h2>
     <p>Ranked from {ranking.population} eligible companies, as of {describeCutoff(decision)}. {ranking.label}</p>
     {ranking.population < 10 && <p className="notice warning">Only {ranking.population} companies could be assessed. With so few, a pick is the best of a small set, not of the market.</p>}
@@ -37,13 +41,14 @@ export function ValueRankingView({ranking, decision, target}: {ranking: ValueRan
       : <div className="prototype-cards prototype-picks">{picks.map(a => <PickCard key={a.security_id} a={a} decision={decision} target={target}/>)}</div>}
     {picks.length > 0 && picks.length < ranking.rules.maximum_picks && <p>Only {picks.length} {picks.length === 1 ? "company qualifies" : "companies qualify"}; the remaining places are left empty rather than filled with weaker names.</p>}
     <h3>Every eligible company</h3>
+    {ranking.companies.length > 25 && <p><label>Find a company <input type="search" value={find} onChange={e => setFind(e.target.value)} placeholder="Symbol or name"/></label></p>}
     <div className="prototype-table-wrap"><table className="prototype-value-table"><thead><tr><th>Rank</th><th>Company</th><th>Outcome</th><th>Upside</th><th>Conviction</th><th>Risk</th><th>Why</th></tr></thead><tbody>
-      {ranking.companies.map(a => <tr key={a.security_id}><td>{a.rank ?? "—"}</td>
+      {rows.map(a => <tr key={a.security_id}><td>{a.rank ?? "—"}</td>
         <td><Link href={detailHref(a.security_id, decision, target)}>{a.qualified_symbol}</Link><small>{a.company_name}</small></td>
         <td>{a.recommendation ? RECOMMENDATION[a.recommendation] : STATUS[a.status]}</td>
         <td>{signed(a.upside)}</td><td>{a.conviction ? `${cap(a.conviction)} (${a.conviction_points}/5)` : "—"}</td><td>{a.risk ? cap(a.risk) : "—"}</td>
         <td>{a.reasons.length > 0 ? a.reasons.join(" ") : a.score !== undefined ? `Score ${a.score.toFixed(3)}` : ""}</td></tr>)}
-    </tbody></table></div>
+    </tbody></table></div>{more}
     <p><small>{ranking.method} Minimum upside {percent(ranking.rules.minimum_upside)}; Strong Buy needs {percent(ranking.rules.strong_upside)} upside, high conviction and low risk.</small></p>
   </section>;
 }

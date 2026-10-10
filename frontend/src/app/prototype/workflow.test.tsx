@@ -382,3 +382,18 @@ test("recording a sale or deposit says whether a Telegram reassessment follows",
   assert.match(renderToStaticMarkup(<ReassessmentNotice status="telegram_not_configured"/>),/Telegram isn&#x27;t set up/);
   assert.equal(renderToStaticMarkup(<ReassessmentNotice/>),"");
 });
+
+test("long rosters show the first rows with a button for the rest, as the slim roster sends them",()=>{
+  const base=ready.companies.filter(c=>c.eligible);
+  const many=Array.from({length:60},(_,i)=>({...base[i%base.length],security_id:`many-${i}`,qualified_symbol:`M${i}.US`,direct_evidence:[],direct_field_count:7}));
+  const withheld=ready.companies.filter(c=>!c.eligible);
+  const large:Report={...ready,eligible_roster:many.map(c=>c.security_id),results:[],companies:[...many,...withheld]};
+  const html=renderToStaticMarkup(<RosterView report={large}/>);
+  assert.equal(html.match(/Show all 60/g)?.length,2);  // comparison and review roster
+  assert.match(html,/M24\.US/); assert.doesNotMatch(html,/M25\.US/);
+  assert.match(html,/7 direct fields/);
+  if(withheld.length) assert.match(html,new RegExp(`Every withheld company \(${withheld.length}\)`));
+  const ranking={...ready.value_ranking!,companies:Array.from({length:40},(_,i)=>({...ready.value_ranking!.companies[0],security_id:`v-${i}`,qualified_symbol:`V${i}.US`,rank:null}))};
+  const value=renderToStaticMarkup(<ValueRankingView ranking={ranking} decision={ready.decision_at} target={ready.target_members}/>);
+  assert.match(value,/Show all 40/); assert.match(value,/Find a company/); assert.doesNotMatch(value,/V25\.US/);
+});
