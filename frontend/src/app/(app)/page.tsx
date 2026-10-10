@@ -18,7 +18,8 @@ function MonthlyPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [contribution, setContribution] = useState(query.get("include_contribution") === "true");
-  const [reinvest, setReinvest] = useState(true);
+  // Buys use confirmed cash only: sale proceeds count once the sale is recorded.
+  const reinvest = false;
   const [recorded, setRecorded] = useState("");
   const [recording, setRecording] = useState(false);
   const [hello, setHello] = useState("Hello");
@@ -49,7 +50,6 @@ function MonthlyPage() {
   const toolbar = <details className="dash-options"><summary>Options</summary>
     <form onSubmit={refresh} className="dash-options-form"><WhenPicker when={when} onChange={setWhen} disabled={loading}/>
       <label className="prototype-inline-check"><input type="checkbox" checked={contribution} onChange={e => setContribution(e.target.checked)}/> Include this month&apos;s planned contribution{monthly?.allocation?.account ? ` (${money(monthly.allocation.account.monthly_contribution, monthly.allocation.account.currency)})` : ""}, not yet deposited</label>
-      <label className="prototype-inline-check"><input type="checkbox" checked={reinvest} onChange={e => setReinvest(e.target.checked)}/> Reinvest sale proceeds</label>
       <button disabled={loading}>Apply</button></form></details>;
   const keepScore = <section className="card"><header><h2>Keep score</h2></header>
     <p className="muted">Recording freezes this month&apos;s picks and decisions so the <Link href="/scorecard">History</Link> page can measure them later, and next month can show what changed. One record per month, within 14 days of the cutoff; it can never be changed.</p>

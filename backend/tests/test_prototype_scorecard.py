@@ -106,7 +106,8 @@ def test_record_and_scorecard_api(paths, monkeypatch):
         created = client.post(f'{base}/store/decision-records', headers=headers, json={'decision_at': DECISION.isoformat(), 'cash': 100})
         assert created.status_code == 200, created.text
         body = created.json()
-        assert [i['decision'] for i in body['items']] == ['REDUCE'] and len(body['benchmark_symbols']) == 18  # every eligible company
+        # The only holding is the whole portfolio: above your limit it is a review (HOLD), never a forced sale.
+        assert [i['decision'] for i in body['items']] == ['HOLD'] and len(body['benchmark_symbols']) == 18  # every eligible company
         again = client.post(f'{base}/store/decision-records', headers=headers, json={'decision_at': DECISION.isoformat()})
         assert again.json()['detail']['code'] == 'PROTOTYPE_RECORD_MONTH_EXISTS'
         listed = client.get(f'{base}/store/decision-records', headers=headers).json()['records']
@@ -115,4 +116,4 @@ def test_record_and_scorecard_api(paths, monkeypatch):
         empty = client.post(f'{base}/store/decision-records', headers=headers, json={'decision_at': (DECISION - timedelta(days=60)).isoformat()})
         assert empty.json()['detail']['code'] == 'PROTOTYPE_RECORD_NO_ASSESSED_COMPANIES'
         card = client.get(f'{base}/scorecard', headers=headers).json()
-        assert card['months'][0]['items'][0]['group'] == 'sell_or_reduce' and 'not validation' in card['label']
+        assert card['months'][0]['items'][0]['group'] == 'HOLD' and 'not validation' in card['label']

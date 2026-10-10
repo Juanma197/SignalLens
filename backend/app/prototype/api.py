@@ -343,7 +343,11 @@ def portfolio():
     except PrototypeError as exc:
         raise HTTPException(409, detail={'code': exc.code}) from None
     movements, adjustments, balances = _call(store.cash_movements), _call(store.cash_adjustments), _call(store.broker_balances)
-    return result | {'transactions': transactions, 'currencies': list(CURRENCIES), 'account_currency': ACCOUNT_CURRENCY,
+    fx_key = ('fx', now.date().isoformat(), _stat(settings.research_database_path))
+    if fx_key not in _MARKET:
+        try: _MARKET[fx_key] = read_gbp_rate(settings.research_database_path, 'USD', now)
+        except PrototypeError: _MARKET[fx_key] = None
+    return result | {'gbp_per_usd': _MARKET[fx_key] or implied_gbp_rate(trades, 'USD'),'transactions': transactions, 'currencies': list(CURRENCIES), 'account_currency': ACCOUNT_CURRENCY,
                      'cash': ledger(movements, transactions, adjustments), 'adjustments': adjustments, 'broker_balances': balances[:12],
                      'reconciliation': reconcile(movements, trades, adjustments, balances, today=now.date()),
                      'settings': _call(store.settings)}
