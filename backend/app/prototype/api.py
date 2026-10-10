@@ -3,9 +3,10 @@
 Assessment and tracking are read-only. The only writes go to the separate
 prototype store, and only when SIGNALLENS_PROTOTYPE_WRITES_ENABLED is true.
 """
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import logging
 import os
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
@@ -28,6 +29,9 @@ router = APIRouter(prefix='/api/v1/research/prototype', tags=['unvalidated-proto
 
 
 _CACHE = {}
+_ASSESSING = threading.Lock()  # one assessment at a time; a second request waits and reuses it
+# "Latest" asks for the current second, so every page would otherwise miss the cache.
+LATEST_REUSE = timedelta(minutes=30)
 
 
 def _stat(path):
@@ -37,25 +41,46 @@ def _stat(path):
         return (str(path), None, None)
 
 
+def _reusable(decision_at, target_members, stats):
+    """A cached report for a cutoff up to LATEST_REUSE earlier, made after the
+    databases were last written: every stored row was retrieved before that cutoff,
+    so it saw exactly the same data. Only time-of-day rules (a session closing in
+    between) can differ, by at most LATEST_REUSE; the report keeps its own cutoff."""
+    if decision_at.tzinfo is None or any(mtime is None for _, _, mtime in stats): return None
+    written = max(datetime.fromtimestamp(mtime / 1e9, timezone.utc) for _, _, mtime in stats)
+    for (iso, target, *cached_stats), report in _CACHE.items():
+        earlier = datetime.fromisoformat(iso)
+        if earlier.tzinfo is None: continue
+        if (target == target_members and tuple(cached_stats) == stats and written <= earlier
+                and earlier <= decision_at <= earlier + LATEST_REUSE):
+            return report
+    return None
+
+
 def report_at(decision_at, target_members):
     """Each assessment fully hashes both databases; a report is reused only while
     both files keep the same size and modification time, so opening a company
     from the shortlist does not re-read gigabytes."""
     settings = get_settings()
-    key = (decision_at.isoformat(), target_members, _stat(settings.research_database_path), _stat(settings.database_path))
-    if key in _CACHE: return _CACHE[key]
-    try:
-        report = assess(research_db=settings.research_database_path,
-                        production_db=settings.database_path, decision_at=decision_at,
-                        target_members=target_members)
-        # A full-catalogue report holds a few hundred MB once parsed: keep two.
-        if len(_CACHE) >= 2: _CACHE.clear()
-        _CACHE[key] = report
-        return report
-    except PrototypeError as exc:
-        raise HTTPException(409, detail={'code': exc.code, 'message': 'Prototype evidence could not safely be read.'}) from None
-    except Exception:
-        raise HTTPException(409, detail={'code': 'PROTOTYPE_EVIDENCE_READ_FAILED', 'message': 'Prototype evidence could not safely be read.'}) from None
+    stats = (_stat(settings.research_database_path), _stat(settings.database_path))
+    key = (decision_at.isoformat(), target_members, *stats)
+    found = _CACHE.get(key) or _reusable(decision_at, target_members, stats)
+    if found is not None: return found
+    with _ASSESSING:
+        found = _CACHE.get(key) or _reusable(decision_at, target_members, stats)
+        if found is not None: return found
+        try:
+            report = assess(research_db=settings.research_database_path,
+                            production_db=settings.database_path, decision_at=decision_at,
+                            target_members=target_members)
+            # A full-catalogue report holds a few hundred MB once parsed: keep two.
+            if len(_CACHE) >= 2: _CACHE.clear()
+            _CACHE[key] = report
+            return report
+        except PrototypeError as exc:
+            raise HTTPException(409, detail={'code': exc.code, 'message': 'Prototype evidence could not safely be read.'}) from None
+        except Exception:
+            raise HTTPException(409, detail={'code': 'PROTOTYPE_EVIDENCE_READ_FAILED', 'message': 'Prototype evidence could not safely be read.'}) from None
 
 
 def roster_company(c):
