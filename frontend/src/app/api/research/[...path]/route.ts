@@ -3,12 +3,14 @@ import { NextRequest, NextResponse } from "next/server";
 export const DEFAULT_RESEARCH_TIMEOUT_MS = 15_000;
 export const MODEL_LABORATORY_TIMEOUT_MS = 60_000;
 
-// Prototype assessments read and fingerprint the full research database
-// (about 10-15 s, longer on a busy machine), so they share the long timeout.
+// A prototype assessment reads and fingerprints the full research database. With
+// the widened US catalogue (~2,000 companies) the first one at a cutoff takes one
+// to two minutes; the backend then reuses it until the database changes.
+export const PROTOTYPE_TIMEOUT_MS = 240_000;
+
 export function timeoutForResearchPath(path: string[]) {
-  return path[0] === "model-laboratory" || path[0] === "prototype"
-    ? MODEL_LABORATORY_TIMEOUT_MS
-    : DEFAULT_RESEARCH_TIMEOUT_MS;
+  if (path[0] === "prototype") return PROTOTYPE_TIMEOUT_MS;
+  return path[0] === "model-laboratory" ? MODEL_LABORATORY_TIMEOUT_MS : DEFAULT_RESEARCH_TIMEOUT_MS;
 }
 
 export async function GET(request: NextRequest, context: {params: Promise<{path: string[]}>}) {

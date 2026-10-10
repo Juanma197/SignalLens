@@ -399,3 +399,11 @@ def test_industry_and_share_counts_are_read_from_retained_sec_documents(tmp_path
         shares = _share_counts(db, datetime(2026, 10, 9, tzinfo=timezone.utc))
     assert state == 'supported' and found['sid-1'][0]['sic'] == '3714' and found['sid-1'][0]['cik'] == '0001065696'
     assert [e['value'] for e in shares['sid-1']] == [260000000.0] and 'sid-2' not in shares
+
+
+def test_batched_fact_and_price_reads_match_one_company_at_a_time(paths, monkeypatch):
+    params = dict(research_db=paths[0], production_db=paths[1], decision_at=DECISION)
+    monkeypatch.setattr(service, 'FACT_BATCH', 1)
+    single = json.dumps(service.assess(**params), sort_keys=True)
+    monkeypatch.setattr(service, 'FACT_BATCH', 4)
+    assert json.dumps(service.assess(**params), sort_keys=True) == single
