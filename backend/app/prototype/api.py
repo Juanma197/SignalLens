@@ -469,10 +469,14 @@ def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, 
                            'checks': checks} | decide(p, assessments.get(sid), checks))
     holdings.sort(key=lambda h: (DECISIONS.index(h['decision']), h['qualified_symbol']))
     held = {h['security_id'] for h in holdings if h['security_id']}
-    picks = [assessments[sid] | {'held': sid in held} for sid in ranking['picks']]
+    def timing(sid):  # the estimated next results date, for "what's next" on a pick card
+        return (((by_id[sid].get('events') or {}).get('results_timing')) or {}).get('next_results_estimate')
+    picks = [assessments[sid] | {'held': sid in held, 'verdicts': by_id[sid].get('verdicts'), 'next_results_estimate': timing(sid)}
+             for sid in ranking['picks']]
     plan = _allocation(store, trades, holdings, picks, decision, include_contribution=include_contribution, reinvest=reinvest)
     return {'decision_at': report['decision_at'], 'notice': report['notice'], 'synthetic_fixture': report['synthetic_fixture'],
             'target_members': report['target_members'], 'population': ranking['population'], 'picks': picks,
+            'verdict_rules': ranking.get('verdict_rules'),
             'holdings': holdings, 'totals': book['totals'], 'rules': DECISION_RULES,
             'counts': {d: sum(h['decision'] == d for h in holdings) for d in DECISIONS},
             'allocation': plan,

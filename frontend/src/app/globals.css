@@ -251,3 +251,28 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; }
 .prototype-when input[type=date] { background:#09100d; color:var(--ink); border:1px solid var(--line); padding:9px; border-radius:8px; color-scheme:dark; font:inherit; }
 .prototype-when small { flex-basis:100%; }
 .prototype-as-of { color:var(--muted); font-size:13px; margin:-8px 0 16px; }
+.pick-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr)); gap:16px; margin:16px 0 8px; }
+.pick-card { border:1px solid var(--line); border-radius:12px; padding:18px; display:grid; gap:12px; align-content:start; background:#0f1814; min-width:0; }
+.pick-card-first { border-color:#225c44; }
+.pick-card header { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start; }
+.pick-card header > div { flex:1 1 120px; min-width:0; }
+.pick-card h3 { margin:0; font-size:20px; }
+.pick-card header p { margin:2px 0 0; color:var(--muted); font-size:13px; }
+.pick-rank { font-weight:900; font-size:18px; color:var(--green); background:#123326; border-radius:8px; padding:6px 10px; }
+.pick-headline { margin:0; color:var(--ink); font-weight:700; }
+.verdicts { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
+.verdict { display:grid; gap:2px; padding:8px 10px; border-left:3px solid var(--line); background:#0b130f; border-radius:0 8px 8px 0; font-size:14px; }
+.verdict-tag { font-size:11px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+.verdict-positive { border-left-color:var(--green); } .verdict-positive .verdict-tag { color:var(--green); }
+.verdict-mixed { border-left-color:#f0c674; } .verdict-mixed .verdict-tag { color:#f0c674; }
+.verdict-negative { border-left-color:#f2a7a0; } .verdict-negative .verdict-tag { color:#f2a7a0; }
+.verdict-neutral { border-left-color:#a9c1e8; } .verdict-neutral .verdict-tag { color:#a9c1e8; }
+.pick-meta { margin:0; color:var(--muted); font-size:13px; }
+.pick-details summary { cursor:pointer; color:var(--green); font-size:13px; }
+.pick-detail { border-top:1px solid var(--line); padding:10px 0 0; margin-top:10px; font-size:13px; }
+.pick-detail h4 { margin:0 0 6px; font-size:13px; }
+.pick-detail ul { margin:0 0 8px; padding-left:16px; }
+.pick-detail dl { display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; margin:0; }
+.pick-detail dl div { display:flex; justify-content:space-between; gap:8px; }
+.pick-detail dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
+@media (max-width:760px) { .pick-detail dl { grid-template-columns:1fr; } }
