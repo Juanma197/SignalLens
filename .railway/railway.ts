@@ -4,9 +4,9 @@ export default defineRailway(() => {
   const signallensVolume = volume("signallens-volume", { alerts: { usage: { "100": {}, "80": {}, "95": {} } }, allowOnlineResize: true, region: "sfo", sizeMB: 10000 });
   const SignalLens = service("SignalLens", {
     source: github("Juanma197/SignalLens", { checkSuites: false, rootDirectory: "/backend" }),
-    // From backend/railway.toml (Config as Code, retired 2026-12-01).
+    // From backend/railway.toml (Config as Code, retired 2026-12-01). Restarts on failure: Railway's default policy, stored as unset.
     build: { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
-    deploy: { healthcheckPath: "/api/v1/health", healthcheckTimeout: 300, restartPolicyType: "ON_FAILURE", restartPolicyMaxRetries: 5 },
+    deploy: { healthcheckPath: "/api/v1/health", healthcheckTimeout: 300, restartPolicyMaxRetries: 5 },
     start: "sh -c 'uvicorn app.main:app --host 0.0.0.0 --port \"$PORT\"'",
     replicas: { "sfo": 1 },
     networking: { privateNetworkEndpoint: "signallens" },
@@ -15,9 +15,9 @@ export default defineRailway(() => {
   });
   const worthyPatience = service("worthy-patience", {
     source: github("Juanma197/SignalLens", { checkSuites: false, rootDirectory: "/frontend" }),
-    // From frontend/railway.toml (Config as Code, retired 2026-12-01).
+    // From frontend/railway.toml (Config as Code, retired 2026-12-01). Restarts on failure: Railway's default policy, stored as unset.
     build: { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
-    deploy: { healthcheckPath: "/", healthcheckTimeout: 300, restartPolicyType: "ON_FAILURE", restartPolicyMaxRetries: 5 },
+    deploy: { healthcheckPath: "/", healthcheckTimeout: 300, restartPolicyMaxRetries: 5 },
     replicas: { "sfo": 1 },
     env: { SIGNALLENS_API_TOKEN: preserve(), SIGNALLENS_API_URL: preserve(), SIGNALLENS_DASHBOARD_PASSWORD: preserve(), SIGNALLENS_DASHBOARD_USERNAME: preserve(), SIGNALLENS_ENVIRONMENT: preserve() },
   });
