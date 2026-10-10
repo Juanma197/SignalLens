@@ -31,6 +31,19 @@ first and last stored session. In the measurement a pick or holding that stops
 trading is sold at its last price (then cash) instead of being dropped, which would
 bring survivorship back.
 
+## One script
+
+```powershell
+.\scriptsacktest-phase3.ps1
+```
+
+From the repository root, after a first `discover` (below): it finishes verifying
+candidates against SEC, shows how many EODHD requests the prices need and asks
+`yes`, then runs prices, SEC facts, classification, filing events, the replay, the
+measurement and the experiments, saving each output as
+`backend\dataesearcheports\phase3-<time>-*.json`. Rerunnable; use
+`-SkipDiscover` once verification is complete.
+
 ## Commands (PowerShell, from `backend`)
 
 ```powershell
