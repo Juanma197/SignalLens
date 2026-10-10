@@ -1,6 +1,5 @@
 "use client";
 import {useEffect, useState} from "react";
-import Link from "next/link";
 import {PrototypeNotice} from "../view";
 import {Scorecard, ScorecardView} from "../scorecard-view";
 import {Versus, VersusView} from "../versus-view";
@@ -16,7 +15,7 @@ export default function Page() {
     // Separate request: a failure here should not hide the scorecard.
     fetch("/api/research/prototype/history/versus-vall", {cache: "no-store"}).then(r => r.ok ? r.json() : null).then(setVersus).catch(() => setVersus(null));
   }, []);
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Scorecard</strong><Link href="/">This month</Link><Link href="/shortlist">Shortlist</Link><Link href="/portfolio">Portfolio</Link><Link href="/checks">Thesis checks</Link></nav>
+  return <main className="research-page">
     <section className="hero compact"><p className="eyebrow">RECORDED CALLS · MEASURED AFTERWARDS</p><h1>Keeping score.<br/><span>Right or wrong, in public.</span></h1>
       <p className="lede">Your money against the same deposits in VALL, then every recorded month&apos;s picks and decisions, measured against the rest of the companies assessed that month after about 1, 3, 6 and 12 months.</p></section>
     <PrototypeNotice/>

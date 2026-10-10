@@ -19,7 +19,7 @@ export default function Snapshots() {
     try {await call("snapshots", {decision_at: cutoff}); await load();}
     catch (e) {setError(friendlyError(e instanceof Error ? e.message : "PROTOTYPE_SERVICE_UNAVAILABLE"));} finally {setBusy(false);}
   }
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Monthly snapshots</strong><Link href="/shortlist">Shortlist</Link><Link href="/">This month</Link><Link href="/portfolio">Portfolio</Link><Link href="/checks">Thesis checks</Link><Link href="/watchlist">Watchlist</Link></nav><PrototypeNotice/>
+  return <main className="research-page"><PrototypeNotice/>
     <form onSubmit={create} className="panel research-form"><p>Freeze this month&apos;s shortlist as of now. One per month; it can never be changed.</p><button disabled={busy}>{busy ? "Recording…" : "Record this month's snapshot"}</button></form>
     {error && <p role="alert" className="notice warning">{error}</p>}
     <section className="panel prototype-panel"><h2>Recorded snapshots</h2>

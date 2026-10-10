@@ -10,9 +10,9 @@ import {SnapshotView, ThesisHistory} from "./store-view";
 import {ValueRankingView, type ValueRanking} from "./value-view";
 import {PortfolioView, ReassessmentNotice, type Portfolio} from "./portfolio-view";
 import {ChecksOverview, type ChecksReport} from "./checks-view";
-import {MonthlyView, type Monthly} from "./monthly-view";
+import {type Monthly} from "./monthly-view";
+import {DashboardView} from "./dashboard-view";
 import {AllocationView, type Allocation} from "./monthly-view";
-import {PickCard} from "./pick-card";
 import {VersusView, type Versus} from "./versus-view";
 import {ScorecardView, type Scorecard} from "./scorecard-view";
 import {WhenPicker, cutoffFor, describeCutoff, friendlyError, todayUtc, whenFromQuery} from "./when";
@@ -276,7 +276,7 @@ test("thesis checks show broken conditions first, automatic signs and uncovered 
   assert.doesNotMatch(html,/<i>A<\/i>/);
 });
 
-test("monthly view lists picks, held flags and a reasoned decision per holding",()=>{
+test("dashboard lists picks, held flags and a reasoned decision per holding",()=>{
   const evidence={upside:null,weight:null,thesis:"not_covered",value_status:null,conviction:null,risk:null};
   const monthly:Monthly={decision_at:"2026-10-09T00:00:00+00:00",notice:"",synthetic_fixture:false,target_members:15,population:7,
     picks:[{security_id:"l",qualified_symbol:"LKQ.US",company_name:"LKQ Corporation",status:"candidate",reasons:[],rank:1,recommendation:"buy",upside:1.3,conviction:"medium",risk:"low",held:true}],
@@ -286,11 +286,13 @@ test("monthly view lists picks, held flags and a reasoned decision per holding",
         checks:null,decision:"REVIEW",reasons:["SignalLens has no evidence for this holding; decide from your own research."],evidence}],
     totals:[],counts:{"SELL":1,"REDUCE":0,"REVIEW":1,"BUY MORE":0,"HOLD":0},method:"Fixed rules.",label:"Decision support only. Nothing is executed.",
     rules:{buy_more_minimum_upside:0.15,maximum_position_weight_for_buying:0.25,reduce_above_position_weight:0.35,sell_below_upside:-0.2,reduce_below_upside:0}};
-  const html=renderToStaticMarkup(<MonthlyView monthly={monthly}/>);
-  assert.match(html,/SELL 1/);
-  assert.match(html,/BUY MORE 0/);
-  assert.match(html,/LKQ Corporation · already held/);
-  assert.match(html,/\+130\.00%/);
+  const html=renderToStaticMarkup(<DashboardView m={monthly} activity={null}/>);
+  assert.match(html,/chip decision-sell">SELL/);
+  assert.match(html,/chip decision-review">REVIEW/);
+  assert.match(html,/LKQ Corporation/);
+  assert.match(html,/Already in your portfolio/);
+  assert.match(html,/Estimated upside \+130\.00%/);
+  assert.match(html,/-33\.00%/);
   assert.match(html,/Net loss in the latest fiscal year\./);
   assert.match(html,/decide from your own research/);
   assert.match(html,/no stored price/);
@@ -326,39 +328,47 @@ test("holding rows show the decision, what changed since the last record, why, a
     no_longer_held:[{qualified_symbol:"EGY.US",security_id:"e",company_name:"Vaalco",previous_decision:"SELL",since:"2026-09-01T00:00:00+00:00"}],
     totals:[],counts:{"SELL":0,"REDUCE":1,"REVIEW":0,"BUY MORE":0,"HOLD":0},method:"Fixed rules.",label:"Decision support only.",
     rules:{buy_more_minimum_upside:0.15,maximum_position_weight_for_buying:0.25,reduce_above_position_weight:0.35,sell_below_upside:-0.2,reduce_below_upside:0}};
-  const html=renderToStaticMarkup(<MonthlyView monthly={monthly}/>);
+  const html=renderToStaticMarkup(<DashboardView m={monthly} activity={null}/>);
   assert.match(html,/prototype-decision-reduce">REDUCE/);
+  assert.match(html,/chip decision-reduce">REDUCE<\/span><small class="table-note">HOLD in September 2026, now REDUCE\./);
   assert.match(html,/holding-change holding-change-changed">HOLD in September 2026, now REDUCE\. Upside went from 22% to -5%\./);
   assert.match(html,/take some profit/);
   assert.match(html,/\+8\.30%/);
   assert.match(html,/Growth · Concern<\/span><span>Shrinking\./);
-  assert.match(html,/No longer held since September 2026: EGY\.US \(was SELL\)\./);
+  assert.match(html,/No longer held: EGY\.US \(was SELL\)\./);
 });
 
-test("pick cards lead with the decision, four plain answers and figures behind a disclosure",()=>{
+test("dashboard pick rows show tags, the reason, conviction out of five and the suggested buy, with figures behind a disclosure",()=>{
   const v=(question:"cheap"|"quality"|"growth"|"risk"|"action",level:"positive"|"mixed"|"negative",headline:string,because:string[]=[],figures:{label:string;value:number;unit:"percent"|"multiple"|"per_share_usd"|"count"}[]=[])=>({question,level,headline,because,figures});
-  const pick={security_id:"lz",qualified_symbol:"LZ.US",company_name:"LegalZoom.com",status:"candidate" as const,reasons:[],rank:1,recommendation:"strong_buy" as const,upside:1.17,conviction:"high" as const,risk:"low" as const,held:false,
+  const pick={security_id:"lz",qualified_symbol:"LZ.US",company_name:"LegalZoom.com",status:"candidate" as const,reasons:[],rank:1,recommendation:"strong_buy" as const,upside:1.17,conviction:"high" as const,conviction_points:4,risk:"low" as const,held:false,
     next_results_estimate:"2026-11-04",
     verdicts:{action:v("action","positive","Pick #1 this month: strong case, high conviction."),
       answers:[v("cheap","positive","Looks cheap: worth about $12.83 a share against $5.92 today.",["A cautious case is below the price."],[{label:"Middle case vs price",value:1.17,unit:"percent"},{label:"P/E",value:70.9,unit:"multiple"}]),
         v("quality","mixed","Profitable, but margins are thin or uneven; generates cash every year."),
-        v("growth","mixed","Growing, but not fast."),
+        v("growth","negative","Shrinking."),
         v("risk","mixed","One warning sign.",["Diluted share count rose 3.4% a year over 4.0 years."],[{label:"Warning signs",value:1,unit:"count"}])]}};
-  const html=renderToStaticMarkup(<PickCard p={pick} decision="2026-10-10T00:00:00+00:00" target={15} rules={{cheap:"At least 30% above is cheap."}}/>);
-  assert.match(html,/#1/);
-  assert.match(html,/Pick #1 this month: strong case, high conviction\./);
-  assert.match(html,/Price · Good<\/span><span>Looks cheap/);
-  assert.match(html,/verdict verdict-mixed[^>]*><span class="verdict-tag">Risk · Mixed/);
-  assert.match(html,/Main risk: Diluted share count rose 3\.4%/);
-  assert.match(html,/Next results ≈ 2026-11-04/);
-  assert.match(html,/<details class="pick-details"><summary>Show figures and rules<\/summary>/);
+  const base:Monthly={decision_at:"2026-10-10T00:00:00+00:00",notice:"",synthetic_fixture:false,target_members:15,population:1207,picks:[pick],holdings:[],totals:[],
+    counts:{"SELL":0,"REDUCE":0,"REVIEW":0,"BUY MORE":0,"HOLD":0},method:"Fixed rules.",label:"Decision support only.",verdict_rules:{cheap:"At least 30% above is cheap."},
+    rules:{buy_more_minimum_upside:0.15,maximum_position_weight_for_buying:0.25,reduce_above_position_weight:0.35,sell_below_upside:-0.2,reduce_below_upside:0}};
+  const html=renderToStaticMarkup(<DashboardView m={base} activity={null}/>);
+  assert.match(html,/pick-rank rank-1">#1/);
+  assert.match(html,/chip chip-positive">Undervalued/);
+  assert.match(html,/chip chip-negative">Shrinking/);
+  assert.match(html,/Looks cheap\. Profitable, but margins are thin or uneven; generates cash every year\./);
+  assert.match(html,/aria-label="Conviction 4 of 5"/);
+  assert.equal((html.match(/<i class="on"><\/i>/g)??[]).length,4);
+  assert.match(html,/action-watch[^>]*><small>Action<\/small><b>Watch<\/b><small>No cash allocated this month/);
+  assert.match(html,/<summary>Why, with figures<\/summary>/);
   assert.match(html,/Middle case vs price<\/dt><dd>\+117\.00%/);
-  assert.match(html,/P\/E<\/dt><dd>70\.9×/);
   assert.match(html,/Rule: At least 30% above is cheap\./);
-  const clean=renderToStaticMarkup(<PickCard p={{...pick,verdicts:{...pick.verdicts,answers:[v("risk","positive","No warning signs found.")]}}} decision="2026-10-10T00:00:00+00:00" target={15}/>);
-  assert.match(clean,/No warning signs found in the figures or filings\./);
-  const late=renderToStaticMarkup(<PickCard p={{...pick,next_results_estimate:"2026-10-08"}} decision="2026-10-10T00:00:00+00:00" target={15}/>);
-  assert.match(late,/Results were expected around 2026-10-08; none are filed yet at this cutoff/);
+  assert.match(html,/Next results ≈ 2026-11-04/);
+  assert.match(html,/Results expected: LZ/);
+  const order={action:"NEW BUY",qualified_symbol:"LZ.US",security_id:"lz",company_name:"LegalZoom.com",shares:10,price:5.92,amount:59.2,why:"Pick #1",amount_gbp:44.4};
+  const funded=renderToStaticMarkup(<DashboardView m={{...base,allocation:{new_cash:60,reinvest_sales:true,sale_proceeds:0,available:60,sales:[],buys:[order],invested:59.2,left_as_cash:0.8,portfolio_after:59.2,
+    rules:{position_limit:0.25,minimum_purchase_usd:25},method:"m",label:"l"}}} activity={null}/>);
+  assert.match(funded,/action-buy[^>]*><small>Action<\/small><b>Buy<\/b><span>£44\.40<\/span><small>Suggested allocation/);
+  const late=renderToStaticMarkup(<DashboardView m={{...base,picks:[{...pick,next_results_estimate:"2026-10-08"}]}} activity={null}/>);
+  assert.match(late,/Results were expected around 2026-10-08; none are filed yet at this cutoff\./);
 });
 
 test("allocation lists sales then buys, the cash left and never executes",()=>{

@@ -75,7 +75,7 @@ export function TradeForm({currencies, account, today, busy, onSubmit}: {currenc
     event.preventDefault();
     if (await onSubmit(draft)) setDraft(d => ({...emptyTrade(today), currency: d.currency, traded_on: d.traded_on}));
   }
-  return <section className="panel prototype-panel"><h2>Record a trade</h2>
+  return <section id="record-trade" className="panel prototype-panel"><h2>Record a trade</h2>
     <p>Enter trades you have already made with your broker. SignalLens never places orders. A ticker without a suffix is treated as US (AAPL becomes AAPL.US).
       For a trade in another currency, enter the {account} total your broker charged or paid, including fees and conversion, so the cash pool matches your account.</p>
     <form onSubmit={submit} className="prototype-trade-form">
@@ -156,7 +156,7 @@ export function SettingsPanel({settings, busy, onSave}: {settings: PortfolioSett
   const [draft, setDraft] = useState<SettingsDraft>({monthly_contribution: String(settings.monthly_contribution), max_holdings: String(settings.max_holdings),
     fractional_shares: settings.fractional_shares});
   const set = (key: keyof SettingsDraft) => (e: {target: {value: string}}) => setDraft(d => ({...d, [key]: e.target.value}));
-  return <section className="panel prototype-panel"><h2>Your plan</h2>
+  return <section id="plan" className="panel prototype-panel"><h2>Your plan</h2>
     <p>Change these whenever your plans change; earlier values are kept.{settings.is_default ? " These are the starting defaults." : ""}</p>
     <form onSubmit={e => {e.preventDefault(); onSave(draft);}} className="prototype-trade-form">
       <label>Monthly contribution ({settings.currency})<input required type="number" min="0" step="any" value={draft.monthly_contribution} onChange={set("monthly_contribution")}/></label>

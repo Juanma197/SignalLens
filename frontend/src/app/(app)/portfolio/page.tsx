@@ -1,7 +1,6 @@
 "use client";
 import {Suspense, useCallback, useEffect, useState} from "react";
 import {useSearchParams} from "next/navigation";
-import Link from "next/link";
 import {PrototypeNotice} from "../view";
 import {cutoffFor, friendlyError} from "../when";
 import {call} from "../store-view";
@@ -36,7 +35,7 @@ function PortfolioPage() {
     const reason = window.prompt("Void this trade? It stays in the history marked as voided. Reason (optional):");
     if (reason !== null) run("portfolio/voids", {transaction_id: id, reason: reason || null});
   }
-  return <main className="research-page"><nav><span className="mark">SL</span><strong>Portfolio</strong><Link href="/">This month</Link><Link href="/shortlist">Shortlist</Link><Link href="/checks">Thesis checks</Link><Link href="/watchlist">Watchlist</Link><Link href="/snapshots">Snapshots</Link></nav>
+  return <main className="research-page">
     <section className="hero compact"><p className="eyebrow">YOUR HOLDINGS · YOUR TRADES · STORED PRICES</p><h1>What you own.<br/><span>What it is worth.</span></h1>
       <p className="lede">Holdings and cash are built only from the trades and deposits you record here. Market values use the latest stored close; holdings outside SignalLens data are shown at cost and never estimated.</p></section>
     <PrototypeNotice/>
