@@ -252,8 +252,8 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; }
 .prototype-when small { flex-basis:100%; }
 .prototype-as-of { color:var(--muted); font-size:13px; margin:-8px 0 16px; }
 .pick-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr)); gap:16px; margin:16px 0 8px; }
-.pick-card { border:1px solid var(--line); border-radius:12px; padding:18px; display:grid; gap:12px; align-content:start; background:#0f1814; min-width:0; }
-.pick-card-first { border-color:#225c44; }
+.pick-cards > .pick-card { border:1px solid var(--line); border-radius:12px; padding:18px; display:grid; gap:12px; align-content:start; background:#0f1814; min-width:0; }
+.pick-cards > .pick-card-first { border-color:#225c44; }
 .pick-card header { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start; }
 .pick-card header > div { flex:1 1 120px; min-width:0; }
 .pick-card h3 { margin:0; font-size:20px; }
@@ -276,3 +276,17 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; }
 .pick-detail dl div { display:flex; justify-content:space-between; gap:8px; }
 .pick-detail dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
 @media (max-width:760px) { .pick-detail dl { grid-template-columns:1fr; } }
+.holding-rows { display:grid; gap:12px; margin:12px 0; }
+.holding-rows > .holding-row { display:grid; grid-template-columns:minmax(160px,1fr) minmax(0,2fr) minmax(0,2fr); gap:16px; border:1px solid var(--line); border-radius:12px; padding:16px; background:#0f1814; min-height:0; }
+.holding-name { display:grid; gap:4px; align-content:start; }
+.holding-name small { color:var(--muted); }
+.holding-name .gain { color:var(--green); } .holding-name .loss { color:#f2a7a0; }
+.holding-decision { display:grid; gap:8px; align-content:start; justify-items:start; }
+.holding-decision p, .holding-decision ul { margin:0; }
+.holding-decision .prototype-reasons { font-size:14px; }
+.holding-change { font-size:14px; color:var(--muted); }
+.holding-change-changed, .holding-change-new_holding { color:var(--ink); font-weight:700; }
+.holding-answers { display:grid; gap:8px; align-content:start; min-width:0; }
+.verdict-tags { list-style:none; margin:0; padding:0; display:grid; gap:6px; }
+.verdict-tags .verdict { font-size:13px; padding:6px 8px; }
+@media (max-width:760px) { .holding-rows > .holding-row { grid-template-columns:1fr; } }
