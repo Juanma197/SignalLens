@@ -62,6 +62,8 @@ COLUMNS = {
     'eodhd_ingestion_checkpoints': 'stage qualified_symbol status updated_at',
 }
 
+PRICE_FLOATS = ('open', 'high', 'low', 'close', 'adjusted_close')
+
 
 class PrototypeError(ValueError):
     def __init__(self, code):
@@ -133,8 +135,17 @@ def _read(db, table, remaining, decision):
     conjunction = ' AND ' if where else ' WHERE '
     if db.execute(f'SELECT count(*) FROM "{table}"{where}{conjunction}({checks})', args).fetchone()[0]:
         raise PrototypeError('PROTOTYPE_CELL_LIMIT')
-    cursor = db.execute(f'SELECT {",".join(chr(34)+c+chr(34) for c in columns)} FROM "{table}"{where} LIMIT {MAX_ROWS+1}', args)
-    rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
+    # Prices are most of the assessment's memory (~600,000 rows at the full US
+    # catalogue): read as floats (every use converts them with float() anyway)
+    # and share the values that repeat across rows (dates, codes, timestamps).
+    floats = PRICE_FLOATS if table == 'global_price_observations' else ()
+    select = ",".join(f'CAST("{c}" AS DOUBLE) AS "{c}"' if c in floats else chr(34) + c + chr(34) for c in columns)
+    cursor = db.execute(f'SELECT {select} FROM "{table}"{where} LIMIT {MAX_ROWS+1}', args)
+    if floats:
+        shared = {}
+        rows = [dict(zip(columns, (v if type(v) is float else shared.setdefault((type(v), v), v) for v in r))) for r in cursor.fetchall()]
+    else:
+        rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
     if len(rows) != count: raise PrototypeError('PROTOTYPE_COUNT_MISMATCH')
     for row in rows:
         if 'conflict_details' in row and isinstance(row['conflict_details'], str):
@@ -672,7 +683,7 @@ def _build(db, decision, target, known=None, cache=None):
                  ('global_price_observations', 'global_corporate_actions', 'eodhd_ingestion_checkpoints')}
     listings_by_sid = _group(selected, lambda r: str(r.get('security_id')))
     symbol_counts = Counter(r.get('qualified_symbol') for r in selected)
-    company_facts = {}
+    firsts = {}  # eligible companies' figures as first reported, for the valuation history
     companies = []
     listed = [sid for sid in sorted(roster_ids) if len(listings_by_sid.get(sid, [])) == 1]
     facts_by_sid = {}
@@ -713,17 +724,16 @@ def _build(db, decision, target, known=None, cache=None):
             'action_coverage': coverage, 'industry': industry, 'size': size,
             # Context only: never used for eligibility, membership or ordering.
             'financials': annual_brief(sec, facts, decision, stamp=stamp, finite=finite, known=known)})
-        if not reasons: company_facts[sid] = facts  # kept for the first-reported history below
+        # Summarised now, so each company's raw facts (~1.5 MB) are not all held at once.
+        if not reasons: firsts[sid] = annual_brief({'security_id': sid, 'cik': resolved_cik}, facts, decision,
+                                                   stamp=stamp, finite=finite, revision='first', known=known)
     eligible = sorted([c for c in companies if c['eligible']], key=lambda c: (hashlib.sha256((CONFIG['version'] + ':' + c['security_id']).encode()).hexdigest(), c['security_id']))
-    firsts = {}
     for c in companies:
         if c.get('financials') is not None: c['valuation'] = valuation(c.get('size'), c['financials'])
         if c['eligible'] and (c.get('financials') or {}).get('years'):
             since = day(date.fromisoformat(str(c['financials']['years'][-1]['fiscal_year_end'])[:10]))
             c['price_break'] = _price_break(by_symbol['global_price_observations'].get(c['qualified_symbol'], []), since, decision, known)
-        if c['eligible'] and c.get('valuation'):
-            firsts[c['security_id']] = annual_brief({'security_id': c['security_id'], 'cik': c['cik']}, company_facts[c['security_id']], decision,
-                                                    stamp=stamp, finite=finite, revision='first', known=known)
+        if not c.get('valuation'): firsts.pop(c['security_id'], None)
     year_prices = _fiscal_year_prices_many(db, {c['qualified_symbol']: [y['fiscal_year_end'] for y in firsts[c['security_id']]['years']]
                                                 for c in companies if c['security_id'] in firsts}, known)
     for c in companies:

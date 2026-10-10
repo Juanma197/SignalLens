@@ -48,7 +48,8 @@ def report_at(decision_at, target_members):
         report = assess(research_db=settings.research_database_path,
                         production_db=settings.database_path, decision_at=decision_at,
                         target_members=target_members)
-        if len(_CACHE) >= 8: _CACHE.clear()
+        # A full-catalogue report holds a few hundred MB once parsed: keep two.
+        if len(_CACHE) >= 2: _CACHE.clear()
         _CACHE[key] = report
         return report
     except PrototypeError as exc:

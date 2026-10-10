@@ -15,13 +15,21 @@ The backend runs in staging mode: API writes are refused except to the prototype
 store (portfolio, theses, snapshots). The daily alert job writes the research
 database itself, inside the backend process, under the maintenance lock.
 
-## 1. Grow the disk
+## 1. Grow the disk and check the memory
 
 The widened research database is a few GB, and the safe upload procedure keeps the
 upload, the live copy, a rollback copy and a temporary copy at once. In the Railway
 dashboard: service `SignalLens` → Volume → resize to about **4–5× the local research
 database size** (check it with `Get-Item backend\data\research\signallens-research.duckdb`).
 Larger volumes may need a paid Railway plan; check the price shown there.
+
+Measured on 2026-10-10 with the widened catalogue (2.03 GB database, 1,972 companies,
+1,207 eligible): **volume about 10 GB**. One assessment (the shortlist, This month,
+or the daily alert run) takes about 70 s on a laptop and peaks at about **1.6 GB of
+memory**, and the backend keeps up to two reports cached (each a few hundred MB). Give
+the `SignalLens` service at least **3 GB of memory** (Settings → Resources, if the plan
+limits it). The first page load of a date waits for a full assessment; the website
+allows four minutes for it.
 
 ## 2. Backend variables
 
