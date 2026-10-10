@@ -54,6 +54,11 @@ def _level(points, levels, top, middle, bottom):
 def assess_company(c):
     """One company's upside, value-trap check, conviction, risk and score, with reasons."""
     base = {'security_id': c['security_id'], 'qualified_symbol': c['qualified_symbol'], 'company_name': c.get('company_name')}
+    if c.get('price_break'):
+        b = c['price_break']
+        return base | {'status': 'not_assessable', 'reasons': [
+            f"On {b['session']} the price moved {b['raw_change']:+.0%} but the adjusted price {b['adjusted_change']:+.0%}: "
+            'probably a split or spin-off after the latest annual figures, which may then describe a different share count or business.']}
     scenarios = (c.get('valuation') or {}).get('scenarios') or {}
     years = (c.get('financials') or {}).get('years') or []
     if not scenarios.get('available') or not years:

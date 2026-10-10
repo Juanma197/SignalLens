@@ -400,3 +400,19 @@ def test_batched_fact_and_price_reads_match_one_company_at_a_time(paths, monkeyp
     single = json.dumps(service.assess(**params), sort_keys=True)
     monkeypatch.setattr(service, 'FACT_BATCH', 4)
     assert json.dumps(service.assess(**params), sort_keys=True) == single
+
+
+def test_unrecorded_split_or_spin_off_after_the_annual_figures_withholds_the_valuation():
+    from datetime import date as d
+    from app.prototype.ranking import assess_company
+    retrieved = datetime(2026, 9, 1)
+    def row(day, close, adjusted): return {'trading_date': day, 'close': close, 'adjusted_close': adjusted, 'status': 'available', 'retrieved_at': retrieved}
+    rows = [row(d(2025, 3, 3), 100, 50), row(d(2025, 3, 4), 50, 50),   # 2-for-1 split before the figures
+            row(d(2026, 2, 2), 40, 40), row(d(2026, 2, 3), 39.2, 39.6),  # dividend-sized difference
+            row(d(2026, 5, 1), 60, 60), row(d(2026, 5, 4), 10, 61)]      # spin-off: raw -83%, adjusted +2%
+    found = service._price_break(rows, d(2025, 12, 31), DECISION, DECISION)
+    assert found['session'] == d(2026, 5, 4) and round(found['raw_change'], 2) == -0.83 and round(found['adjusted_change'], 2) == 0.02
+    assert service._price_break(rows[:4], d(2025, 12, 31), DECISION, DECISION) is None
+    assert service._price_break(rows, d(2025, 12, 31), DECISION, datetime(2026, 8, 1, tzinfo=timezone.utc)) is None  # not yet retrieved
+    assessed = assess_company({'security_id': 's', 'qualified_symbol': 'S.US', 'price_break': found})
+    assert assessed['status'] == 'not_assessable' and 'split or spin-off' in assessed['reasons'][0]

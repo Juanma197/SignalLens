@@ -606,6 +606,27 @@ def _fiscal_year_prices(db, symbol, ends, known):
     return _fiscal_year_prices_many(db, {symbol: ends}, known)[symbol]
 
 
+PRICE_BREAK_RATIO = 1.25  # raw vs adjusted one-day move; dividends differ by a few percent
+
+
+def _price_break(rows, since, decision, known):
+    """The latest session after `since` where the raw close moved at least 25% more
+    (or less) than the adjusted close: a split, reverse split or spin-off the stored
+    corporate actions do not record (they hold cash distributions only). After such
+    an event the annual figures may describe a different share count or business."""
+    visible = sorted((r for r in rows if r.get('status') == 'available' and day(r.get('trading_date'))
+                      and day(r['trading_date']) <= decision.date() and stamp(r.get('retrieved_at'))
+                      and stamp(r['retrieved_at']) <= known), key=lambda r: day(r['trading_date']))
+    found = None
+    for left, right in zip(visible, visible[1:]):
+        if day(right['trading_date']) <= since: continue
+        try: raw, adjusted = float(right['close']) / float(left['close']), float(right['adjusted_close']) / float(left['adjusted_close'])
+        except (TypeError, ValueError, ZeroDivisionError): continue
+        if raw > 0 and adjusted > 0 and max(raw / adjusted, adjusted / raw) >= PRICE_BREAK_RATIO:
+            found = {'session': day(right['trading_date']), 'raw_change': raw - 1, 'adjusted_change': adjusted - 1}
+    return found
+
+
 def _build(db, decision, target, known=None, cache=None):
     """`known` is the knowledge horizon: live use passes nothing (known = decision);
     a historical replay passes the run time, so data counts once it was public by
@@ -695,6 +716,9 @@ def _build(db, decision, target, known=None, cache=None):
     firsts = {}
     for c in companies:
         if c.get('financials') is not None: c['valuation'] = valuation(c.get('size'), c['financials'])
+        if c['eligible'] and (c.get('financials') or {}).get('years'):
+            since = day(date.fromisoformat(str(c['financials']['years'][-1]['fiscal_year_end'])[:10]))
+            c['price_break'] = _price_break(by_symbol['global_price_observations'].get(c['qualified_symbol'], []), since, decision, known)
         if c['eligible'] and c.get('valuation'):
             firsts[c['security_id']] = annual_brief({'security_id': c['security_id'], 'cik': c['cik']}, company_facts[c['security_id']], decision,
                                                     stamp=stamp, finite=finite, revision='first', known=known)
