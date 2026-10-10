@@ -30,7 +30,11 @@ def test_rule_order_and_reasons():
     assert trap['decision'] == 'SELL' and 'Net loss in the latest fiscal year.' in trap['reasons']
     assert decide(position, value(-0.25), checks())['decision'] == 'SELL'
     assert decide(position, value(-0.05), checks())['decision'] == 'REDUCE'
-    assert decide({'weight': 0.40}, value(), checks())['decision'] == 'REDUCE'
+    assert decide({'weight': 0.40}, value(), checks())['decision'] == 'REDUCE'  # the backtest's frozen rule
+    live = {'maximum_position_weight_for_buying': 0.15, 'reduce_above_position_weight': 0.15, 'oversize_action': 'REVIEW'}
+    grown = decide({'weight': 0.40}, value(), checks(), live)
+    assert grown['decision'] == 'HOLD' and grown['reasons'][0].startswith('The position has grown to 40% of the portfolio, above your 15% limit: review it.')
+    assert decide({'weight': 0.10}, value(), checks(), live)['decision'] == 'BUY MORE'
     buy = decide(position, value(), checks())
     assert buy['decision'] == 'BUY MORE' and buy['evidence'] == {'upside': 0.4, 'weight': 0.1, 'thesis': 'intact',
                                                                'value_status': 'candidate', 'conviction': 'medium', 'risk': 'low', 'score': None}
@@ -85,9 +89,10 @@ def test_monthly_api_combines_picks_holdings_and_checks(paths, monkeypatch):
         assert by_symbol['SYN07.US']['decision'] == 'SELL'          # its own condition broke
         assert by_symbol['ZZZZ.US']['decision'] == 'REVIEW'         # outside SignalLens data
         # About half the priced portfolio: above the concentration limit.
-        assert by_symbol['SYN05.US']['decision'] == 'REDUCE' and 'above the 35% limit' in by_symbol['SYN05.US']['reasons'][0]
-        assert [h['decision'] for h in body['holdings']] == ['SELL', 'REDUCE', 'REVIEW']
-        assert body['counts'] == {'SELL': 1, 'REDUCE': 1, 'REVIEW': 1, 'BUY MORE': 0, 'HOLD': 0}
+        # About half the priced portfolio, above your 15% limit: a review, not a forced sale.
+        assert by_symbol['SYN05.US']['decision'] == 'HOLD' and 'above your 15% limit: review it' in by_symbol['SYN05.US']['reasons'][0]
+        assert [h['decision'] for h in body['holdings']] == ['SELL', 'REVIEW', 'HOLD']
+        assert body['counts'] == {'SELL': 1, 'REDUCE': 0, 'REVIEW': 1, 'BUY MORE': 0, 'HOLD': 1}
         assert body['picks'] == [] and body['totals'][0]['priced_positions'] == 2
         # No earlier month recorded: every holding says so; nothing sold since.
         assert {h['change']['status'] for h in body['holdings']} == {'no_record'} and body['no_longer_held'] == []

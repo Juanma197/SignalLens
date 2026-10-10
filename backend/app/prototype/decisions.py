@@ -23,9 +23,12 @@ RULES = {
 DECISIONS = ('SELL', 'REDUCE', 'REVIEW', 'BUY MORE', 'HOLD')
 
 
-def decide(position, assessment, checks):
+def decide(position, assessment, checks, rules=None):
     """One holding's decision. `assessment` is its value-ranking entry (or None),
-    `checks` its thesis-check evaluation (or None when not covered)."""
+    `checks` its thesis-check evaluation (or None when not covered). `rules` replace
+    RULES (the backtest's); live, a position that grew past its limit is a review
+    (`oversize_action` 'REVIEW'), not a forced REDUCE."""
+    RULES_ = RULES | (rules or {})
     weight = position.get('weight')
     upside = (assessment or {}).get('upside')
     evidence = {'upside': upside, 'weight': weight, 'thesis': (checks or {}).get('overall', 'not_covered'),
@@ -40,29 +43,33 @@ def decide(position, assessment, checks):
     broken += [a['text'] for a in checks['automatic'] if a['severity'] == 'broken']
     if broken:
         return result('SELL', 'The thesis is broken:', *broken)
-    if upside is not None and upside <= RULES['sell_below_upside']:
+    if upside is not None and upside <= RULES_['sell_below_upside']:
         return result('SELL', f'The price is {-upside:.0%} above the middle-case value: the discount has been realised and then some.')
-    if upside is not None and upside < RULES['reduce_below_upside']:
+    if upside is not None and upside < RULES_['reduce_below_upside']:
         return result('REDUCE', f'The price is {-upside:.0%} above the middle-case value; take some profit.')
-    if weight is not None and weight > RULES['reduce_above_position_weight']:
-        return result('REDUCE', f'The position is {weight:.0%} of the portfolio, above the {RULES["reduce_above_position_weight"]:.0%} limit.')
+    review = None
+    if weight is not None and weight > RULES_['reduce_above_position_weight']:
+        if RULES_.get('oversize_action', 'REDUCE') == 'REDUCE':
+            return result('REDUCE', f'The position is {weight:.0%} of the portfolio, above the {RULES_["reduce_above_position_weight"]:.0%} limit.')
+        review = (f'The position has grown to {weight:.0%} of the portfolio, above your {RULES_["reduce_above_position_weight"]:.0%} limit: '
+                  'review it. Nothing is sold just for that, and nothing is added.')
     warnings = [a['text'] for a in checks['automatic'] if a['severity'] == 'warning']
     unknown = [c['label'] for c in checks['checks'] if c['status'] == 'unknown']
     if upside is None:
-        return result('HOLD', 'No valuation range is available, so there is no case for adding.', *warnings)
+        return result('HOLD', review, 'No valuation range is available, so there is no case for adding.', *warnings)
     blockers = []
-    if upside < RULES['buy_more_minimum_upside']:
-        blockers.append(f'Upside {upside:.0%} is below the {RULES["buy_more_minimum_upside"]:.0%} needed to add.')
+    if upside < RULES_['buy_more_minimum_upside']:
+        blockers.append(f'Upside {upside:.0%} is below the {RULES_["buy_more_minimum_upside"]:.0%} needed to add.')
     if assessment.get('status') != 'candidate':
         blockers.append({'watch': 'Conviction is too low or risk too high to add.',
                          'value_trap': 'A value-trap sign blocks adding.'}.get(assessment.get('status'), 'It does not qualify in the ranking.'))
     if warnings: blockers.append('Warnings: ' + ' '.join(warnings))
     if unknown: blockers.append('Some of your conditions cannot be checked: ' + ', '.join(unknown) + '.')
-    if weight is not None and weight >= RULES['maximum_position_weight_for_buying']:
+    if weight is not None and weight >= RULES_['maximum_position_weight_for_buying']:
         blockers.append(f'The position is already {weight:.0%} of the portfolio.')
     if weight is None: blockers.append('No stored price, so the position size is unknown.')
     if blockers:
-        return result('HOLD', 'Thesis intact.' if checks['overall'] == 'intact' else None, *blockers)
+        return result('HOLD', review, 'Thesis intact.' if checks['overall'] == 'intact' else None, *blockers)
     return result('BUY MORE', f'Still undervalued: middle-case upside {upside:.0%}, conviction {assessment["conviction"]}, risk {assessment["risk"]}.',
                   'Thesis intact and the position has room to grow.')
 

@@ -104,8 +104,15 @@ def cash_message(monthly, trigger, *, symbol=None, link=None):
     deposit or sale, or a different best use, gives a new message."""
     plan = monthly.get('allocation') or {}
     account, buys = plan.get('account') or {}, plan.get('buys') or []
-    if not buys or not account: return None
     def money(v): return '—' if v is None else f"£{v:,.0f}"
+    check = account.get('reconciliation') or {}
+    if plan.get('held_back_buys') and check.get('blocks_buys'):
+        # Sent once per difference: the buys stay held back until the balances agree.
+        fingerprint = json.dumps({'mismatch': round(check['difference'], 2), 'as_of': check['as_of']})
+        lines = ['Buys held back: ' + check['message']]
+        if link: lines.append(link)
+        return fingerprint, '\n'.join(lines)
+    if not buys or not account: return None
     available = account['available']
     fingerprint = json.dumps({'available': int(available // 10) * 10, 'buys': sorted([b['action'], b['qualified_symbol']] for b in buys)})
     spent = sum(b.get('amount_gbp') or 0 for b in buys)
@@ -114,8 +121,16 @@ def cash_message(monthly, trigger, *, symbol=None, link=None):
         lines.append(f"• {b['action']} {b['qualified_symbol']}: {money(b.get('amount_gbp'))} "
                      f"({b['shares']:g} shares at ~${b['price']:,.2f}). {b['why']}")
     lines.append(f"Leaves {money(available - spent)} as cash.")
+    for p in plan.get('unfunded_picks') or []:
+        lines.append(f"• Watch {p['qualified_symbol']} (pick #{p.get('rank')}): insufficient available cash after the buys above.")
+    if account.get('awaiting_proceeds'):
+        lines.append(f"About {money(account['awaiting_proceeds'])} more after your suggested sales are recorded; the plan is recalculated then.")
     if plan.get('skipped_no_slot'):
         lines.append(f"No free place for {', '.join(s['qualified_symbol'] for s in plan['skipped_no_slot'])} (holdings at the maximum).")
+    stamp = monthly.get('plan') or {}
+    if stamp:
+        lines.append(f"Plan {stamp['version']}: assumes £{stamp['assumes']['cash_pool']:,.2f} cash and prices to "
+                     f"{stamp['assumes']['prices_through'] or '—'}. Out of date once you record a trade, deposit, dividend or fee.")
     if link: lines.append(link)
     lines.append(DISCLAIMER)
     return fingerprint, '\n'.join(lines)

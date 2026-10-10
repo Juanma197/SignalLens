@@ -57,7 +57,7 @@ def test_implied_rate_comes_from_the_latest_trade_with_pounds():
 def test_store_cash_movements_trade_pounds_and_settings(paths):
     store = PrototypeStore(paths[2], protected_paths=paths[:2])
     assert store.settings() == {'monthly_contribution': 200.0, 'max_holdings': 10, 'fractional_shares': True, 'currency': 'GBP',
-                                'is_default': True, 'recorded_at': None}
+                                'position_limit': 0.15, 'top3_limit': 0.40, 'minimum_trade': 25.0, 'is_default': True, 'recorded_at': None}
     assert store.cash_movements() == [] and not paths[2].exists()
     deposit = store.record_cash('deposit', 200, '2026-10-01', today=TODAY)
     store.record_cash('withdrawal', 20, '2026-10-02', note='Fees', today=TODAY)

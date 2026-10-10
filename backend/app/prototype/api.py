@@ -4,6 +4,8 @@ Assessment and tracking are read-only. The only writes go to the separate
 prototype store, and only when SIGNALLENS_PROTOTYPE_WRITES_ENABLED is true.
 """
 from datetime import date, datetime, timedelta, timezone
+import hashlib
+import json
 import logging
 import os
 import threading
@@ -13,8 +15,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..config import get_settings
-from .allocation import allocate
-from .cash import implied_gbp_rate, ledger
+from .allocation import RULES as ALLOCATION_RULES, allocate
+from .cash import implied_gbp_rate, ledger, reconcile
 from .checks import catalogue, evaluate
 from .scorecard import record_from_monthly, score
 from .decisions import DECISIONS, RULES as DECISION_RULES, changes, decide
@@ -154,6 +156,8 @@ class TradeRequest(BaseModel):
     note: str | None = Field(None, max_length=4000)
     # Pounds that left or reached the cash pool, as the broker reported (fees and conversion included).
     account_amount: float | None = Field(None, gt=0, le=1e12)
+    # A random id per form submission: sending the same one twice records the trade once.
+    request_key: str | None = Field(None, max_length=64, pattern='^[A-Za-z0-9_-]+$')
 
 
 class VoidRequest(BaseModel):
@@ -166,6 +170,27 @@ class CashRequest(BaseModel):
     amount: float = Field(gt=0, le=1e12)
     moved_on: date
     note: str | None = Field(None, max_length=4000)
+    request_key: str | None = Field(None, max_length=64, pattern='^[A-Za-z0-9_-]+$')
+
+
+class AdjustmentRequest(BaseModel):
+    kind: str = Field(pattern='^(dividend|interest|fee)$')
+    amount: float = Field(gt=0, le=1e12)
+    moved_on: date
+    qualified_symbol: str | None = Field(None, max_length=32)
+    note: str | None = Field(None, max_length=4000)
+    request_key: str | None = Field(None, max_length=64, pattern='^[A-Za-z0-9_-]+$')
+
+
+class AdjustmentVoidRequest(BaseModel):
+    adjustment_id: str = Field(min_length=1, max_length=64)
+    reason: str | None = Field(None, max_length=4000)
+
+
+class BrokerBalanceRequest(BaseModel):
+    amount: float = Field(ge=0, le=1e12)
+    as_of: date
+    note: str | None = Field(None, max_length=4000)
 
 
 class CashVoidRequest(BaseModel):
@@ -177,6 +202,9 @@ class SettingsRequest(BaseModel):
     monthly_contribution: float = Field(ge=0, le=1e6)
     max_holdings: int = Field(ge=1, le=MAX_HOLDINGS_LIMIT)
     fractional_shares: bool = True
+    position_limit: float | None = Field(None, ge=0.05, le=1)
+    top3_limit: float | None = Field(None, ge=0.05, le=1)
+    minimum_trade: float | None = Field(None, ge=0, le=1e5)
 
 
 class CheckSetRequest(BaseModel):
@@ -188,7 +216,7 @@ class RecordRequest(BaseModel):
     decision_at: datetime
     target_members: int = Field(15, ge=10, le=20)
     include_contribution: bool = False
-    reinvest: bool = True
+    reinvest: bool = False
 
 
 class SnapshotRequest(BaseModel):
@@ -314,8 +342,11 @@ def portfolio():
         result = valuation(trades, _MARKET[key], as_of=now)
     except PrototypeError as exc:
         raise HTTPException(409, detail={'code': exc.code}) from None
+    movements, adjustments, balances = _call(store.cash_movements), _call(store.cash_adjustments), _call(store.broker_balances)
     return result | {'transactions': transactions, 'currencies': list(CURRENCIES), 'account_currency': ACCOUNT_CURRENCY,
-                     'cash': ledger(_call(store.cash_movements), transactions), 'settings': _call(store.settings)}
+                     'cash': ledger(movements, transactions, adjustments), 'adjustments': adjustments, 'broker_balances': balances[:12],
+                     'reconciliation': reconcile(movements, trades, adjustments, balances, today=now.date()),
+                     'settings': _call(store.settings)}
 
 
 def _telegram_configured():
@@ -344,7 +375,7 @@ def record_trade(request: TradeRequest, background: BackgroundTasks):
     store = _store(write=True)
     _call(store.record_trade, request.kind, request.qualified_symbol, request.shares, request.price,
           request.traded_on, fees=request.fees, currency=request.currency,
-          company_name=request.company_name, note=request.note, account_amount=request.account_amount)
+          company_name=request.company_name, note=request.note, account_amount=request.account_amount, request_key=request.request_key)
     # A sale frees cash: reassess now rather than at the next monthly review.
     if request.kind == 'sell':
         return portfolio() | {'reassessment': _schedule_reassessment(background, 'sale', store_symbol(request.qualified_symbol))}
@@ -360,7 +391,7 @@ def void_trade(request: VoidRequest):
 @router.post('/store/portfolio/cash')
 def record_cash(request: CashRequest, background: BackgroundTasks):
     """A deposit (e.g. this month's contribution, once it has arrived) or a withdrawal, in pounds."""
-    _call(_store(write=True).record_cash, request.kind, request.amount, request.moved_on, note=request.note)
+    _call(_store(write=True).record_cash, request.kind, request.amount, request.moved_on, note=request.note, request_key=request.request_key)
     if request.kind == 'deposit':
         return portfolio() | {'reassessment': _schedule_reassessment(background, 'deposit')}
     return portfolio()
@@ -372,11 +403,35 @@ def void_cash(request: CashVoidRequest):
     return portfolio()
 
 
+@router.post('/store/portfolio/adjustments')
+def record_adjustment(request: AdjustmentRequest, background: BackgroundTasks):
+    """A dividend or interest your broker paid in pounds, or a fee it charged."""
+    _call(_store(write=True).record_adjustment, request.kind, request.amount, request.moved_on, qualified_symbol=request.qualified_symbol,
+          note=request.note, request_key=request.request_key)
+    if request.kind in ('dividend', 'interest'):
+        return portfolio() | {'reassessment': _schedule_reassessment(background, 'deposit')}
+    return portfolio()
+
+
+@router.post('/store/portfolio/adjustments/voids')
+def void_adjustment(request: AdjustmentVoidRequest):
+    _call(_store(write=True).void_adjustment, request.adjustment_id, reason=request.reason)
+    return portfolio()
+
+
+@router.post('/store/portfolio/broker-balance')
+def record_broker_balance(request: BrokerBalanceRequest):
+    """The cash your broker shows: SignalLens checks its cash pool against it before suggesting buys."""
+    _call(_store(write=True).record_broker_balance, request.amount, request.as_of, note=request.note)
+    return portfolio()
+
+
 @router.post('/store/portfolio/settings')
 def save_settings(request: SettingsRequest):
     """Change the monthly contribution or the maximum number of holdings; earlier values are kept."""
     _call(_store(write=True).save_settings, monthly_contribution=request.monthly_contribution, max_holdings=request.max_holdings,
-          fractional_shares=request.fractional_shares)
+          fractional_shares=request.fractional_shares, position_limit=request.position_limit, top3_limit=request.top3_limit,
+          minimum_trade=request.minimum_trade)
     return portfolio()
 
 
@@ -430,7 +485,7 @@ def thesis_checks(decision_at: datetime = Query(...), target_members: int = Quer
 
 @router.get('/monthly')
 def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, ge=10, le=20),
-            include_contribution: bool = Query(False), reinvest: bool = Query(True)):
+            include_contribution: bool = Query(False), reinvest: bool = Query(False)):
     """The monthly view: Top 3 picks, a decision for every holding and a suggested
     allocation of the cash pool at the cutoff (plus the planned monthly contribution
     when `include_contribution`, and sale proceeds when `reinvest`), all at one cutoff."""
@@ -460,6 +515,7 @@ def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, 
     ranking = report.get('value_ranking') or {'picks': [], 'companies': [], 'population': 0}
     assessments = {a['security_id']: a for a in ranking['companies']}
     current = _call(store.current_checks)
+    decision_rules = live_decision_rules(_call(store.settings))
     holdings = []
     for p in book['positions']:
         sid = by_symbol.get(p['qualified_symbol'])
@@ -467,7 +523,7 @@ def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, 
         holdings.append({k: p.get(k) for k in ('qualified_symbol', 'currency', 'shares', 'average_cost', 'cost_basis', 'price',
                                                'market_value', 'unrealised_return', 'weight')}
                         | {'security_id': sid, 'company_name': p.get('listed_name') or p.get('company_name'),
-                           'checks': checks} | decide(p, assessments.get(sid), checks))
+                           'checks': checks} | decide(p, assessments.get(sid), checks, decision_rules))
     holdings.sort(key=lambda h: (DECISIONS.index(h['decision']), h['qualified_symbol']))
     for h in holdings:
         h['verdicts'] = by_id[h['security_id']].get('verdicts') if h['security_id'] else None
@@ -484,11 +540,12 @@ def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, 
     return {'decision_at': report['decision_at'], 'notice': report['notice'], 'synthetic_fixture': report['synthetic_fixture'],
             'target_members': report['target_members'], 'population': ranking['population'], 'picks': picks,
             'verdict_rules': ranking.get('verdict_rules'),
-            'holdings': holdings, 'no_longer_held': no_longer_held, 'totals': book['totals'], 'rules': DECISION_RULES,
+            'holdings': holdings, 'no_longer_held': no_longer_held, 'totals': book['totals'], 'rules': decision_rules,
             'counts': {d: sum(h['decision'] == d for h in holdings) for d in DECISIONS},
-            'allocation': plan,
+            'allocation': plan, 'plan': plan_version(report['decision_at'], holdings, plan),
             'method': 'Holdings are built from your trades up to the cutoff and valued at the last stored close on or before it. '
-                      'Each decision follows fixed rules in order: no evidence, broken thesis, overvaluation, position size, then room to add.',
+                      'Each decision follows fixed rules in order: no evidence, broken thesis, overvaluation, position size (a review, '
+                      'never a forced sale), then room to add.',
             'label': 'Decision support only. Nothing is executed. The rules have not been validated against later returns.'}
 
 
@@ -496,7 +553,11 @@ def _allocation(store, trades, holdings, picks, decision, *, include_contributio
     """Allocate the cash pool at the cutoff. Pounds become dollars at the stored rate,
     or failing that the rate implied by your last dollar trade; with neither, nothing is bought."""
     settings = get_settings()
-    pool = ledger(_call(store.cash_movements), trades, until=decision.date())
+    movements, adjustments = _call(store.cash_movements), _call(store.cash_adjustments)
+    adjustments = [a for a in adjustments if str(a['moved_on']) <= decision.date().isoformat()]
+    pool = ledger(movements, trades, adjustments, until=decision.date())
+    balances = [b for b in _call(store.broker_balances) if str(b['as_of']) <= decision.date().isoformat()]
+    check = reconcile(movements, trades, adjustments, balances, today=decision.date())
     config = _call(store.settings)
     contribution = config['monthly_contribution'] if include_contribution else 0.0
     available = max(0.0, pool['balance']) + contribution
@@ -506,15 +567,50 @@ def _allocation(store, trades, holdings, picks, decision, *, include_contributio
         except PrototypeError: _MARKET[key] = None
     fx = _MARKET[key] or implied_gbp_rate(trades, 'USD', until=decision.date())
     plan = allocate(holdings, picks, available / fx['rate'] if fx else 0.0, reinvest=reinvest, max_holdings=config['max_holdings'],
-                    fractional=config['fractional_shares'])
+                    fractional=config['fractional_shares'], rules=live_allocation_rules(config, fx))
+    if check['blocks_buys'] and plan['buys']:
+        # The cash pool disagrees with the broker: no buy is suggested from a balance that may be wrong.
+        plan = plan | {'held_back_buys': plan['buys'], 'buys': [], 'left_as_cash': plan['left_as_cash'] + plan['invested'], 'invested': 0.0}
     def gbp(usd): return usd * fx['rate'] if fx else None
-    for order in plan['sales'] + plan['buys']: order['amount_gbp'] = gbp(order['amount'])
+    for order in plan['sales'] + plan['buys'] + plan.get('held_back_buys', []): order['amount_gbp'] = gbp(order['amount'])
+    funded = {b['security_id'] for b in plan['buys']}
+    plan['unfunded_picks'] = [{k: p[k] for k in ('security_id', 'qualified_symbol', 'company_name', 'rank')} for p in picks
+                              if not p.get('held') and p['security_id'] not in funded]
     return plan | {'account': {
         'currency': ACCOUNT_CURRENCY, 'cash_pool': pool['balance'], 'overdrawn': pool['overdrawn'],
         'uncounted_trades': len(pool['uncounted_trades']), 'deposited_this_month': pool['deposited_this_month'],
         'monthly_contribution': config['monthly_contribution'], 'contribution_included': contribution,
         'available': available, 'gbp_per_usd': fx, 'sale_proceeds': gbp(plan['sale_proceeds']),
-        'invested': gbp(plan['invested']), 'left_as_cash': gbp(plan['left_as_cash']) if fx else available}}
+        'invested': gbp(plan['invested']), 'left_as_cash': gbp(plan['left_as_cash']) if fx else available,
+        'awaiting_proceeds': gbp(plan['awaiting_proceeds']), 'reconciliation': check}}
+
+
+def live_decision_rules(config):
+    """The backtest's decision rules with your position limit: no adding at or above
+    it, and a position that grew past it is a review rather than a forced sale."""
+    return DECISION_RULES | {'maximum_position_weight_for_buying': config['position_limit'],
+                             'reduce_above_position_weight': config['position_limit'], 'oversize_action': 'REVIEW'}
+
+
+def live_allocation_rules(config, fx):
+    """Your limits for the allocation; the minimum trade is in pounds, converted at today's rate."""
+    minimum = config['minimum_trade'] / fx['rate'] if fx else ALLOCATION_RULES['minimum_purchase_usd']
+    return {'position_limit': config['position_limit'], 'top3_limit': config['top3_limit'],
+            'minimum_purchase_usd': minimum, 'trim_oversized': False}
+
+
+def plan_version(decision_at, holdings, plan):
+    """What a plan assumed, and a short id for it. Any recorded trade, deposit or
+    adjustment, or new prices, gives a different id, so an older plan (an earlier
+    Telegram message) is visibly out of date."""
+    account = plan.get('account') or {}
+    assumes = {'decision_at': str(decision_at), 'cash_pool': round(account.get('cash_pool') or 0.0, 2),
+               'holdings': sorted([h['qualified_symbol'], round(h['shares'], 6)] for h in holdings),
+               'prices_through': max([h['price']['trading_date'] for h in holdings if h.get('price')] or [None], key=lambda d: d or ''),
+               'buys': sorted([b['qualified_symbol'], round(b['amount'], 2)] for b in plan.get('buys', []))}
+    version = hashlib.sha256(json.dumps(assumes, sort_keys=True, default=str).encode()).hexdigest()[:8]
+    return {'version': version, 'assumes': assumes,
+            'valid_until': 'You record a trade, deposit, dividend or fee, or new prices arrive. Then the plan is recalculated.'}
 
 
 @router.post('/store/decision-records')
@@ -578,7 +674,7 @@ def versus_vall():
         rates = read_gbp_rate_series(settings.research_database_path, 'USD', first - timedelta(days=7), now)
     except PrototypeError as exc:
         raise HTTPException(409, detail={'code': exc.code, 'message': 'Stored prices could not safely be read.'}) from None
-    cash = ledger(movements, transactions)
+    cash = ledger(movements, transactions, _call(store.cash_adjustments))
     rate_now = rates[max(rates)] if rates and (now.date() - max(rates)).days <= 7 else None
     value, complete = cash['balance'], not cash['uncounted_trades']
     for total in book['totals']:

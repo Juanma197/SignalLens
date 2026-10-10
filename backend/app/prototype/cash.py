@@ -7,13 +7,16 @@ confirmation). Cash carries over from month to month and sale proceeds return
 to it. A trade without a pound amount is listed as uncounted rather than
 converted at a guessed rate. Pure functions; nothing is read or written here.
 """
+from datetime import date
+
 from .store import ACCOUNT_CURRENCY
 
 TOLERANCE = 0.005
 
 
-def ledger(movements, trades, *, until=None):
-    """Cash balance from non-voided movements and trades dated on or before `until` (a date)."""
+def ledger(movements, trades, adjustments=(), *, until=None):
+    """Cash balance from non-voided movements, trades and adjustments (dividends,
+    interest, fees) dated on or before `until` (a date)."""
     day = until.isoformat() if until else None
     entries, uncounted = [], []
     for m in movements:
@@ -21,6 +24,11 @@ def ledger(movements, trades, *, until=None):
         sign = 1 if m['kind'] == 'deposit' else -1
         entries.append({'on': str(m['moved_on']), 'recorded_at': str(m['recorded_at']), 'kind': m['kind'],
                         'amount': sign * float(m['amount']), 'movement_id': m['movement_id'], 'note': m.get('note')})
+    for a in adjustments:
+        if a.get('voided_at') or (day and str(a['moved_on']) > day): continue
+        sign = -1 if a['kind'] == 'fee' else 1
+        entries.append({'on': str(a['moved_on']), 'recorded_at': str(a['recorded_at']), 'kind': a['kind'],
+                        'amount': sign * float(a['amount']), 'adjustment_id': a['adjustment_id'], 'qualified_symbol': a.get('qualified_symbol')})
     for t in trades:
         if t.get('voided_at') or (day and str(t['traded_on']) > day): continue
         if t.get('account_amount') is None:
@@ -40,10 +48,42 @@ def ledger(movements, trades, *, until=None):
     return {'currency': ACCOUNT_CURRENCY, 'balance': balance, 'overdrawn': balance < -TOLERANCE,
             'deposited': total('deposit'), 'withdrawn': total('withdrawal'),
             'spent_on_buys': total('buy'), 'received_from_sales': total('sell'),
+            'dividends': total('dividend'), 'interest': total('interest'), 'fees': total('fee'),
             'deposited_this_month': sum(e['amount'] for e in entries if e['kind'] == 'deposit' and e['on'][:7] == month),
             'uncounted_trades': uncounted, 'entries': entries[::-1],
             'method': 'Confirmed deposits minus withdrawals, minus the pounds each buy cost, plus the pounds each sale paid '
-                      '(fees and currency conversion included, as your broker reported them).'}
+                      '(fees and currency conversion included, as your broker reported them), plus dividends and interest, minus other fees.'}
+
+
+# How far the cash pool may differ from the broker before buys are held back:
+# the larger of an absolute and a relative tolerance (rounding, small fees).
+RECONCILE = {'tolerance': 2.0, 'tolerance_share': 0.01, 'stale_days': 35}
+
+
+def reconcile(movements, trades, adjustments, balances, *, today):
+    """Compare the cash pool with the latest broker balance you recorded, at that date.
+
+    'mismatch' blocks new buy suggestions until the two agree again (record the
+    missing entry, or a new broker balance). 'unchecked' and 'stale' only warn."""
+    if not balances:
+        return {'status': 'unchecked', 'blocks_buys': False,
+                'message': 'Record the cash balance your broker shows so SignalLens can check its cash pool against it.'}
+    latest = max(balances, key=lambda b: (str(b['as_of']), str(b['recorded_at'])))
+    as_of = date.fromisoformat(str(latest['as_of'])[:10])
+    app = ledger(movements, trades, adjustments, until=as_of)['balance']
+    difference = float(latest['amount']) - app
+    tolerance = max(RECONCILE['tolerance'], RECONCILE['tolerance_share'] * abs(float(latest['amount'])))
+    base = {'broker_balance': float(latest['amount']), 'as_of': as_of.isoformat(), 'app_balance': app, 'difference': difference,
+            'tolerance': tolerance}
+    if abs(difference) > tolerance:
+        return base | {'status': 'mismatch', 'blocks_buys': True,
+                       'message': f'Your broker showed £{float(latest["amount"]):,.2f} on {as_of:%d %b} but SignalLens counts £{app:,.2f}. '
+                                  'New buys are held back until they agree: record the missing deposit, trade, dividend or fee, '
+                                  'or a new broker balance.'}
+    if (today - as_of).days > RECONCILE['stale_days']:
+        return base | {'status': 'stale', 'blocks_buys': False,
+                       'message': f'Last checked against your broker on {as_of:%d %b %Y}; record a new balance to check again.'}
+    return base | {'status': 'matched', 'blocks_buys': False, 'message': f'Matches your broker as of {as_of:%d %b %Y}.'}
 
 
 def implied_gbp_rate(trades, currency, *, until=None):
