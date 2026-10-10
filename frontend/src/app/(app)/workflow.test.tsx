@@ -12,6 +12,7 @@ import {PortfolioView, ReassessmentNotice, type Portfolio} from "./portfolio-vie
 import {ChecksOverview, type ChecksReport} from "./checks-view";
 import {MonthlyView, type Monthly} from "./monthly-view";
 import {AllocationView, type Allocation} from "./monthly-view";
+import {PickCard} from "./pick-card";
 import {ScorecardView, type Scorecard} from "./scorecard-view";
 import {WhenPicker, cutoffFor, describeCutoff, friendlyError, todayUtc, whenFromQuery} from "./when";
 
@@ -294,6 +295,32 @@ test("monthly view lists picks, held flags and a reasoned decision per holding",
   assert.match(html,/no stored price/);
   assert.match(html,/Nothing is executed/);
   assert.match(html,/SELL when the thesis breaks or the price is 20\.00% above/);
+});
+
+test("pick cards lead with the decision, four plain answers and figures behind a disclosure",()=>{
+  const v=(question:"cheap"|"quality"|"growth"|"risk"|"action",level:"positive"|"mixed"|"negative",headline:string,because:string[]=[],figures:{label:string;value:number;unit:"percent"|"multiple"|"per_share_usd"|"count"}[]=[])=>({question,level,headline,because,figures});
+  const pick={security_id:"lz",qualified_symbol:"LZ.US",company_name:"LegalZoom.com",status:"candidate" as const,reasons:[],rank:1,recommendation:"strong_buy" as const,upside:1.17,conviction:"high" as const,risk:"low" as const,held:false,
+    next_results_estimate:"2026-11-04",
+    verdicts:{action:v("action","positive","Pick #1 this month: strong case, high conviction."),
+      answers:[v("cheap","positive","Looks cheap: worth about $12.83 a share against $5.92 today.",["A cautious case is below the price."],[{label:"Middle case vs price",value:1.17,unit:"percent"},{label:"P/E",value:70.9,unit:"multiple"}]),
+        v("quality","mixed","Profitable, but margins are thin or uneven; generates cash every year."),
+        v("growth","mixed","Growing, but not fast."),
+        v("risk","mixed","One warning sign.",["Diluted share count rose 3.4% a year over 4.0 years."],[{label:"Warning signs",value:1,unit:"count"}])]}};
+  const html=renderToStaticMarkup(<PickCard p={pick} decision="2026-10-10T00:00:00+00:00" target={15} rules={{cheap:"At least 30% above is cheap."}}/>);
+  assert.match(html,/#1/);
+  assert.match(html,/Pick #1 this month: strong case, high conviction\./);
+  assert.match(html,/Price · Good<\/span><span>Looks cheap/);
+  assert.match(html,/verdict verdict-mixed[^>]*><span class="verdict-tag">Risk · Mixed/);
+  assert.match(html,/Main risk: Diluted share count rose 3\.4%/);
+  assert.match(html,/Next results ≈ 2026-11-04/);
+  assert.match(html,/<details class="pick-details"><summary>Show figures and rules<\/summary>/);
+  assert.match(html,/Middle case vs price<\/dt><dd>\+117\.00%/);
+  assert.match(html,/P\/E<\/dt><dd>70\.9×/);
+  assert.match(html,/Rule: At least 30% above is cheap\./);
+  const clean=renderToStaticMarkup(<PickCard p={{...pick,verdicts:{...pick.verdicts,answers:[v("risk","positive","No warning signs found.")]}}} decision="2026-10-10T00:00:00+00:00" target={15}/>);
+  assert.match(clean,/No warning signs found in the figures or filings\./);
+  const late=renderToStaticMarkup(<PickCard p={{...pick,next_results_estimate:"2026-10-08"}} decision="2026-10-10T00:00:00+00:00" target={15}/>);
+  assert.match(late,/Results were expected around 2026-10-08; none are filed yet at this cutoff/);
 });
 
 test("allocation lists sales then buys, the cash left and never executes",()=>{

@@ -3,7 +3,7 @@ import {OVERALL, type CompanyChecks} from "./checks-view";
 import {money, type Total} from "./portfolio-view";
 import {detailHref, percent} from "./view";
 import {describeCutoff} from "./when";
-import type {ValueAssessment} from "./value-view";
+import {PickCard, type Pick} from "./pick-card";
 
 export type Decision = "SELL"|"REDUCE"|"REVIEW"|"BUY MORE"|"HOLD";
 export type Holding = {qualified_symbol: string; security_id: string|null; company_name: string|null; currency: string; shares: number;
@@ -11,7 +11,7 @@ export type Holding = {qualified_symbol: string; security_id: string|null; compa
   unrealised_return: number|null; weight: number|null; checks: CompanyChecks|null; decision: Decision; reasons: string[];
   evidence: {upside: number|null; weight: number|null; thesis: string; value_status: string|null; conviction: string|null; risk: string|null}};
 export type Monthly = {decision_at: string; notice: string; synthetic_fixture: boolean; target_members: number; population: number;
-  picks: (ValueAssessment & {held: boolean})[]; holdings: Holding[]; totals: Total[]; counts: Record<Decision, number>;
+  picks: Pick[]; verdict_rules?: Record<string, string>|null; holdings: Holding[]; totals: Total[]; counts: Record<Decision, number>;
   rules: Record<string, number>; method: string; label: string; allocation?: Allocation};
 type Order = {action: string; qualified_symbol: string; security_id: string|null; company_name: string|null; shares: number; price: number; amount: number; why: string;
   weight_after?: number|null; amount_gbp?: number|null};
@@ -53,7 +53,6 @@ export function AllocationView({allocation, decision, target}: {allocation: Allo
   </section>;
 }
 
-const RECOMMENDATION = {strong_buy: "Strong Buy", buy: "Buy"};
 const signed = (value: number|null|undefined) => value == null ? "—" : `${value > 0 ? "+" : ""}${percent(value)}`;
 const ORDER: Decision[] = ["SELL", "REDUCE", "REVIEW", "BUY MORE", "HOLD"];
 const slug = (d: Decision) => d.toLowerCase().replace(" ", "-");
@@ -70,10 +69,7 @@ export function MonthlyView({monthly}: {monthly: Monthly}) {
     <section className="panel prototype-panel"><h2>New opportunities</h2>
       <p>The month&apos;s undervaluation ranking, from {monthly.population} eligible companies. Places are never filled with weaker names.</p>
       {monthly.picks.length === 0 ? <p>No company qualifies this month. Keeping cash or your current holdings is a valid outcome.</p> :
-        <div className="prototype-table-wrap"><table className="prototype-value-table"><thead><tr><th>Rank</th><th>Stock</th><th>Estimated upside</th><th>Recommendation</th><th>Conviction</th><th>Risk</th></tr></thead><tbody>
-          {monthly.picks.map(p => <tr key={p.security_id}><td>#{p.rank}</td><td>{link(p)}<small>{p.company_name}{p.held ? " · already held" : ""}</small></td>
-            <td>{signed(p.upside)}</td><td>{RECOMMENDATION[p.recommendation!]}</td><td>{p.conviction}</td><td>{p.risk}</td></tr>)}
-        </tbody></table></div>}</section>
+        <div className="pick-cards">{monthly.picks.map(p => <PickCard key={p.security_id} p={p} decision={monthly.decision_at} target={monthly.target_members} rules={monthly.verdict_rules}/>)}</div>}</section>
 
     <section className="panel prototype-panel"><h2>Your holdings</h2>
       {monthly.holdings.length === 0 ? <p>No holdings recorded before this cutoff. Record your trades on the <Link href="/portfolio">Portfolio</Link> page.</p> :
