@@ -423,3 +423,32 @@ def test_unrecorded_split_or_spin_off_after_the_annual_figures_withholds_the_val
     assert service._price_break(rows, d(2025, 12, 31), DECISION, datetime(2026, 8, 1, tzinfo=timezone.utc)) is None  # not yet retrieved
     assessed = assess_company({'security_id': 's', 'qualified_symbol': 'S.US', 'price_break': found})
     assert assessed['status'] == 'not_assessable' and 'split or spin-off' in assessed['reasons'][0]
+
+
+def test_latest_requests_reuse_a_recent_report_while_the_databases_are_unchanged(paths, monkeypatch):
+    """Every page asks for "Latest" (the current second); a full assessment takes a
+    minute or two, so a report made after the last database write is reused."""
+    from datetime import timedelta
+    import os
+    from app.config import Settings
+    from app.prototype import api
+    settings = Settings(database_path=paths[1], research_database_path=paths[0])
+    monkeypatch.setattr(api, 'get_settings', lambda: settings)
+    monkeypatch.setattr(api, '_CACHE', {})
+    calls = []
+    monkeypatch.setattr(api, 'assess', lambda **kw: calls.append(kw['decision_at']) or {'decision_at': kw['decision_at']})
+    written = datetime.fromtimestamp(paths[0].stat().st_mtime, timezone.utc)
+    first = written + timedelta(minutes=1)
+    assert api.report_at(first, 15)['decision_at'] == first
+    assert api.report_at(first + timedelta(minutes=5), 15)['decision_at'] == first      # reused
+    assert api.report_at(first + timedelta(minutes=5), 10)['decision_at'] != first      # other membership size
+    assert len(calls) == 2
+    api.report_at(first + timedelta(minutes=40), 15)                                    # too old: recomputed
+    assert len(calls) == 3
+    before = written - timedelta(minutes=10)                                            # a cutoff before the last write
+    api.report_at(before, 15); api.report_at(before + timedelta(minutes=5), 15)
+    assert len(calls) == 5                                                              # never reused
+    later = first + timedelta(minutes=41)
+    os.utime(paths[0], (later.timestamp() + 1, later.timestamp() + 1))                  # the database is written
+    api.report_at(later + timedelta(minutes=1), 15)
+    assert len(calls) == 6
