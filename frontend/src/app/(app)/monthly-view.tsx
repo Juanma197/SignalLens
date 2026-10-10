@@ -1,17 +1,23 @@
 import Link from "next/link";
+import type {ReactNode} from "react";
 import {OVERALL, type CompanyChecks} from "./checks-view";
 import {money, type Total} from "./portfolio-view";
 import {detailHref, percent} from "./view";
 import {describeCutoff} from "./when";
-import {PickCard, type Pick} from "./pick-card";
+import {Detail, LEVEL, PickCard, QUESTION, type Pick} from "./pick-card";
+import type {VerdictQuestion, Verdicts} from "./value-view";
 
 export type Decision = "SELL"|"REDUCE"|"REVIEW"|"BUY MORE"|"HOLD";
 export type Holding = {qualified_symbol: string; security_id: string|null; company_name: string|null; currency: string; shares: number;
   average_cost: number|null; cost_basis: number; price: {close: number; trading_date: string}|null; market_value: number|null;
   unrealised_return: number|null; weight: number|null; checks: CompanyChecks|null; decision: Decision; reasons: string[];
-  evidence: {upside: number|null; weight: number|null; thesis: string; value_status: string|null; conviction: string|null; risk: string|null}};
+  evidence: {upside: number|null; weight: number|null; thesis: string; value_status: string|null; conviction: string|null; risk: string|null};
+  verdicts?: Verdicts|null; change?: Change};
+/** What changed since the latest frozen record of an earlier month. */
+export type Change = {status: "no_record"|"new_holding"|"changed"|"unchanged"; since: string|null; previous_decision: Decision|null; summary: string; details: string[]};
+export type Gone = {qualified_symbol: string; security_id: string|null; company_name: string|null; previous_decision: Decision; since: string};
 export type Monthly = {decision_at: string; notice: string; synthetic_fixture: boolean; target_members: number; population: number;
-  picks: Pick[]; verdict_rules?: Record<string, string>|null; holdings: Holding[]; totals: Total[]; counts: Record<Decision, number>;
+  picks: Pick[]; verdict_rules?: Record<string, string>|null; holdings: Holding[]; no_longer_held?: Gone[]; totals: Total[]; counts: Record<Decision, number>;
   rules: Record<string, number>; method: string; label: string; allocation?: Allocation};
 type Order = {action: string; qualified_symbol: string; security_id: string|null; company_name: string|null; shares: number; price: number; amount: number; why: string;
   weight_after?: number|null; amount_gbp?: number|null};
@@ -54,6 +60,31 @@ export function AllocationView({allocation, decision, target}: {allocation: Allo
 }
 
 const signed = (value: number|null|undefined) => value == null ? "—" : `${value > 0 ? "+" : ""}${percent(value)}`;
+const monthYear = (iso: string) => new Date(iso).toLocaleDateString("en-GB", {month: "long", year: "numeric", timeZone: "UTC"});
+
+/** One holding: the decision and what changed first, then why, then the plain
+ *  answers, with the figures behind a disclosure. */
+function HoldingRow({h, link, rules}: {h: Holding; link: (h: Holding) => ReactNode; rules?: Record<string, string>|null}) {
+  const answers = h.verdicts?.answers ?? [];
+  const change = h.change;
+  return <article className="holding-row">
+    <div className="holding-name"><b>{link(h)}</b><small>{h.company_name}</small>
+      <small>{h.market_value == null ? "no stored price" : `${money(h.market_value, h.currency)} · ${h.weight == null ? "—" : percent(h.weight)} of portfolio`}
+        {h.unrealised_return != null && <> · <span className={h.unrealised_return >= 0 ? "gain" : "loss"}>{signed(h.unrealised_return)}</span></>}</small></div>
+    <div className="holding-decision">
+      <span className={`prototype-decision prototype-decision-${slug(h.decision)}`}>{h.decision}</span>
+      {change && <p className={`holding-change holding-change-${change.status}`}>{change.summary}{change.details.length > 0 && <> {change.details.join(" ")}</>}</p>}
+      <ul className="prototype-reasons">{h.reasons.map(r => <li key={r}>{r}</li>)}</ul>
+      <p className="pick-meta">Thesis: {h.checks ? OVERALL[h.checks.overall] : OVERALL.not_covered}</p>
+    </div>
+    {answers.length > 0 && <div className="holding-answers">
+      <ul className="verdict-tags">{answers.map(a => <li key={a.question} className={`verdict verdict-${a.level}`} title={a.headline}>
+        <span className="verdict-tag">{QUESTION[a.question as VerdictQuestion]} · {LEVEL[a.level]}</span><span>{a.headline}</span></li>)}</ul>
+      <details className="pick-details"><summary>Show figures and rules</summary>{answers.map(a => <Detail key={a.question} v={a} rule={rules?.[a.question]}/>)}</details>
+    </div>}
+  </article>;
+}
+
 const ORDER: Decision[] = ["SELL", "REDUCE", "REVIEW", "BUY MORE", "HOLD"];
 const slug = (d: Decision) => d.toLowerCase().replace(" ", "-");
 
@@ -73,15 +104,8 @@ export function MonthlyView({monthly}: {monthly: Monthly}) {
 
     <section className="panel prototype-panel"><h2>Your holdings</h2>
       {monthly.holdings.length === 0 ? <p>No holdings recorded before this cutoff. Record your trades on the <Link href="/portfolio">Portfolio</Link> page.</p> :
-        <div className="prototype-table-wrap"><table className="prototype-holdings-table"><thead><tr><th>Holding</th><th>Decision</th><th>Why</th><th>Upside</th><th>Weight</th><th>Thesis</th></tr></thead><tbody>
-          {monthly.holdings.map(h => <tr key={h.qualified_symbol + h.currency}>
-            <td><b>{link(h)}</b><small>{h.company_name}</small></td>
-            <td><span className={`prototype-decision prototype-decision-${slug(h.decision)}`}>{h.decision}</span></td>
-            <td><ul className="prototype-reasons">{h.reasons.map(r => <li key={r}>{r}</li>)}</ul></td>
-            <td>{signed(h.evidence.upside)}</td>
-            <td>{h.weight == null ? "—" : percent(h.weight)}<small>{h.market_value == null ? "no stored price" : money(h.market_value, h.currency)}</small></td>
-            <td>{h.checks ? OVERALL[h.checks.overall] : OVERALL.not_covered}</td></tr>)}
-        </tbody></table></div>}
+        <div className="holding-rows">{monthly.holdings.map(h => <HoldingRow key={h.qualified_symbol + h.currency} h={h} link={link} rules={monthly.verdict_rules}/>)}</div>}
+      {(monthly.no_longer_held ?? []).length > 0 && <p className="pick-meta">No longer held since {monthYear(monthly.no_longer_held![0].since)}: {monthly.no_longer_held!.map(g => `${g.qualified_symbol} (was ${g.previous_decision})`).join(", ")}.</p>}
       <p><small>{monthly.method} BUY MORE needs at least {percent(monthly.rules.buy_more_minimum_upside)} upside and a position under {percent(monthly.rules.maximum_position_weight_for_buying)};
         REDUCE when the price is above the middle-case value or a position exceeds {percent(monthly.rules.reduce_above_position_weight)}; SELL when the thesis breaks or the price is {percent(-monthly.rules.sell_below_upside)} above the middle-case value.
         In between, HOLD, so small monthly moves do not cause trades.</small></p></section>
