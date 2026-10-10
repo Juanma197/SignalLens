@@ -27,6 +27,7 @@ from .brief import analyst_brief
 from .events import event_brief, read_events
 from .financials import DURATIONS, INSTANTS, REVENUE, annual_brief, scenario_ranges, sector_notes, summary_only, valuation, valuation_history
 from .ranking import value_ranking
+from ..delisted import universe_rows
 
 CONFIG = json.loads(Path(__file__).with_name('config_v1.json').read_text(encoding='utf-8'))
 NOTICE = 'UNVALIDATED RESEARCH PROTOTYPE — ZERO VALIDATION CREDIT'
@@ -640,6 +641,13 @@ def _price_break(rows, since, decision, known):
     return found
 
 
+def _delisted_listing(row, retrieval_id):
+    """A delisted company as a catalogue listing, for the months it traded."""
+    return {'retrieval_id': retrieval_id, 'security_id': row['security_id'], 'qualified_symbol': row['qualified_symbol'],
+            'company_name': row['company_name'], 'primary_exchange': 'US', 'currency': 'USD', 'instrument_type': 'common_stock',
+            'active': True, 'cik': row['cik']}
+
+
 def _build(db, decision, target, known=None, cache=None):
     """`known` is the knowledge horizon: live use passes nothing (known = decision);
     a historical replay passes the run time, so data counts once it was public by
@@ -658,9 +666,15 @@ def _build(db, decision, target, known=None, cache=None):
     active = select_active_catalogue(db, as_of=known.replace(tzinfo=None))
     if active is None: return _report([], [], [], schema, ['completed_active_catalogue_unavailable'], target, decision)
     selected = [r for r in data['security_listings'] if r.get('retrieval_id') == active.retrieval_id and r.get('primary_exchange') == 'US' and r.get('active') is True]
+    # Backtest phase 3: a replay adds the delisted companies that were trading at the
+    # cutoff (docs/backtest-phase3.md). Live use never lists them.
+    delisted = universe_rows(db)
+    alive = [_delisted_listing(r, active.retrieval_id) for r in delisted
+             if known != decision and r['first_session'] <= decision.date() <= r['last_session']]
+    selected += alive
     # Exact-ID reconciliation (track_b_gaps rule) with cutoff-visible inputs only.
     reconcile_data = dict(data,
-        security_listings=[r for r in data['security_listings'] if r.get('retrieval_id') == active.retrieval_id],
+        security_listings=[r for r in data['security_listings'] if r.get('retrieval_id') == active.retrieval_id] + alive,
         sec_issuers=[r for r in data['sec_issuers'] if stamp(r.get('mapped_at')) and stamp(r['mapped_at']) <= known],
         sec_facts=[r for r in data['sec_facts'] if stamp(r.get('public_at')) and stamp(r.get('retrieved_at'))
                    and stamp(r['public_at']) <= decision and stamp(r['retrieved_at']) <= known])
@@ -668,6 +682,7 @@ def _build(db, decision, target, known=None, cache=None):
     # Keep every ordinary-roster identity, including absent/inactive listings, in
     # review output so identity exclusions are not silently lost.
     roster_ids = {str(r['security_id']) for r in data['security_classification_evidence'] if r.get('security_id') and r.get('security_type') == 'us_operating_company' and visible(r, known)}
+    roster_ids -= {r['security_id'] for r in delisted} - {r['security_id'] for r in alive}
     if len(roster_ids) > MAX_ROSTER: raise PrototypeError('PROTOTYPE_ROSTER_LIMIT')
     sessions, calendar = _sessions(data, decision, known)
     if cache is not None and 'industries' in cache: industries, schema['sec_liquidity_raw_provenance'] = cache['industries']
