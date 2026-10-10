@@ -7,7 +7,8 @@ from app.prototype.service import PrototypeError
 
 
 def assessment(sid, status, score, upside=0.5, recommendation=None, risks=()):
-    return {'security_id': sid, 'status': status, 'score': score, 'upside': upside, 'recommendation': recommendation, 'risks': list(risks)}
+    return {'security_id': sid, 'status': status, 'score': score, 'upside': upside, 'recommendation': recommendation, 'risks': list(risks),
+            'conviction': 'high'}
 
 
 MONTH = {'picks': ['a', 'b', 'c'], 'assessments': [
@@ -26,9 +27,19 @@ def test_variants_select_from_the_stored_assessments():
     assert pick['top3_without_sharp_fallers'] == ['b', 'c', 'd']
     assert pick['top3_strong_buy_only'] == ['a', 'c', 'd']
     assert pick['top3_value_traps_allowed'] == ['t', 'a', 'b']   # the trap below the minimum upside stays out
+    assert pick['top3_one_sign_is_medium_risk'] == ['b', 'c', 'd']  # a's sign makes it 0.5 x 0.85, below the clean three
 
 
 def test_experiments_refuse_the_holdout(monkeypatch):
     monkeypatch.setattr(experiments, 'load_months', lambda *a: ('run', True, [{'cutoff': None}]))
     with pytest.raises(PrototypeError) as error: experiments.run('replay', 'research')
     assert error.value.code == 'EXPERIMENTS_REFUSE_HOLDOUT'
+
+
+def test_one_warning_sign_rescored_as_medium_risk():
+    def a(sid, upside, risks=0, conviction='high'):
+        return {'security_id': sid, 'status': 'candidate', 'score': 1, 'upside': upside, 'conviction': conviction,
+                'risks': [f'sign {i}' for i in range(risks)]}
+    month = {'assessments': [a('one_sign', 0.60, risks=1), a('clean', 0.55), a('also_clean', 0.40), a('medium_conv', 0.80, conviction='medium')]}
+    # one_sign: 0.6 x 1.0 x 0.85 = 0.51 drops below clean (0.55); medium_conv: 0.8 x 0.75 = 0.60 leads.
+    assert experiments.VARIANTS['top3_one_sign_is_medium_risk'](month) == ['medium_conv', 'clean', 'one_sign']
