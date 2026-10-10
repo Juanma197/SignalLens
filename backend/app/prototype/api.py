@@ -18,7 +18,8 @@ from .cash import implied_gbp_rate, ledger
 from .checks import catalogue, evaluate
 from .scorecard import record_from_monthly, score
 from .decisions import DECISIONS, RULES as DECISION_RULES, decide
-from .portfolio import positions_from, read_gbp_rate, read_market, valuation
+from .history import FUND, versus_fund
+from .portfolio import positions_from, read_gbp_rate, read_gbp_rate_series, read_market, valuation
 from .service import PrototypeError, assess
 from .store import symbol as store_symbol
 from .store import ACCOUNT_CURRENCY, CURRENCIES, MAX_HOLDINGS_LIMIT, THESIS_SECTIONS, PrototypeStore, StoreError
@@ -549,6 +550,42 @@ def scorecard():
         if len(_SCORECARD) >= 8: _SCORECARD.clear()
         _SCORECARD[key] = result
     return _SCORECARD[key] | {'label': 'Description of recorded calls, not validation. Small samples are noisy.'}
+
+
+@router.get('/history/versus-vall')
+def versus_vall():
+    """Your holdings plus cash against the same deposits put into the VALL stand-in."""
+    settings = get_settings()
+    store = _store()
+    transactions = _call(store.transactions)
+    trades = [t for t in transactions if t['voided_at'] is None]
+    movements = _call(store.cash_movements)
+    now = datetime.now(timezone.utc)
+    symbols = tuple(sorted({t['qualified_symbol'] for t in trades}))
+    key = (symbols, now.date(), _stat(settings.research_database_path))
+    first = min([date.fromisoformat(str(m['moved_on'])[:10]) for m in movements] or [now.date()])
+    try:
+        if key not in _MARKET:
+            if len(_MARKET) >= 8: _MARKET.clear()
+            _MARKET[key] = read_market(settings.research_database_path, symbols, now)
+        book = valuation(trades, _MARKET[key], as_of=now)
+        rates = read_gbp_rate_series(settings.research_database_path, 'USD', first - timedelta(days=7), now)
+    except PrototypeError as exc:
+        raise HTTPException(409, detail={'code': exc.code, 'message': 'Stored prices could not safely be read.'}) from None
+    cash = ledger(movements, transactions)
+    rate_now = rates[max(rates)] if rates and (now.date() - max(rates)).days <= 7 else None
+    value, complete = cash['balance'], not cash['uncounted_trades']
+    for total in book['totals']:
+        if total['market_value'] is None: continue
+        if total['priced_positions'] < total['positions']: complete = False
+        if total['currency'] == 'GBP': value += total['market_value']
+        elif total['currency'] == 'USD' and rate_now: value += total['market_value'] * rate_now
+        else: complete = False
+    fund = _call(store.benchmark_prices).get(FUND, {})
+    result = versus_fund(movements, fund=fund, rates=rates, your_value=value if (rate_now or not trades) else None,
+                         today=now.date(), your_value_complete=complete)
+    if not fund: result['note'] = 'No fund prices are stored yet: run python -m app.prototype.benchmarks.'
+    return result | {'label': 'Description of your own account, not validation. A few months of deposits say little.'}
 
 
 @router.get('/alerts/status')

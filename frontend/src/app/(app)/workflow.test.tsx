@@ -13,6 +13,7 @@ import {ChecksOverview, type ChecksReport} from "./checks-view";
 import {MonthlyView, type Monthly} from "./monthly-view";
 import {AllocationView, type Allocation} from "./monthly-view";
 import {PickCard} from "./pick-card";
+import {VersusView, type Versus} from "./versus-view";
 import {ScorecardView, type Scorecard} from "./scorecard-view";
 import {WhenPicker, cutoffFor, describeCutoff, friendlyError, todayUtc, whenFromQuery} from "./when";
 
@@ -295,6 +296,23 @@ test("monthly view lists picks, held flags and a reasoned decision per holding",
   assert.match(html,/no stored price/);
   assert.match(html,/Nothing is executed/);
   assert.match(html,/SELL when the thesis breaks or the price is 20\.00% above/);
+});
+
+test("versus VALL leads with ahead or behind, both money-weighted returns and the deposits behind a disclosure",()=>{
+  const v:Versus={fund:"VT.US",fund_label:"Global stocks",as_of:"2026-10-09",price_on:"2026-10-09",net_deposited:400,your_value:520,fund_value:480.5,difference:39.5,
+    your_money_weighted:0.31,fund_money_weighted:0.12,complete:true,flows:[{on:"2026-09-01",amount:200,fund_price:110,price_on:"2026-09-01",gbp_per_usd:0.75,units:2.4242}],
+    unpriced_flows:[],method:"Each recorded deposit buys the fund on its day.",caveats:["VT stands in for VALL."],label:"Description of your own account, not validation."};
+  const html=renderToStaticMarkup(<VersusView v={v}/>);
+  assert.match(html,/versus-headline gain">Ahead by £39\.50/);
+  assert.match(html,/\+31\.00% a year/);
+  assert.match(html,/\+12\.00% a year/);
+  assert.match(html,/<summary>Show deposits and method<\/summary>/);
+  assert.match(html,/\$110\.00/);
+  const behind=renderToStaticMarkup(<VersusView v={{...v,difference:-12,your_value:468.5}}/>);
+  assert.match(behind,/versus-headline loss">Behind by £12\.00/);
+  const missing=renderToStaticMarkup(<VersusView v={{...v,difference:null,fund_value:null,note:"No fund prices are stored yet: run python -m app.prototype.benchmarks.",unpriced_flows:[{on:"2026-09-01",amount:200,missing:"fund price"}]}}/>);
+  assert.match(missing,/No fund prices are stored yet/);
+  assert.match(missing,/1 deposit\(s\) have no stored fund price/);
 });
 
 test("pick cards lead with the decision, four plain answers and figures behind a disclosure",()=>{

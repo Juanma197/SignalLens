@@ -115,6 +115,20 @@ def read_gbp_rate(research_db, currency, now, *, tolerance_days=7):
     return _read_only(research_db, reader)
 
 
+def read_gbp_rate_series(research_db, currency, since, now):
+    """Stored pounds per one unit of `currency`, {observed_on: rate}, from `since` to `now`, in one read."""
+    naive_now = now.astimezone(timezone.utc).replace(tzinfo=None)
+
+    def reader(db):
+        if not db.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'global_fx_observations'").fetchone()[0]:
+            return {}
+        rows = db.execute("""SELECT observed_on, rate FROM global_fx_observations WHERE base_currency = ? AND quote_currency = 'GBP'
+            AND observed_on BETWEEN ? AND ? AND available_at <= ? ORDER BY observed_on, available_at""",
+            [currency, since, naive_now.date(), naive_now]).fetchall()
+        return {d: float(r) for d, r in rows if math.isfinite(float(r)) and float(r) > 0}  # the latest available revision wins
+    return _read_only(research_db, reader)
+
+
 def valuation(trades, market, *, as_of):
     """Open positions with market values, closed positions, and per-currency totals."""
     open_, closed = positions_from(trades)
