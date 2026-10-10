@@ -27,6 +27,7 @@ from .brief import analyst_brief
 from .events import event_brief, read_events
 from .financials import DURATIONS, INSTANTS, REVENUE, annual_brief, scenario_ranges, sector_notes, summary_only, valuation, valuation_history
 from .ranking import value_ranking
+from .verdicts import attach as attach_verdicts
 from ..delisted import universe_rows
 
 CONFIG = json.loads(Path(__file__).with_name('config_v1.json').read_text(encoding='utf-8'))
@@ -770,6 +771,7 @@ def _build(db, decision, target, known=None, cache=None):
     report = _report(companies, members, results, schema, blockers, target, decision, [c['security_id'] for c in eligible], calendar)
     # Separate from the momentum results above: every eligible company, not only members.
     report['value_ranking'] = value_ranking(companies)
+    attach_verdicts(report['companies'], report['value_ranking'])
     if known != decision: report['knowledge_horizon'] = known
     return report
 
