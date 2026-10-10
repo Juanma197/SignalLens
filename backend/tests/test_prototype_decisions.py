@@ -7,7 +7,7 @@ import pytest
 
 from app.model_readiness import fingerprint
 from app.prototype import store as store_module
-from app.prototype.decisions import decide
+from app.prototype.decisions import changes, decide
 from app.prototype.fixture import DECISION
 
 
@@ -89,4 +89,32 @@ def test_monthly_api_combines_picks_holdings_and_checks(paths, monkeypatch):
         assert [h['decision'] for h in body['holdings']] == ['SELL', 'REDUCE', 'REVIEW']
         assert body['counts'] == {'SELL': 1, 'REDUCE': 1, 'REVIEW': 1, 'BUY MORE': 0, 'HOLD': 0}
         assert body['picks'] == [] and body['totals'][0]['priced_positions'] == 2
+        # No earlier month recorded: every holding says so; nothing sold since.
+        assert {h['change']['status'] for h in body['holdings']} == {'no_record'} and body['no_longer_held'] == []
+        assert by_symbol['ZZZZ.US']['verdicts'] is None  # outside SignalLens data
     assert [fingerprint(p) for p in paths[:2]] == before
+
+
+def holding(symbol, decision, upside=None, weight=None, sid=None):
+    return {'qualified_symbol': symbol, 'security_id': sid, 'decision': decision, 'weight': weight, 'evidence': {'upside': upside}}
+
+
+def test_changes_since_the_last_record_name_decision_moves_and_material_shifts():
+    previous = {'decision_at': '2026-09-01T00:00:00+00:00', 'items': [
+        {'kind': 'holding', 'security_id': 'a', 'qualified_symbol': 'A.US', 'decision': 'HOLD', 'upside': 0.22, 'weight': 0.12},
+        {'kind': 'holding', 'security_id': 'b', 'qualified_symbol': 'B.US', 'decision': 'HOLD', 'upside': 0.10, 'weight': 0.20},
+        {'kind': 'holding', 'security_id': None, 'qualified_symbol': 'GONE.US', 'company_name': 'Gone Inc', 'decision': 'SELL', 'upside': None, 'weight': 0.1},
+        {'kind': 'pick', 'security_id': 'c', 'qualified_symbol': 'C.US', 'rank': 2, 'decision': None, 'upside': 0.5}]}
+    now = [holding('A.US', 'REDUCE', upside=-0.05, weight=0.30, sid='a'), holding('B.US', 'HOLD', upside=0.12, weight=0.21, sid='b'),
+           holding('C.US', 'HOLD', upside=0.4, weight=0.1, sid='c'), holding('D.US', 'REVIEW')]
+    gone = changes(now, previous)
+    a, b, c, d = (h['change'] for h in now)
+    assert a['status'] == 'changed' and a['summary'] == 'HOLD in September 2026, now REDUCE.'
+    assert a['details'] == ['Upside went from 22% to -5%.', 'The position went from 12% to 30% of the portfolio.']
+    assert b == b | {'status': 'unchanged', 'summary': 'Still HOLD, as in September 2026.', 'details': []}  # small moves are noise
+    assert c['status'] == 'new_holding' and c['summary'] == 'Bought after it was pick #2 in September 2026.'
+    assert d['summary'] == 'New since September 2026.'
+    assert gone == [{'qualified_symbol': 'GONE.US', 'security_id': None, 'company_name': 'Gone Inc', 'previous_decision': 'SELL',
+                     'since': '2026-09-01T00:00:00+00:00'}]
+    first = [holding('A.US', 'HOLD', sid='a')]
+    assert changes(first, None) == [] and first[0]['change']['status'] == 'no_record'

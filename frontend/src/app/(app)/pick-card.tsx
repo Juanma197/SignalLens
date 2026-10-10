@@ -4,9 +4,9 @@ import type {ValueAssessment, Verdict, VerdictFigure, VerdictLevel, VerdictQuest
 
 export type Pick = ValueAssessment & {held: boolean; verdicts?: Verdicts|null; next_results_estimate?: string|null};
 
-const QUESTION: Record<VerdictQuestion, string> = {cheap: "Price", quality: "Business", growth: "Growth", risk: "Risk"};
+export const QUESTION: Record<VerdictQuestion, string> = {cheap: "Price", quality: "Business", growth: "Growth", risk: "Risk"};
 /** Words beside the colour, so the level never depends on colour alone. */
-const LEVEL: Record<VerdictLevel, string> = {positive: "Good", mixed: "Mixed", negative: "Concern", neutral: "Info", unknown: "Unknown"};
+export const LEVEL: Record<VerdictLevel, string> = {positive: "Good", mixed: "Mixed", negative: "Concern", neutral: "Info", unknown: "Unknown"};
 
 export function figure(f: VerdictFigure) {
   switch (f.unit) {
@@ -19,7 +19,7 @@ export function figure(f: VerdictFigure) {
   }
 }
 
-function Detail({v, rule}: {v: Verdict; rule?: string}) {
+export function Detail({v, rule}: {v: Verdict; rule?: string}) {
   return <div className="pick-detail">
     <h4>{v.question === "action" ? "Ranking" : QUESTION[v.question]}</h4>
     {v.because.length > 0 && <ul>{v.because.map(b => <li key={b}>{b}</li>)}</ul>}

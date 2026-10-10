@@ -315,6 +315,26 @@ test("versus VALL leads with ahead or behind, both money-weighted returns and th
   assert.match(missing,/1 deposit\(s\) have no stored fund price/);
 });
 
+test("holding rows show the decision, what changed since the last record, why, and plain answers",()=>{
+  const evidence={upside:-0.05,weight:0.3,thesis:"intact",value_status:"not_undervalued",conviction:null,risk:null};
+  const monthly:Monthly={decision_at:"2026-10-10T00:00:00+00:00",notice:"",synthetic_fixture:false,target_members:15,population:7,picks:[],
+    holdings:[{qualified_symbol:"WU.US",security_id:"wu",company_name:"Western Union",currency:"USD",shares:10,average_cost:6,cost_basis:60,price:{close:6.5,trading_date:"2026-10-09"},market_value:65,unrealised_return:0.083,weight:0.3,
+      checks:null,decision:"REDUCE",reasons:["The price is 5% above the middle-case value; take some profit."],evidence,
+      change:{status:"changed",since:"2026-09-01T00:00:00+00:00",previous_decision:"HOLD",summary:"HOLD in September 2026, now REDUCE.",details:["Upside went from 22% to -5%."]},
+      verdicts:{action:{question:"action",level:"neutral",headline:"Pass: not cheap enough to be a pick.",because:[],figures:[]},
+        answers:[{question:"growth",level:"negative",headline:"Shrinking.",because:["Revenue shrank 5.5% a year over 4.0 years."],figures:[]}]}}],
+    no_longer_held:[{qualified_symbol:"EGY.US",security_id:"e",company_name:"Vaalco",previous_decision:"SELL",since:"2026-09-01T00:00:00+00:00"}],
+    totals:[],counts:{"SELL":0,"REDUCE":1,"REVIEW":0,"BUY MORE":0,"HOLD":0},method:"Fixed rules.",label:"Decision support only.",
+    rules:{buy_more_minimum_upside:0.15,maximum_position_weight_for_buying:0.25,reduce_above_position_weight:0.35,sell_below_upside:-0.2,reduce_below_upside:0}};
+  const html=renderToStaticMarkup(<MonthlyView monthly={monthly}/>);
+  assert.match(html,/prototype-decision-reduce">REDUCE/);
+  assert.match(html,/holding-change holding-change-changed">HOLD in September 2026, now REDUCE\. Upside went from 22% to -5%\./);
+  assert.match(html,/take some profit/);
+  assert.match(html,/\+8\.30%/);
+  assert.match(html,/Growth · Concern<\/span><span>Shrinking\./);
+  assert.match(html,/No longer held since September 2026: EGY\.US \(was SELL\)\./);
+});
+
 test("pick cards lead with the decision, four plain answers and figures behind a disclosure",()=>{
   const v=(question:"cheap"|"quality"|"growth"|"risk"|"action",level:"positive"|"mixed"|"negative",headline:string,because:string[]=[],figures:{label:string;value:number;unit:"percent"|"multiple"|"per_share_usd"|"count"}[]=[])=>({question,level,headline,because,figures});
   const pick={security_id:"lz",qualified_symbol:"LZ.US",company_name:"LegalZoom.com",status:"candidate" as const,reasons:[],rank:1,recommendation:"strong_buy" as const,upside:1.17,conviction:"high" as const,risk:"low" as const,held:false,

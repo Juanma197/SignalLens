@@ -17,7 +17,7 @@ from .allocation import allocate
 from .cash import implied_gbp_rate, ledger
 from .checks import catalogue, evaluate
 from .scorecard import record_from_monthly, score
-from .decisions import DECISIONS, RULES as DECISION_RULES, decide
+from .decisions import DECISIONS, RULES as DECISION_RULES, changes, decide
 from .history import FUND, versus_fund
 from .portfolio import positions_from, read_gbp_rate, read_gbp_rate_series, read_market, valuation
 from .service import PrototypeError, assess
@@ -469,6 +469,12 @@ def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, 
                         | {'security_id': sid, 'company_name': p.get('listed_name') or p.get('company_name'),
                            'checks': checks} | decide(p, assessments.get(sid), checks))
     holdings.sort(key=lambda h: (DECISIONS.index(h['decision']), h['qualified_symbol']))
+    for h in holdings:
+        h['verdicts'] = by_id[h['security_id']].get('verdicts') if h['security_id'] else None
+    # Compared with the latest frozen record of an earlier month: what changed since then.
+    month = decision.strftime('%Y-%m')
+    previous = next((r for r in reversed(_call(store.decision_records)) if r['month'] < month), None)
+    no_longer_held = changes(holdings, previous)
     held = {h['security_id'] for h in holdings if h['security_id']}
     def timing(sid):  # the estimated next results date, for "what's next" on a pick card
         return (((by_id[sid].get('events') or {}).get('results_timing')) or {}).get('next_results_estimate')
@@ -478,7 +484,7 @@ def monthly(decision_at: datetime = Query(...), target_members: int = Query(15, 
     return {'decision_at': report['decision_at'], 'notice': report['notice'], 'synthetic_fixture': report['synthetic_fixture'],
             'target_members': report['target_members'], 'population': ranking['population'], 'picks': picks,
             'verdict_rules': ranking.get('verdict_rules'),
-            'holdings': holdings, 'totals': book['totals'], 'rules': DECISION_RULES,
+            'holdings': holdings, 'no_longer_held': no_longer_held, 'totals': book['totals'], 'rules': DECISION_RULES,
             'counts': {d: sum(h['decision'] == d for h in holdings) for d in DECISIONS},
             'allocation': plan,
             'method': 'Holdings are built from your trades up to the cutoff and valued at the last stored close on or before it. '
