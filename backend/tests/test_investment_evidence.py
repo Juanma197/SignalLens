@@ -320,3 +320,30 @@ def test_materialization_uses_only_evidence_public_at_the_decision(tmp_path,monk
     assert late==0 and after_decision_price==0
     assert conflicts>0 and derived>0
     assert set(coverage)=={"action_present","verified_no_action","coverage_missing"}
+
+def test_a_new_classification_retires_the_earlier_one(tmp_path):
+    """Before the widening's SEC facts were stored, a company classified as
+    'evidence unavailable'; once they were, the later run must replace that row,
+    or every reader sees two types and withholds the company as ambiguous."""
+    from app.comparable_universe import classify_security
+    research=tmp_path/"research.duckdb"; production=tmp_path/"production.duckdb"
+    evidence_fixture.create(research,companies=3)
+    with duckdb.connect(str(production)) as db: db.execute("CREATE TABLE marker(value INTEGER)")
+    with duckdb.connect(str(research)) as db:  # a foreign filing regime conflicts with the listing
+        db.execute("INSERT INTO sec_filings VALUES ('0000000001','x-1','20-F',NULL,TIMESTAMPTZ '2026-09-01 00:00:00+00',false,'fixture',TIMESTAMPTZ '2026-09-01 00:00:00+00')")
+    run=lambda: materialize_stored(research_db=research,production_db=production,
+        decision_at=evidence_fixture.DECISION,authorization=MATERIALIZE_AUTHORIZATION)
+    def rows():
+        with duckdb.connect(str(research),read_only=True) as db:
+            cur=db.execute("SELECT * FROM security_classification_evidence WHERE security_id='sec-000' ORDER BY materialized_at")
+            names=[c[0] for c in cur.description]; return [dict(zip(names,r)) for r in cur.fetchall()]
+    assert run()["superseded_classifications"]==0
+    first=rows(); assert [r["security_type"] for r in first]==["classification_unavailable"]
+    with duckdb.connect(str(research)) as db: db.execute("DELETE FROM sec_filings WHERE accession_number='x-1'")
+    assert run()["superseded_classifications"]==1
+    second=rows()
+    assert [(r["security_type"],r["is_current"]) for r in second]==[("classification_unavailable",False),("us_operating_company",True)]
+    later=datetime(2026,12,1,tzinfo=timezone.utc)
+    assert classify_security(second,later,security_id="sec-000").included
+    assert run()["superseded_classifications"]==0  # an unchanged rerun keeps it current
+    assert [r["is_current"] for r in rows()]==[False,True]

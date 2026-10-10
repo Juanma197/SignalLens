@@ -293,6 +293,22 @@ def _insert_new(db, table, rows):
     bulk_insert(db,table,list(fresh.values()))
     return len(fresh)
 
+def _supersede_classifications(db, current) -> int:
+    """Retire each security's earlier current classifications in favour of this
+    run's. A run re-derives the classification from all stored evidence, so an
+    older row (say 'evidence unavailable', written before the company's SEC facts
+    were stored) would otherwise stay current beside the new one, and every reader
+    would see two types and withhold the company as ambiguous. Returns the count."""
+    if not current: return 0
+    db.register("current_classifications",pd.DataFrame(current,columns=["security_id","evidence_key"]))
+    try:
+        where=("is_current AND security_id IN (SELECT security_id FROM current_classifications)"
+               " AND evidence_key NOT IN (SELECT evidence_key FROM current_classifications)")
+        count=db.execute(f"SELECT count(*) FROM security_classification_evidence WHERE {where}").fetchone()[0]
+        if count: db.execute(f"UPDATE security_classification_evidence SET is_current=false WHERE {where}")
+    finally: db.unregister("current_classifications")
+    return count
+
 def _json_object(value: Any) -> dict[str, Any]:
     if isinstance(value, str):
         try: value=json.loads(value)
@@ -471,7 +487,7 @@ def materialize_stored(*,research_db:Path,production_db:Path,decision_at:datetim
     research_before=fingerprint(research_db)
     now=datetime.now(timezone.utc); run_id=str(uuid.uuid4())
     with duckdb.connect(str(production_db),read_only=True) as p: p.execute("SELECT 1")
-    inserted=unchanged=withheld=failures=0
+    inserted=unchanged=withheld=failures=superseded=0
     with duckdb.connect(str(research_db)) as db:
       db.execute("BEGIN")
       try:
@@ -515,6 +531,7 @@ def materialize_stored(*,research_db:Path,production_db:Path,decision_at:datetim
             checkpoints.append([sec["security_id"],"stored_evidence_materialization","stored","retryable",1,run_id,now,True])
          for table in tables:
             new=_insert_new(db,table,staged[table]); inserted+=new; unchanged+=len(staged[table])-new
+         superseded+=_supersede_classifications(db,[(r[1],r[0]) for r in staged["security_classification_evidence"]])
          bulk_insert(db,"investment_evidence_checkpoints",checkpoints,"REPLACE")
          print(f"materialized {start+len(batch):,} of {len(securities):,} companies",file=sys.stderr,flush=True)
         finished=datetime.now(timezone.utc)
@@ -523,7 +540,7 @@ def materialize_stored(*,research_db:Path,production_db:Path,decision_at:datetim
       except Exception: db.execute("ROLLBACK"); raise
     prod_after=fingerprint(production_db)
     if prod_before!=prod_after: raise InvestmentResearchError("production database changed")
-    return {"command":"materialize-stored-investment-evidence","run_id":run_id,"inserted":inserted,"unchanged":unchanged,"withheld":withheld,"failures":failures,"production_unchanged":True,**ZERO}
+    return {"command":"materialize-stored-investment-evidence","run_id":run_id,"inserted":inserted,"unchanged":unchanged,"withheld":withheld,"failures":failures,"superseded_classifications":superseded,"production_unchanged":True,**ZERO}
 
 def status(*,research_db:Path,production_db:Path,decision_at:datetime,max_samples:int=MAX_SAMPLES):
     decision=_utc(decision_at); validate_paths(research_db,production_db); before={"research":fingerprint(research_db),"production":fingerprint(production_db)}
